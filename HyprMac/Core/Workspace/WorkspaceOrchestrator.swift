@@ -105,6 +105,11 @@ final class WorkspaceOrchestrator {
             return
         }
 
+        // the monitor→workspace mapping just flipped — let the wallpaper
+        // swap NOW, before the hide/retile/focus work (frame readback can
+        // take ~0.5s and the desktop image change should feel instant).
+        NotificationCenter.default.post(name: .hyprMacWorkspaceWillShow, object: nil)
+
         // batch: hide old + restore floating new in one tight pass
         for wid in result.toHide {
             if let w = allWindows.first(where: { $0.windowID == wid }) ?? stateCache.cachedWindows[wid] {

@@ -1,3 +1,12 @@
+import Foundation
+
+extension Notification.Name {
+    /// Posted by `WorkspaceOrchestrator.switchWorkspace` immediately after
+    /// the monitor→workspace mapping updates, before windows are hidden,
+    /// retiled, or focused — the earliest moment the wallpaper can swap.
+    static let hyprMacWorkspaceWillShow = Notification.Name("hyprMacWorkspaceWillShow")
+}
+
 // Per-workspace wallpaper: swap the desktop image of each screen to match
 // the workspace visible on it. Hyprland delegates this to hyprpaper plus
 // an IPC script; macOS lets us do it directly via
@@ -37,6 +46,14 @@ final class WallpaperManager {
     }
 
     func start() {
+        // fast path: fires right after the monitor→workspace mapping flips,
+        // before the switch's hide/retile/focus work
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .hyprMacWorkspaceWillShow, object: nil, queue: .main) { [weak self] _ in
+                self?.applyForVisibleWorkspaces()
+            })
+        // catch-all: any path that changes visible workspaces without the
+        // early hook (the per-screen memo makes duplicate applies free)
         observers.append(NotificationCenter.default.addObserver(
             forName: .hyprMacWorkspaceChanged, object: nil, queue: .main) { [weak self] _ in
                 self?.applyForVisibleWorkspaces()
