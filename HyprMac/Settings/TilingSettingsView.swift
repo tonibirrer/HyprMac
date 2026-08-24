@@ -14,6 +14,7 @@ struct TilingSettingsView: View {
             gapsPanel
             focusPanel
             WindowRulesPanel()
+            WallpapersPanel()
             scratchpadPanel
             monitorsPanel
         }
@@ -37,6 +38,15 @@ struct TilingSettingsView: View {
                 VStack(alignment: .leading, spacing: HyprSpacing.md) {
                     gapSlider(label: "Inner gap", value: $config.gapSize)
                     gapSlider(label: "Outer padding", value: $config.outerPadding)
+                    VStack(alignment: .leading, spacing: HyprSpacing.xs) {
+                        Text("Per-side overrides")
+                            .font(.hyprCaption)
+                            .foregroundStyle(Color.hyprTextTertiary)
+                        paddingOverrideRow("Top", \.top)
+                        paddingOverrideRow("Bottom", \.bottom)
+                        paddingOverrideRow("Left", \.left)
+                        paddingOverrideRow("Right", \.right)
+                    }
                     Text("Preview updates live — the geometry is the design.")
                         .font(.hyprCaption)
                         .foregroundStyle(Color.hyprTextTertiary)
@@ -69,6 +79,30 @@ struct TilingSettingsView: View {
                 RoundedRectangle(cornerRadius: HyprRadius.lg, style: .continuous)
                     .strokeBorder(Color.hyprSeparator, lineWidth: 0.5)
             )
+        }
+    }
+
+    /// One side's padding override: checkbox enables it, slider sets it,
+    /// unchecked falls back to the uniform outer padding. Useful to
+    /// reserve space on a single edge, e.g. the top for sketchybar.
+    private func paddingOverrideRow(_ label: String, _ side: WritableKeyPath<PaddingSides, CGFloat?>) -> some View {
+        let enabled = Binding<Bool>(
+            get: { config.outerPaddingSides[keyPath: side] != nil },
+            set: { on in config.outerPaddingSides[keyPath: side] = on ? config.outerPadding : nil }
+        )
+        let value = Binding<CGFloat>(
+            get: { config.outerPaddingSides[keyPath: side] ?? config.outerPadding },
+            set: { config.outerPaddingSides[keyPath: side] = $0 }
+        )
+        return HStack(spacing: HyprSpacing.sm) {
+            Toggle(label, isOn: enabled)
+                .toggleStyle(.checkbox)
+                .font(.hyprBody)
+                .frame(width: 76, alignment: .leading)
+            Slider(value: value, in: 0...64, step: 2)
+                .disabled(!enabled.wrappedValue)
+            HyprChip(enabled.wrappedValue ? "\(Int(value.wrappedValue)) px" : "auto")
+                .frame(width: 52, alignment: .trailing)
         }
     }
 

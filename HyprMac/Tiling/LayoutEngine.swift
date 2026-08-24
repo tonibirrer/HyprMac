@@ -12,7 +12,7 @@ import Cocoa
 /// in as a closure so this type does not depend on `MinSizeMemory`.
 struct LayoutEngine {
     let gapSize: CGFloat
-    let outerPadding: CGFloat
+    let outerPadding: OuterPadding
     let minSlotDimension: CGFloat
 
     /// Split `rect` along `dir` at the midpoint, leaving `gap` of empty space

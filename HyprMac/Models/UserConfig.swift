@@ -93,6 +93,40 @@ class UserConfig: ObservableObject {
     @Published var windowRules: [WindowRule] {
         didSet { if !isReloading { save() } }
     }
+    // per-side overrides of `outerPadding` (nil side = uniform value);
+    // e.g. top-only padding to reserve space for sketchybar
+    @Published var outerPaddingSides: PaddingSides {
+        didSet { if !isReloading { save() } }
+    }
+    // per-workspace wallpaper image paths, keyed by workspace number as a
+    // string ("1"..."9"). workspaces without an entry keep the current
+    // desktop image.
+    @Published var workspaceWallpapers: [String: String] {
+        didSet { if !isReloading { save() } }
+    }
+    // per-workspace accent colors (hex), keyed by workspace number as a
+    // string. drives the focus border on that workspace and is served
+    // over IPC so status bars can color-match their indicators.
+    @Published var workspaceColors: [String: String] {
+        didSet { if !isReloading { save() } }
+    }
+
+    /// Focus-border accent for a window on `workspace` — the workspace's
+    /// own color when set, else the global focus border color.
+    func accentColor(forWorkspace workspace: Int?) -> NSColor {
+        if let workspace, let hex = workspaceColors[String(workspace)],
+           let c = NSColor.fromHex(hex) { return c }
+        return resolvedFocusBorderColor
+    }
+
+    /// The uniform slider value with per-side overrides applied — what the
+    /// tiling engine actually consumes.
+    var resolvedOuterPadding: OuterPadding {
+        OuterPadding(top: outerPaddingSides.top ?? outerPadding,
+                     left: outerPaddingSides.left ?? outerPadding,
+                     bottom: outerPaddingSides.bottom ?? outerPadding,
+                     right: outerPaddingSides.right ?? outerPadding)
+    }
 
     // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
@@ -149,6 +183,9 @@ class UserConfig: ObservableObject {
             self.scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
             self.windowRules = saved.windowRules ?? []
+            self.outerPaddingSides = saved.outerPaddingSides ?? .none
+            self.workspaceWallpapers = saved.workspaceWallpapers ?? [:]
+            self.workspaceColors = saved.workspaceColors ?? [:]
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -168,6 +205,9 @@ class UserConfig: ObservableObject {
             self.scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
             self.windowRules = []
+            self.outerPaddingSides = .none
+            self.workspaceWallpapers = [:]
+            self.workspaceColors = [:]
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -245,7 +285,10 @@ class UserConfig: ObservableObject {
             chromeFadeDurationSec: chromeFadeDurationSec,
             scratchpadTileByDefault: scratchpadTileByDefault,
             scratchpadRegionInset: scratchpadRegionInset,
-            windowRules: windowRules)
+            windowRules: windowRules,
+            outerPaddingSides: outerPaddingSides == .none ? nil : outerPaddingSides,
+            workspaceWallpapers: workspaceWallpapers.isEmpty ? nil : workspaceWallpapers,
+            workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors)
     }
 
     func resetToDefaults() {
@@ -269,6 +312,9 @@ class UserConfig: ObservableObject {
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
         windowRules = []
+        outerPaddingSides = .none
+        workspaceWallpapers = [:]
+        workspaceColors = [:]
     }
 
     // resolve the border color — custom hex or brand cyan
@@ -304,6 +350,9 @@ class UserConfig: ObservableObject {
         scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
         windowRules = saved.windowRules ?? []
+        outerPaddingSides = saved.outerPaddingSides ?? .none
+        workspaceWallpapers = saved.workspaceWallpapers ?? [:]
+        workspaceColors = saved.workspaceColors ?? [:]
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -342,7 +391,10 @@ extension SavedConfig {
             chromeFadeDurationSec: UserConfigDefaults.chromeFadeDurationSec,
             scratchpadTileByDefault: UserConfigDefaults.scratchpadTileByDefault,
             scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset,
-            windowRules: nil)
+            windowRules: nil,
+            outerPaddingSides: nil,
+            workspaceWallpapers: nil,
+            workspaceColors: nil)
     }
 }
 

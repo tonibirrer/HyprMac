@@ -190,6 +190,11 @@ final class ActionDispatcher {
             floatingController.raiseBehind()
         }
 
+        // let IPC subscribers (status bars) refresh their window lists.
+        if changes.needsRetile {
+            NotificationCenter.default.post(name: .hyprMacWindowsChanged, object: nil)
+        }
+
         // window-rule activation goes last so its focus decision is final.
         // an already-visible target needs no hide/show — just focus the
         // ruled window where the retile placed it.

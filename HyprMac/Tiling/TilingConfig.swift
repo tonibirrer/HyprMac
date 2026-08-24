@@ -88,3 +88,34 @@ enum TilingConfig {
     // 1px slack on rect comparisons in pairFits (sub-pixel rounding).
     static let rectComparisonSlackPx: CGFloat = 1
 }
+
+/// Per-side outer padding between the screen edge and the tiled area.
+///
+/// Sides are in CG (top-left-origin) coordinates — `top` is the menu-bar
+/// edge of the screen, which is also where a status bar like sketchybar
+/// reserves space.
+struct OuterPadding: Equatable {
+    var top: CGFloat
+    var left: CGFloat
+    var bottom: CGFloat
+    var right: CGFloat
+
+    init(top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+        self.top = top
+        self.left = left
+        self.bottom = bottom
+        self.right = right
+    }
+
+    init(uniform: CGFloat) {
+        self.init(top: uniform, left: uniform, bottom: uniform, right: uniform)
+    }
+
+    /// `rect` shrunk by this padding (clamped to zero size).
+    func inset(_ rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX + left,
+               y: rect.minY + top,
+               width: max(0, rect.width - left - right),
+               height: max(0, rect.height - top - bottom))
+    }
+}

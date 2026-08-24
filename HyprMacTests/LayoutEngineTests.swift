@@ -9,7 +9,7 @@ import XCTest
 
 final class LayoutEngineTests: XCTestCase {
 
-    private let layout = LayoutEngine(gapSize: 8, outerPadding: 8, minSlotDimension: 500)
+    private let layout = LayoutEngine(gapSize: 8, outerPadding: OuterPadding(uniform: 8), minSlotDimension: 500)
     private let bigRect = CGRect(x: 0, y: 0, width: 1920, height: 1080)
     private let narrowRect = CGRect(x: 0, y: 0, width: 800, height: 1600)
 

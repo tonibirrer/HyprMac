@@ -41,7 +41,7 @@ class TilingEngine {
 
     /// Padding between tiles and the screen edge, in pixels.
     /// Runtime-tunable.
-    var outerPadding: CGFloat = TilingConfig.defaultOuterPadding
+    var outerPadding = OuterPadding(uniform: TilingConfig.defaultOuterPadding)
 
     /// Per-screen max BSP depth overrides, keyed by
     /// `NSScreen.localizedName`. Falls back to

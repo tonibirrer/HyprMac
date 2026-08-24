@@ -70,20 +70,24 @@
 		9D75A3D3BAA41C0012711D6D /* UserConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A029C0AE0E8E5DEE2416684 /* UserConfig.swift */; };
 		A34F6208901205B1100F08AE /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB697B2619BEB7E2434E157E /* WelcomeView.swift */; };
 		AC01521BE9F2030CF901A2C9 /* DragSwapHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB2A500B78D0C9A7FAE6173 /* DragSwapHandler.swift */; };
+		B197A8FA64AB6AB25DEAD5AE /* DominantColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1F63AB253C70871CD653E8 /* DominantColor.swift */; };
 		B44C416E3958C82361083048 /* KeybindOverlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7BD70717FD497B0899FBCE5 /* KeybindOverlayController.swift */; };
 		B6C40B2479058C399AD8153B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5627CA2ADE2AA85B3372EB81 /* SettingsView.swift */; };
 		B82265C32A87C7C47C0921AE /* ConfigMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F548FEECDD35DFF1120E2553 /* ConfigMigrationTests.swift */; };
+		BBF48B44F78A50AA17A61567 /* WallpapersPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF33E7950389FB08C8D85C2 /* WallpapersPanel.swift */; };
 		C1CCA6C07D0B273CF3AB3D6C /* HandleDisplayChangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */; };
 		C59F755D984292EB1E5B57CD /* MinSizeMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80DEDE87B2D877B2B57C6767 /* MinSizeMemory.swift */; };
 		C5C841CD7B9E0C41D488EF3B /* KeybindsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B9CF795BFCF2AE866D59470 /* KeybindsSettingsView.swift */; };
 		CA98F4C2A6C5FED1DB51B390 /* AppIcon.svg in Resources */ = {isa = PBXBuildFile; fileRef = F95CD8FB8B25B86236401214 /* AppIcon.svg */; };
 		CAF7E4C0660A5075D1D9DD62 /* PrepareLayoutMutationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12DCA371573CAAC4B23A96AA /* PrepareLayoutMutationTests.swift */; };
+		CF51A80C2A340C6B0FFDEA80 /* IPCServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C530FEE9D5C1B2B50C46C096 /* IPCServer.swift */; };
 		D181B66CA786C3A32097B09D /* ScratchpadController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */; };
 		D2364C0428C5CEDC5AF46D76 /* KeybindDisplayHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7681B5C6FAEC2BFB53A30743 /* KeybindDisplayHelpers.swift */; };
 		D380E4A1BDD2AD4281299E72 /* KeybindDecoderToleranceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */; };
 		D42C28555A078D585F2268A2 /* WindowRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D21946C610CB845DEC5502 /* WindowRule.swift */; };
 		D58328860E2249DD694C36CA /* KeyCodeUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */; };
 		DA506BA26A104FA2BA45FF3C /* KeybindCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F4BE620A1670E1D89160707 /* KeybindCategory.swift */; };
+		DB800AC29877EC430D571A72 /* WallpaperManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC42FAA3FF330DDCE44361AF /* WallpaperManager.swift */; };
 		DB9D75296F8B54704ECDA2AB /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CFEA8374C63AC2FDFCAC4AE /* WindowManager.swift */; };
 		DD38C6D3A18D2B209CDDB9BC /* ThreadAssertions.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7C6CB56D09DB0F05AE6EDC /* ThreadAssertions.swift */; };
 		DFB503500879F243DD9C3FC1 /* HyprWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA85C3347F1D7A782EA9EA39 /* HyprWindow.swift */; };
@@ -162,6 +166,7 @@
 		6EDEEE13B637CED75A9FD8A9 /* TourView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourView.swift; sourceTree = "<group>"; };
 		7681B5C6FAEC2BFB53A30743 /* KeybindDisplayHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindDisplayHelpers.swift; sourceTree = "<group>"; };
 		772FFAF897AAC136F605737C /* TilingSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TilingSettingsView.swift; sourceTree = "<group>"; };
+		7BF33E7950389FB08C8D85C2 /* WallpapersPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpapersPanel.swift; sourceTree = "<group>"; };
 		80DEDE87B2D877B2B57C6767 /* MinSizeMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MinSizeMemory.swift; sourceTree = "<group>"; };
 		84FD66866CE44F180CAA03C7 /* DimmingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DimmingOverlay.swift; sourceTree = "<group>"; };
 		857FCC6A226AFEECD7A199FC /* WindowDiscoveryServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowDiscoveryServiceTests.swift; sourceTree = "<group>"; };
@@ -177,6 +182,7 @@
 		913F7521CBE5FF04365D18D8 /* SpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceManager.swift; sourceTree = "<group>"; };
 		97B8B2C68D268341AC86BF4B /* KeyBadgeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyBadgeViews.swift; sourceTree = "<group>"; };
 		984C8889680F5B0CDD449061 /* FloatingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingWindowController.swift; sourceTree = "<group>"; };
+		9A1F63AB253C70871CD653E8 /* DominantColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DominantColor.swift; sourceTree = "<group>"; };
 		9EBC04818743A6F6231119AB /* WelcomeContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeContent.swift; sourceTree = "<group>"; };
 		9F1105FD856A5A007D619120 /* FrameReadbackPoller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameReadbackPoller.swift; sourceTree = "<group>"; };
 		A034E555A586C182E187021F /* HyprMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyprMacApp.swift; sourceTree = "<group>"; };
@@ -190,6 +196,7 @@
 		BE062173D513A1A60A3E704D /* ConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigStore.swift; sourceTree = "<group>"; };
 		C0C8D3EAFB70C82B163D2DAA /* ForceInsertWindowFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForceInsertWindowFallbackTests.swift; sourceTree = "<group>"; };
 		C4BF3E3B39107A11D98F0575 /* PollingScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollingScheduler.swift; sourceTree = "<group>"; };
+		C530FEE9D5C1B2B50C46C096 /* IPCServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPCServer.swift; sourceTree = "<group>"; };
 		C5ECA897D9C7F4DF25FFE758 /* DefaultKeybinds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultKeybinds.swift; sourceTree = "<group>"; };
 		C6D1C99A7D03B871E0141DF0 /* AppLauncherEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLauncherEditorSheet.swift; sourceTree = "<group>"; };
 		CB845A902D1A884872996805 /* FocusStateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusStateController.swift; sourceTree = "<group>"; };
@@ -209,6 +216,7 @@
 		E87A74C0EE799AA06F213CCF /* BundleIDPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleIDPicker.swift; sourceTree = "<group>"; };
 		E9EF96B688DCAEC0C6EB7A10 /* WindowRuleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRuleTests.swift; sourceTree = "<group>"; };
 		EC19E9DB53B109940984B5D5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		EC42FAA3FF330DDCE44361AF /* WallpaperManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpaperManager.swift; sourceTree = "<group>"; };
 		EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCodeUtils.swift; sourceTree = "<group>"; };
 		EDAAA3743D0898468DBA8EBC /* ConfigMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigMigration.swift; sourceTree = "<group>"; };
 		EDB2A500B78D0C9A7FAE6173 /* DragSwapHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragSwapHandler.swift; sourceTree = "<group>"; };
@@ -272,6 +280,7 @@
 				AF93D6331BC4826814BB7007 /* Constants.swift */,
 				5C0116BE6F796AC619B0BD6B /* CoordinateSpace.swift */,
 				61E1DEE768A398E963AAB1CA /* DesignSystem.swift */,
+				9A1F63AB253C70871CD653E8 /* DominantColor.swift */,
 				EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */,
 				4DC1746711F81E185BA81143 /* Log.swift */,
 				CE7C6CB56D09DB0F05AE6EDC /* ThreadAssertions.swift */,
@@ -304,11 +313,13 @@
 				B38E1F4DBD1DB2807610AB4E /* FocusBorder.swift */,
 				8680AE34CAB9F0BAA3C9D8F0 /* FocusBrackets.swift */,
 				F06CFE0CDB28ECDC9411EEB1 /* HotkeyManager.swift */,
+				C530FEE9D5C1B2B50C46C096 /* IPCServer.swift */,
 				A7BD70717FD497B0899FBCE5 /* KeybindOverlayController.swift */,
 				F24369A83C38C9C3757A23FB /* KeyRemapper.swift */,
 				2CD84800A82DD5466833975C /* MouseTrackingManager.swift */,
 				4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */,
 				913F7521CBE5FF04365D18D8 /* SpaceManager.swift */,
+				EC42FAA3FF330DDCE44361AF /* WallpaperManager.swift */,
 				B6FC3298BBD003F3AD7DAC44 /* WindowCornerRadius.swift */,
 				2CFEA8374C63AC2FDFCAC4AE /* WindowManager.swift */,
 				8A0BF8AF7796AE4F9F114B7C /* WorkspaceManager.swift */,
@@ -366,6 +377,7 @@
 				E49CB059612127CA6F3E7766 /* SettingsComponents.swift */,
 				5627CA2ADE2AA85B3372EB81 /* SettingsView.swift */,
 				772FFAF897AAC136F605737C /* TilingSettingsView.swift */,
+				7BF33E7950389FB08C8D85C2 /* WallpapersPanel.swift */,
 				3A7787ABE39F1349F1F7C59B /* WindowRulesPanel.swift */,
 				FC4754A615E4871D79F5D066 /* WorkspacePicker.swift */,
 			);
@@ -611,6 +623,7 @@
 				249B0AE228874626C66745EF /* DimmingOverlay.swift in Sources */,
 				1B637997E721C7D6BF0FC307 /* DirectionPicker.swift in Sources */,
 				0D4C6B4D33142A677A590C35 /* DisplayManager.swift in Sources */,
+				B197A8FA64AB6AB25DEAD5AE /* DominantColor.swift in Sources */,
 				0B9D198B68374BB6E0D0FA1F /* DragManager.swift in Sources */,
 				AC01521BE9F2030CF901A2C9 /* DragSwapHandler.swift in Sources */,
 				5C5F0598475E4DEDB6DC82AC /* DwindleLayout.swift in Sources */,
@@ -624,6 +637,7 @@
 				3564F2FDA0E1E1BEA5FDFCA8 /* HyprKey.swift in Sources */,
 				E75F4991C42DA20A1A207121 /* HyprMacApp.swift in Sources */,
 				DFB503500879F243DD9C3FC1 /* HyprWindow.swift in Sources */,
+				CF51A80C2A340C6B0FFDEA80 /* IPCServer.swift in Sources */,
 				28BD7C8DD76D02FBC83769F7 /* KeyBadgeViews.swift in Sources */,
 				D58328860E2249DD694C36CA /* KeyCodeUtils.swift in Sources */,
 				E49C450CFEE3A7BC692AA590 /* KeyRecorderView.swift in Sources */,
@@ -653,6 +667,8 @@
 				5FF99C0D46DC4EABB4B00EE4 /* TourView.swift in Sources */,
 				9D75A3D3BAA41C0012711D6D /* UserConfig.swift in Sources */,
 				119D5D15C739E8C9B79392F7 /* UserConfigDefaults.swift in Sources */,
+				DB800AC29877EC430D571A72 /* WallpaperManager.swift in Sources */,
+				BBF48B44F78A50AA17A61567 /* WallpapersPanel.swift in Sources */,
 				6D69BEB2961B224657725D8A /* WelcomeContent.swift in Sources */,
 				A34F6208901205B1100F08AE /* WelcomeView.swift in Sources */,
 				EBAA92AE4FF80ED33B39219A /* WindowCornerRadius.swift in Sources */,
@@ -723,7 +739,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacTests;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "HyprMac/PrivateAPI/HyprMac-Bridging-Header.h";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HyprMac.app/Contents/MacOS/HyprMac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HyprMacExperiments.app/Contents/MacOS/HyprMacExperiments";
 			};
 			name = Debug;
 		};
@@ -866,7 +882,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacTests;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "HyprMac/PrivateAPI/HyprMac-Bridging-Header.h";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HyprMac.app/Contents/MacOS/HyprMac";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HyprMacExperiments.app/Contents/MacOS/HyprMacExperiments";
 			};
 			name = Release;
 		};
@@ -893,6 +909,7 @@
 					SkyLight,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacExperiments;
+				PRODUCT_MODULE_NAME = HyprMac;
 				PRODUCT_NAME = HyprMacExperiments;
 				SDKROOT = macosx;
 			};
@@ -921,6 +938,7 @@
 					SkyLight,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacExperiments;
+				PRODUCT_MODULE_NAME = HyprMac;
 				PRODUCT_NAME = HyprMacExperiments;
 				SDKROOT = macosx;
 			};

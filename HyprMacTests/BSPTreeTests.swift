@@ -237,7 +237,7 @@ final class BSPTreeTests: XCTestCase {
         tree.insert(w)
         let result = tree.layout(in: defaultRect, gap: defaultGap, padding: defaultPadding)
         XCTAssertEqual(result.count, 1)
-        let expected = defaultRect.insetBy(dx: defaultPadding, dy: defaultPadding)
+        let expected = defaultPadding.inset(defaultRect)
         XCTAssertEqual(result[0].1, expected)
     }
 

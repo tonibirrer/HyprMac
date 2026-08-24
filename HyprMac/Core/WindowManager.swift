@@ -41,6 +41,8 @@ class WindowManager {
 
     private(set) var workspaceManager: WorkspaceManager!
     private(set) var tilingEngine: TilingEngine!
+    private(set) var wallpaperManager: WallpaperManager!
+    private(set) var ipcServer: IPCServer!
 
     // window-keyed state cache. owns all seven lifecycle/classification dicts:
     // knownWindowIDs, floatingWindowIDs, originalFrames, windowOwners, hiddenWindowIDs,
@@ -421,8 +423,34 @@ class WindowManager {
         }
 
         tilingEngine.gapSize = config.gapSize
-        tilingEngine.outerPadding = config.outerPadding
+        tilingEngine.outerPadding = config.resolvedOuterPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
+
+        wallpaperManager = WallpaperManager(workspaceManager: workspaceManager,
+                                            displayManager: displayManager,
+                                            config: config)
+        wallpaperManager.start()
+
+        ipcServer = IPCServer(workspaceManager: workspaceManager,
+                              displayManager: displayManager,
+                              stateCache: stateCache,
+                              config: config,
+                              focusedWorkspace: { [weak self] in
+                                  guard let self else { return 1 }
+                                  return self.workspaceManager.workspaceForScreen(self.screenUnderCursor())
+                              },
+                              switchWorkspace: { [weak self] ws in
+                                  self?.actionDispatcher.dispatch(.switchWorkspace(ws))
+                              })
+        ipcServer.start()
+        config.$workspaceWallpapers
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                // config publishes before the property mutates — apply on
+                // the next runloop turn so the manager reads the new value.
+                DispatchQueue.main.async { self?.wallpaperManager.configChanged() }
+            }.store(in: &configObservers)
         scratchpad.tiledRegionInset = config.scratchpadRegionInset
         scratchpad.tileNewMembers = config.scratchpadTileByDefault
         focusBorder.primaryScreenHeight = displayManager.primaryScreenHeight
@@ -536,14 +564,17 @@ class WindowManager {
                 self.animatedRetile()
             }.store(in: &configObservers)
 
-        config.$outerPadding
-            .dropFirst()
-            .removeDuplicates()
-            .sink { [weak self] newPadding in
-                guard let self = self else { return }
-                self.tilingEngine.outerPadding = newPadding
-                self.animatedRetile()
-            }.store(in: &configObservers)
+        // uniform slider and per-side overrides both feed the resolved
+        // padding — react to either changing.
+        Publishers.Merge(
+            config.$outerPadding.dropFirst().removeDuplicates().map { _ in () },
+            config.$outerPaddingSides.dropFirst().removeDuplicates().map { _ in () }
+        )
+        .sink { [weak self] in
+            guard let self = self else { return }
+            self.tilingEngine.outerPadding = self.config.resolvedOuterPadding
+            self.animatedRetile()
+        }.store(in: &configObservers)
 
         config.$maxSplitsPerMonitor
             .dropFirst()
@@ -910,14 +941,15 @@ class WindowManager {
         }
         // brackets follow focus changes while Hypr is held (e.g. Hypr+arrow
         // shifts focus mid-press, workspace switch hides the border).
+        let workspaceAccent = config.accentColor(forWorkspace: workspaceManager.workspaceFor(window.windowID))
         if hyprHeld, let frame = window.frame {
-            focusBrackets.accentCGColor = config.resolvedFocusBorderColor.cgColor
+            focusBrackets.accentCGColor = workspaceAccent.cgColor
             focusBrackets.show(around: frame, windowID: window.windowID)
         }
         if config.showFocusBorder, let frame = window.frame {
             focusBorder.accentCGColor = stateCache.floatingWindowIDs.contains(window.windowID)
                 ? config.resolvedFloatingBorderColor.cgColor
-                : config.resolvedFocusBorderColor.cgColor
+                : workspaceAccent.cgColor
             WindowCornerRadius.prime(for: window)
             focusBorder.show(around: frame, windowID: window.windowID)
             // cache-based on both paths — this runs on every FFM focus
@@ -943,7 +975,7 @@ class WindowManager {
         guard fid != 0, let window = stateCache.cachedWindows[fid] else { return }
         if isFullscreenSuppressed(focused: window) { return }
         guard let frame = window.frame else { return }
-        focusBrackets.accentCGColor = config.resolvedFocusBorderColor.cgColor
+        focusBrackets.accentCGColor = config.accentColor(forWorkspace: workspaceManager.workspaceFor(fid)).cgColor
         focusBrackets.show(around: frame, windowID: fid)
     }
 

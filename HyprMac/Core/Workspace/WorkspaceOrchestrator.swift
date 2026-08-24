@@ -99,8 +99,16 @@ final class WorkspaceOrchestrator {
                 CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
                 focusBorder.hide(); dimmingOverlay.hideAll()
             }
+            // focused workspace changed even though nothing was hidden or
+            // shown — IPC subscribers (status bars) still need the event.
+            NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
             return
         }
+
+        // the monitor→workspace mapping just flipped — let the wallpaper
+        // swap NOW, before the hide/retile/focus work (frame readback can
+        // take ~0.5s and the desktop image change should feel instant).
+        NotificationCenter.default.post(name: .hyprMacWorkspaceWillShow, object: nil)
 
         // batch: hide old + restore floating new in one tight pass
         for wid in result.toHide {
