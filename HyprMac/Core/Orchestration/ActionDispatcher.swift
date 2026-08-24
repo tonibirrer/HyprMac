@@ -58,6 +58,13 @@ final class ActionDispatcher {
     var toggleScratchpad: () -> Void = {}
     var moveToScratchpad: () -> Void = {}
 
+    /// `false` until the first `applyChanges` completes. The initial
+    /// discovery pass sees every pre-existing window as new; window rules
+    /// still assign (and park) those, but never activate a workspace —
+    /// matching AeroSpace's startup behavior and avoiding a switch storm
+    /// at launch.
+    private var hasCompletedInitialDiscovery = false
+
     init(stateCache: WindowStateCache,
          accessibility: AccessibilityManager,
          displayManager: DisplayManager,
@@ -103,11 +110,18 @@ final class ActionDispatcher {
     ///   `WindowDiscoveryService` consumed; passed through so
     ///   `animatedRetile` and workspace assignment do not re-query AX.
     func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow]) {
+        // set when a non-silent window rule matched this cycle: switch to
+        // the rule's workspace once every other reaction has run. last
+        // match wins when several ruled windows appear in one cycle.
+        var pendingActivation: (workspace: Int, window: HyprWindow)?
+
         // workspace assignment for new windows that didn't auto-float onto a
         // disabled monitor. assigning by physical screen — cursor-based was
         // unreliable under multi-monitor + display-reconfig churn.
         for w in changes.newWindows where !changes.newOnDisabledMonitor.contains(w.windowID) {
-            assignNewWindow(w)
+            if let ws = assignNewWindow(w) {
+                pendingActivation = (ws, w)
+            }
         }
 
         // engine/workspace/focus cleanup for ids the service forgot.
@@ -125,8 +139,24 @@ final class ActionDispatcher {
             tilingEngine.removeWindowID(id)
         }
 
-        // apply cross-screen drift reassignments.
+        // apply cross-screen drift reassignments. a ruled app that closed and
+        // reopened (recycled CGWindowID) comes back through the drift path
+        // with its rule workspace as the stale "from" — honor the rule like a
+        // fresh open instead of drifting it to the visible workspace.
         for drift in changes.screenDrift {
+            if drift.reopened,
+               let w = allWindows.first(where: { $0.windowID == drift.windowID }),
+               let rule = windowRule(for: w), rule.workspace == drift.fromWorkspace {
+                hyprLog(.notice, .orchestration, "window rule: reopened '\(w.title ?? "?")' (\(w.windowID)) stays on ws\(rule.workspace) silent=\(rule.silent)")
+                if rule.silent {
+                    if let home = workspaceManager.homeScreenForWorkspace(rule.workspace) {
+                        workspaceManager.hideInCorner(w, on: home)
+                    }
+                } else {
+                    pendingActivation = (rule.workspace, w)
+                }
+                continue
+            }
             workspaceManager.moveWindow(drift.windowID, toWorkspace: drift.toWorkspace)
         }
 
@@ -159,6 +189,22 @@ final class ActionDispatcher {
         if !stateCache.floatingWindowIDs.isEmpty {
             floatingController.raiseBehind()
         }
+
+        // window-rule activation goes last so its focus decision is final.
+        // an already-visible target needs no hide/show — just focus the
+        // ruled window where the retile placed it.
+        if let (ws, w) = pendingActivation {
+            if workspaceManager.isWorkspaceVisible(ws) {
+                w.focus()
+                cursorManager.warpToCenter(of: w)
+                focusController.recordFocus(w.windowID, reason: "window-rule-activate")
+                updateFocusBorder(w)
+            } else {
+                workspaceOrchestrator.switchWorkspace(ws)
+            }
+        }
+
+        hasCompletedInitialDiscovery = true
     }
 
     /// Route a single `Action` to the service that handles it. Called
@@ -227,25 +273,74 @@ final class ActionDispatcher {
 
     // MARK: - apply-loop helpers
 
-    /// Assign a newly-discovered window to a workspace based on where it
-    /// physically opened.
+    /// Assign a newly-discovered window to a workspace.
     ///
-    /// Prefers the window's own screen — that is where macOS placed it —
-    /// and falls back to the cursor's screen only when the window has no
-    /// usable frame yet. Always overwrites any prior assignment: a
-    /// recycled `CGWindowID` could carry a leftover entry pointing at a
-    /// workspace the user has not touched in days.
-    private func assignNewWindow(_ window: HyprWindow) {
+    /// A matching window rule wins: the window goes to the rule's pinned
+    /// workspace regardless of which screen it opened on. Otherwise the
+    /// window is assigned by where it physically opened — its own screen
+    /// (that is where macOS placed it), falling back to the cursor's
+    /// screen only when the window has no usable frame yet. Always
+    /// overwrites any prior assignment: a recycled `CGWindowID` could
+    /// carry a leftover entry pointing at a workspace the user has not
+    /// touched in days.
+    ///
+    /// - Returns: the rule's workspace when a non-silent rule matched and
+    ///   the caller should activate it after the apply loop; nil otherwise.
+    private func assignNewWindow(_ window: HyprWindow) -> Int? {
+        // window rules (Hyprland-style app → workspace pins). auto-floated
+        // windows (never-tile apps) keep default placement, and a full
+        // target workspace falls through to default placement too.
+        if !stateCache.floatingWindowIDs.contains(window.windowID),
+           let rule = windowRule(for: window),
+           ruleTargetHasCapacity(rule, for: window) {
+            workspaceManager.assignWindow(window.windowID, toWorkspace: rule.workspace)
+            let activate = !rule.silent && hasCompletedInitialDiscovery
+            hyprLog(.notice, .orchestration, "window rule: '\(window.title ?? "?")' (\(window.windowID)) \(rule.bundleID) → ws\(rule.workspace) silent=\(rule.silent) activate=\(activate)")
+            if activate { return rule.workspace }
+            // silent move to a hidden workspace: park now — nothing else
+            // hides a window assigned off-screen outside a switch.
+            if !workspaceManager.isWorkspaceVisible(rule.workspace),
+               let home = workspaceManager.homeScreenForWorkspace(rule.workspace) {
+                workspaceManager.hideInCorner(window, on: home)
+            }
+            return nil
+        }
+
         let physical = displayManager.screen(for: window)
         let cursor = screenUnderCursor()
         let screen = physical ?? cursor
         let frameDesc = window.frame.map { "(\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height)))" } ?? "nil"
         let physicalName = physical?.localizedName ?? "nil"
         hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspaceManager.workspaceForScreen(screen)) on \(screen.localizedName)")
-        guard !workspaceManager.isMonitorDisabled(screen) else { return }
+        guard !workspaceManager.isMonitorDisabled(screen) else { return nil }
         let ws = workspaceManager.workspaceForScreen(screen)
         // overwrite any stale entry — assignWindow handles old-set cleanup
         workspaceManager.assignWindow(window.windowID, toWorkspace: ws)
+        return nil
+    }
+
+    /// First window rule matching `window`'s owning app, or nil.
+    private func windowRule(for window: HyprWindow) -> WindowRule? {
+        guard !config.windowRules.isEmpty else { return nil }
+        let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+        return config.windowRules.firstMatch(bundleID: bundleID)
+    }
+
+    /// `true` when the rule's target workspace can take `window`. Mirrors
+    /// the `moveToWorkspace` capacity checks; unlike there, a full target
+    /// is not an error — the caller falls back to default placement.
+    private func ruleTargetHasCapacity(_ rule: WindowRule, for window: HyprWindow) -> Bool {
+        let ws = rule.workspace
+        if let screen = workspaceManager.screenForWorkspace(ws) {
+            if tilingEngine.canFitWindow(window, onWorkspace: ws, screen: screen) { return true }
+        } else if let home = workspaceManager.homeScreenForWorkspace(ws),
+                  !workspaceManager.isMonitorDisabled(home) {
+            let wids = workspaceManager.windowIDs(onWorkspace: ws).subtracting(stateCache.hiddenWindowIDs)
+            let tiledCount = wids.filter { !stateCache.floatingWindowIDs.contains($0) }.count
+            if tiledCount < (1 << tilingEngine.maxDepth(for: home)) { return true }
+        }
+        hyprLog(.notice, .orchestration, "window rule: ws\(ws) can't take '\(window.title ?? "?")' (\(window.windowID)) — falling back to default placement")
+        return false
     }
 
     /// Re-establish keyboard focus when the border has gone dark but the

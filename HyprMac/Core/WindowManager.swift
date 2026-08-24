@@ -1572,7 +1572,30 @@ class WindowManager {
             }
         }
 
-        guard !tilingWids.isEmpty else { return }
+        // window rules first: ruled windows go straight to their pinned
+        // workspace instead of balanced distribution, capacity permitting.
+        // this is what keeps app → workspace pins stable across restarts
+        // and "Retile All".
+        var ruledWids: [CGWindowID] = []
+        var ruledCount: [Int: Int] = [:]
+        if !config.windowRules.isEmpty {
+            tilingWids.removeAll { wid in
+                guard let w = allWindows.first(where: { $0.windowID == wid }),
+                      let bundleID = NSRunningApplication(processIdentifier: w.ownerPID)?.bundleIdentifier,
+                      let rule = config.windowRules.firstMatch(bundleID: bundleID),
+                      let home = workspaceManager.homeScreenForWorkspace(rule.workspace),
+                      !workspaceManager.isMonitorDisabled(home) else { return false }
+                let cap = 1 << tilingEngine.maxDepth(for: home)
+                guard (ruledCount[rule.workspace] ?? 0) < cap else { return false }
+                ruledCount[rule.workspace, default: 0] += 1
+                workspaceManager.assignWindow(wid, toWorkspace: rule.workspace)
+                ruledWids.append(wid)
+                hyprLog(.notice, .lifecycle, "distribute: window rule pins '\(w.title ?? "?")' (\(wid)) \(bundleID) → ws\(rule.workspace)")
+                return true
+            }
+        }
+
+        guard !tilingWids.isEmpty || !ruledWids.isEmpty else { return }
 
         // deterministic order: left-to-right by current frame, id tiebreak.
         // set-iteration order made every explicit redistribute produce a
@@ -1614,7 +1637,9 @@ class WindowManager {
         var slotsUsed = 0
         for slot in slots {
             guard widIdx < tilingWids.count else { break }
-            let cap = tilingEngine.maxDepth(for: slot.screen) + 1 // dwindle depth, no backtracking on distribute
+            // dwindle depth, no backtracking on distribute; ruled windows
+            // already pinned to this workspace consume capacity first
+            let cap = max(0, tilingEngine.maxDepth(for: slot.screen) + 1 - (ruledCount[slot.ws] ?? 0))
             for _ in 0..<cap where widIdx < tilingWids.count {
                 workspaceManager.assignWindow(tilingWids[widIdx], toWorkspace: slot.ws)
                 widIdx += 1
@@ -1635,7 +1660,7 @@ class WindowManager {
         }
 
         // hide windows on non-visible workspaces
-        for wid in tilingWids where !stateCache.floatingWindowIDs.contains(wid) {
+        for wid in tilingWids + ruledWids where !stateCache.floatingWindowIDs.contains(wid) {
             guard let assignedWs = workspaceManager.workspaceFor(wid),
                   !workspaceManager.isWorkspaceVisible(assignedWs) else { continue }
             if let w = allWindows.first(where: { $0.windowID == wid }) {

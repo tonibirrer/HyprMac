@@ -232,6 +232,7 @@ struct SavedConfig: Codable {
     let chromeFadeDurationSec: Double?
     let scratchpadTileByDefault: Bool?
     let scratchpadRegionInset: CGFloat?
+    let windowRules: [WindowRule]?
 }
 
 // monitor-specific settings — stored locally, never synced via iCloud
