@@ -1,5 +1,8 @@
 # HyprMac
 
+> [!WARNING]
+> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style window rules. It builds as **HyprMacExperiments** with its own bundle ID so it can run alongside a regular HyprMac install, auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
+
 A keyboard-driven tiling window manager for macOS.
 
 Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 9 virtual workspaces, directional focus and window swapping, drag-to-swap, and focus-follows-mouse — all without touching System Integrity Protection.
@@ -26,6 +29,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
 | 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
+| 📌 **Window Rules** *(fork)* | Pin apps to workspaces by bundle ID, Hyprland-style |
 | 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
 | ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
 | 📋 **Keybind Overlay** | `Hypr+K` shows all active shortcuts at a glance |
@@ -127,6 +131,32 @@ A single macOS Space per monitor is recommended for the cleanest experience.
 
 ---
 
+## Window Rules *(fork feature)*
+
+Hyprland-style app → workspace pins, modeled on `windowrule = workspace N, class:...`. When an app with a rule opens a new window, the window is placed on its pinned workspace instead of the active one — and by default the workspace is switched to, so e.g. opening your terminal takes you straight to its workspace. Set `silent` to move the window without switching (Hyprland's `workspace N silent`).
+
+Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9, per-rule "Follow" checkbox), or directly in `~/Library/Application Support/HyprMac/config.json`:
+
+```json
+"windowRules": [
+  { "bundleID": "com.mitchellh.ghostty", "workspace": 2 },
+  { "bundleID": "dev.zed.Zed",           "workspace": 2 },
+  { "bundleID": "md.obsidian",           "workspace": 3, "silent": true }
+]
+```
+
+Find an app's bundle ID with `mdls -name kMDItemCFBundleIdentifier -r /Applications/App.app`.
+
+Semantics:
+
+- Rules are evaluated **once per window**, when it is first discovered; first match wins. Un-minimizing or switching workspaces never re-triggers a rule, but apps that recycle their window on reopen (Teams-style) are re-pinned correctly.
+- On HyprMac startup and **Retile All**, existing windows of ruled apps are sorted onto their pinned workspaces *silently* — no workspace-switch storm at launch.
+- A full target workspace falls back to normal placement instead of rejecting the window.
+- "Never tile" (excluded) apps always float and are ignored by rules.
+- Since workspaces are statically anchored to monitors, a rule also decides which monitor the app lands on — e.g. with two monitors, odd workspaces pin to the left screen and even to the right.
+
+---
+
 ## Architecture
 
 HyprMac is structured as a thin orchestration layer over a handful of focused services. Hotkeys feed into an `ActionDispatcher` that routes work to the right service; a polling loop drives a `WindowDiscoveryService` that detects new, gone, and drifted windows and hands the diff back to the dispatcher.
@@ -172,6 +202,9 @@ For deeper reading:
 ---
 
 ## Updating
+
+> [!NOTE]
+> In this fork the Sparkle update feed is removed — it never auto-updates. Build from source to update. The rest of this section describes upstream HyprMac.
 
 **In-app updates are recommended for most users.** HyprMac checks for updates automatically via Sparkle — when one is available, you'll be prompted to install it directly from the app. You can also check manually via the menubar icon → "Check for Updates..."
 

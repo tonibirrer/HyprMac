@@ -45,8 +45,11 @@ struct WindowChanges {
     /// Windows whose physical screen no longer matches their recorded
     /// workspace's screen — typically a manual cross-monitor drag or a
     /// dock-click that raised the window on the wrong screen. The
-    /// caller calls `workspaceManager.moveWindow` for each.
-    let screenDrift: [(windowID: CGWindowID, fromWorkspace: Int, toWorkspace: Int)]
+    /// caller calls `workspaceManager.moveWindow` for each. `reopened`
+    /// marks the recycled-CGWindowID close-then-reopen case (window came
+    /// back from hidden onto a hidden workspace), so the caller can honor
+    /// window rules for it the way it would for a genuinely new window.
+    let screenDrift: [(windowID: CGWindowID, fromWorkspace: Int, toWorkspace: Int, reopened: Bool)]
 
     /// `true` when the previously-focused window id is in `goneIDs`
     /// (whether moved to hidden or fully forgotten). The caller should
@@ -350,9 +353,9 @@ final class WindowDiscoveryService {
     /// covers hide-corner park slivers and stale/transient AX reads, so
     /// drift only ever acts on a window the user can actually see.
     private func detectScreenDrift(_ allWindows: [HyprWindow],
-                                   justReturned: Set<CGWindowID> = []) -> [(windowID: CGWindowID, fromWorkspace: Int, toWorkspace: Int)] {
+                                   justReturned: Set<CGWindowID> = []) -> [(windowID: CGWindowID, fromWorkspace: Int, toWorkspace: Int, reopened: Bool)] {
         let visibleWorkspaces = Set(workspaceManager.monitorWorkspace.values)
-        var drifts: [(CGWindowID, Int, Int)] = []
+        var drifts: [(CGWindowID, Int, Int, Bool)] = []
         for w in allWindows {
             guard let recordedWs = workspaceManager.workspaceFor(w.windowID) else { continue }
             // scratchpad members (ws 0) never drift — a tiled member is
@@ -394,7 +397,7 @@ final class WindowDiscoveryService {
                 // shown again, the tile pass places the window correctly.
                 if !visibleWorkspaces.contains(recordedWs) { continue }
             }
-            drifts.append((w.windowID, recordedWs, physicalWs))
+            drifts.append((w.windowID, recordedWs, physicalWs, reopenedOntoHiddenWs))
             hyprLog(.notice, .discovery, "drift: '\(w.title ?? "?")' (\(w.windowID)) ws\(recordedWs) → ws\(physicalWs) (now on \(physicalScreen.localizedName))\(reopenedOntoHiddenWs ? " [reopened onto hidden ws]" : "")")
         }
         return drifts
