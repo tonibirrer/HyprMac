@@ -111,6 +111,12 @@ struct WallpapersPanel: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             config.workspaceWallpapers[String(ws)] = url.path
+            // guess the workspace accent from the picture — dominant hue,
+            // lifted into border-ready range. monochrome images keep the
+            // current color.
+            if let img = NSImage(contentsOf: url), let accent = img.dominantAccentColor() {
+                config.workspaceColors[String(ws)] = accent.hexString
+            }
         }
     }
 }
