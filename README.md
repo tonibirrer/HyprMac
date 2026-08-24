@@ -176,7 +176,9 @@ hyprmacctl subscribe               # stream: workspace>>FOCUSED>>PREV / windowsc
 
 ## Workspace Colors & Wallpapers *(fork feature)*
 
-Settings → Layout → Workspaces assigns each workspace an accent color and a wallpaper. The color tints the focus border while that workspace is focused and is served over IPC for status bars; the wallpaper swaps in per monitor whenever the workspace is shown (Hyprland needs hyprpaper + an IPC script for this — macOS lets HyprMac do it natively via `NSWorkspace.setDesktopImageURL`).
+Settings → Layout → Workspaces assigns each workspace an accent color and a wallpaper. The color tints the focus border while that workspace is focused and is served over IPC for status bars; the wallpaper swaps in per monitor the instant the workspace is shown (Hyprland needs hyprpaper + an IPC script for this — macOS lets HyprMac do it natively via `NSWorkspace.setDesktopImageURL`).
+
+Picking a wallpaper auto-derives the workspace's accent color from the image — the dominant hue, lifted into a vivid border-ready tone. Near-monochrome images keep the current color, and the guess can always be overridden with the color picker.
 
 Per-side outer padding lives in Settings → Layout → Gaps → "Per-side overrides" — e.g. top = 40 reserves space for sketchybar while the other sides keep the uniform padding (`"outerPaddingSides": {"top": 40}` in `config.json`).
 
