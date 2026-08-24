@@ -35,6 +35,7 @@
 		3564F2FDA0E1E1BEA5FDFCA8 /* HyprKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85E2687861DA70718C132100 /* HyprKey.swift */; };
 		3C05D5F0C1395F04AAC506A7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EC19E9DB53B109940984B5D5 /* Assets.xcassets */; };
 		3D84219CDFABCE2B2019F0DC /* SpaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 913F7521CBE5FF04365D18D8 /* SpaceManager.swift */; };
+		402491B3E72706E39E02B74E /* WindowRulesPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A7787ABE39F1349F1F7C59B /* WindowRulesPanel.swift */; };
 		418CEE0D45A22A4854CBF801 /* TilingConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC47A2DE51571E5A9EEBE362 /* TilingConfig.swift */; };
 		42778D615628483A357572DF /* WorkspaceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A0BF8AF7796AE4F9F114B7C /* WorkspaceManager.swift */; };
 		440732216A02AA6BC39588CC /* AppLauncherManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A36D359F723D63F2E6036D15 /* AppLauncherManager.swift */; };
@@ -80,11 +81,13 @@
 		D181B66CA786C3A32097B09D /* ScratchpadController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */; };
 		D2364C0428C5CEDC5AF46D76 /* KeybindDisplayHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7681B5C6FAEC2BFB53A30743 /* KeybindDisplayHelpers.swift */; };
 		D380E4A1BDD2AD4281299E72 /* KeybindDecoderToleranceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */; };
+		D42C28555A078D585F2268A2 /* WindowRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D21946C610CB845DEC5502 /* WindowRule.swift */; };
 		D58328860E2249DD694C36CA /* KeyCodeUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */; };
 		DA506BA26A104FA2BA45FF3C /* KeybindCategory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F4BE620A1670E1D89160707 /* KeybindCategory.swift */; };
 		DB9D75296F8B54704ECDA2AB /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CFEA8374C63AC2FDFCAC4AE /* WindowManager.swift */; };
 		DD38C6D3A18D2B209CDDB9BC /* ThreadAssertions.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE7C6CB56D09DB0F05AE6EDC /* ThreadAssertions.swift */; };
 		DFB503500879F243DD9C3FC1 /* HyprWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA85C3347F1D7A782EA9EA39 /* HyprWindow.swift */; };
+		E3C9EA041BCCF3D861E305F1 /* WindowRuleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9EF96B688DCAEC0C6EB7A10 /* WindowRuleTests.swift */; };
 		E49C450CFEE3A7BC692AA590 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F397ECC53628484AA2EBD5A2 /* KeyRecorderView.swift */; };
 		E5F10E452CCBF25881BFBF54 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B218B64E7BBDC96399E8FAB /* GeneralSettingsView.swift */; };
 		E6B34B59205F9ED0E806F291 /* CoordinateSpace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0116BE6F796AC619B0BD6B /* CoordinateSpace.swift */; };
@@ -137,6 +140,7 @@
 		301C7EDAAD234FC3DDCBAADC /* DirectionPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectionPicker.swift; sourceTree = "<group>"; };
 		306A7B2B7B3F09F08F953F35 /* SuppressionRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuppressionRegistryTests.swift; sourceTree = "<group>"; };
 		3246386B0F502F2D858B3033 /* TileScratchpadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TileScratchpadTests.swift; sourceTree = "<group>"; };
+		3A7787ABE39F1349F1F7C59B /* WindowRulesPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRulesPanel.swift; sourceTree = "<group>"; };
 		3F5155705392561940307378 /* HyprMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HyprMac.entitlements; sourceTree = "<group>"; };
 		3FCF579F05A2DFBB28DF945A /* WorkspaceOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOrchestrator.swift; sourceTree = "<group>"; };
 		43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandleDisplayChangeTests.swift; sourceTree = "<group>"; };
@@ -152,6 +156,7 @@
 		61E1DEE768A398E963AAB1CA /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		63E30549B7EABECD4FCDBC0F /* BundleIDUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleIDUtils.swift; sourceTree = "<group>"; };
 		65F2F88E3A815333F6542EEA /* ColorPickerRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorPickerRow.swift; sourceTree = "<group>"; };
+		66D21946C610CB845DEC5502 /* WindowRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRule.swift; sourceTree = "<group>"; };
 		6B23E3313247FD77173D35DD /* DefaultKeybindsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultKeybindsTests.swift; sourceTree = "<group>"; };
 		6E4E656D3CA021B130775CC3 /* Keybind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keybind.swift; sourceTree = "<group>"; };
 		6EDEEE13B637CED75A9FD8A9 /* TourView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourView.swift; sourceTree = "<group>"; };
@@ -202,6 +207,7 @@
 		E49CB059612127CA6F3E7766 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		E5557F0D5040AE48CF5031E4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		E87A74C0EE799AA06F213CCF /* BundleIDPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleIDPicker.swift; sourceTree = "<group>"; };
+		E9EF96B688DCAEC0C6EB7A10 /* WindowRuleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRuleTests.swift; sourceTree = "<group>"; };
 		EC19E9DB53B109940984B5D5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCodeUtils.swift; sourceTree = "<group>"; };
 		EDAAA3743D0898468DBA8EBC /* ConfigMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigMigration.swift; sourceTree = "<group>"; };
@@ -360,6 +366,7 @@
 				E49CB059612127CA6F3E7766 /* SettingsComponents.swift */,
 				5627CA2ADE2AA85B3372EB81 /* SettingsView.swift */,
 				772FFAF897AAC136F605737C /* TilingSettingsView.swift */,
+				3A7787ABE39F1349F1F7C59B /* WindowRulesPanel.swift */,
 				FC4754A615E4871D79F5D066 /* WorkspacePicker.swift */,
 			);
 			path = Settings;
@@ -393,6 +400,7 @@
 				6E4E656D3CA021B130775CC3 /* Keybind.swift */,
 				1A029C0AE0E8E5DEE2416684 /* UserConfig.swift */,
 				8A04F6036754CB1510546DFC /* UserConfigDefaults.swift */,
+				66D21946C610CB845DEC5502 /* WindowRule.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -427,6 +435,7 @@
 				3246386B0F502F2D858B3033 /* TileScratchpadTests.swift */,
 				DC08AAC03ABC15E772214598 /* ToggleSplitFallthroughRegressionTests.swift */,
 				857FCC6A226AFEECD7A199FC /* WindowDiscoveryServiceTests.swift */,
+				E9EF96B688DCAEC0C6EB7A10 /* WindowRuleTests.swift */,
 				901F153AA3906FE161498E58 /* WindowStateCacheTests.swift */,
 			);
 			path = HyprMacTests;
@@ -532,8 +541,8 @@
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					7B21C837222925403D932E64 = {
-						DevelopmentTeam = "$(DEVELOPMENT_TEAM)";
-						ProvisioningStyle = Automatic;
+						DevelopmentTeam = "";
+						ProvisioningStyle = Manual;
 					};
 					CD25E0B6DAB296F4334EFC3E = {
 						ProvisioningStyle = Automatic;
@@ -649,6 +658,8 @@
 				EBAA92AE4FF80ED33B39219A /* WindowCornerRadius.swift in Sources */,
 				696EB6B8B6A4A823B6DBBCD0 /* WindowDiscoveryService.swift in Sources */,
 				DB9D75296F8B54704ECDA2AB /* WindowManager.swift in Sources */,
+				D42C28555A078D585F2268A2 /* WindowRule.swift in Sources */,
+				402491B3E72706E39E02B74E /* WindowRulesPanel.swift in Sources */,
 				1276120B1D8BE4DEEDCF8EF3 /* WindowStateCache.swift in Sources */,
 				42778D615628483A357572DF /* WorkspaceManager.swift in Sources */,
 				446BF26414F6821D08738E80 /* WorkspaceOrchestrator.swift in Sources */,
@@ -678,6 +689,7 @@
 				8456B287CD1B9AC9E86336E5 /* TileScratchpadTests.swift in Sources */,
 				860959AD6A92DB57753D655E /* ToggleSplitFallthroughRegressionTests.swift in Sources */,
 				00B50053F139D098B090709F /* WindowDiscoveryServiceTests.swift in Sources */,
+				E3C9EA041BCCF3D861E305F1 /* WindowRuleTests.swift in Sources */,
 				EA8FC0F77CB146BAD8B35CBE /* WindowStateCacheTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -702,12 +714,13 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zachgray.HyprMacTests;
+				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacTests;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "HyprMac/PrivateAPI/HyprMac-Bridging-Header.h";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HyprMac.app/Contents/MacOS/HyprMac";
@@ -844,12 +857,13 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 					"@loader_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zachgray.HyprMacTests;
+				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacTests;
 				SDKROOT = macosx;
 				SWIFT_OBJC_BRIDGING_HEADER = "HyprMac/PrivateAPI/HyprMac-Bridging-Header.h";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/HyprMac.app/Contents/MacOS/HyprMac";
@@ -861,11 +875,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = HyprMac/HyprMac.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "HyprMac Dev Signing";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 77;
-				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = HyprMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -878,7 +892,8 @@
 					"-framework",
 					SkyLight,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zachgray.HyprMac;
+				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacExperiments;
+				PRODUCT_NAME = HyprMacExperiments;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -888,11 +903,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = HyprMac/HyprMac.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_IDENTITY = "HyprMac Dev Signing";
+				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 77;
-				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
+				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = HyprMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -905,7 +920,8 @@
 					"-framework",
 					SkyLight,
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.zachgray.HyprMac;
+				PRODUCT_BUNDLE_IDENTIFIER = pl.birrer.HyprMacExperiments;
+				PRODUCT_NAME = HyprMacExperiments;
 				SDKROOT = macosx;
 			};
 			name = Debug;

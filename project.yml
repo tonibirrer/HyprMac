@@ -1,6 +1,6 @@
 name: HyprMac
 options:
-  bundleIdPrefix: com.zachgray
+  bundleIdPrefix: pl.birrer
   deploymentTarget:
     macOS: "13.0"
   xcodeVersion: "16.0"
@@ -41,12 +41,13 @@ targets:
     settings:
       base:
         INFOPLIST_FILE: HyprMac/Info.plist
-        PRODUCT_BUNDLE_IDENTIFIER: com.zachgray.HyprMac
+        PRODUCT_NAME: HyprMacExperiments
+        PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments
         MARKETING_VERSION: "0.10.2"
         CURRENT_PROJECT_VERSION: "77"
-        CODE_SIGN_IDENTITY: "Apple Development"
-        CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: $(DEVELOPMENT_TEAM)
+        CODE_SIGN_IDENTITY: "HyprMac Dev Signing"
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
         CODE_SIGN_ENTITLEMENTS: HyprMac/HyprMac.entitlements
         ENABLE_HARDENED_RUNTIME: false
         OTHER_LDFLAGS:
@@ -63,7 +64,8 @@ targets:
       - target: HyprMac
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.zachgray.HyprMacTests
+        PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacTests
+        GENERATE_INFOPLIST_FILE: "YES"
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGNING_ALLOWED: "YES"

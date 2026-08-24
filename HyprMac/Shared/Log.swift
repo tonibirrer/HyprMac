@@ -23,7 +23,7 @@ enum LogCategory: String, CaseIterable {
     case lifecycle, accessibility, space, display
 }
 
-private let subsystem = Bundle.main.bundleIdentifier ?? "com.zachgray.HyprMac"
+private let subsystem = Bundle.main.bundleIdentifier ?? "pl.birrer.HyprMac"
 
 private let loggers: [LogCategory: Logger] = Dictionary(
     uniqueKeysWithValues: LogCategory.allCases.map {
@@ -38,7 +38,7 @@ private let loggers: [LogCategory: Logger] = Dictionary(
 /// `verboseInRelease` reads the `HyprMacVerboseLogging` `UserDefault`
 /// so a user can flip on trace logging in a Release build for a
 /// support session via:
-/// `defaults write com.zachgray.HyprMac HyprMacVerboseLogging -bool YES`.
+/// `defaults write pl.birrer.HyprMac HyprMacVerboseLogging -bool YES`.
 enum LogConfig {
     static var traceMinimum: LogLevel = .debug
     static var enabledCategories: Set<LogCategory> = Set(LogCategory.allCases)
@@ -51,7 +51,7 @@ enum LogConfig {
 /// Emit a log line.
 ///
 /// `.notice` and above always emit through `os.Logger` and are
-/// visible in Console under `subsystem == "com.zachgray.HyprMac"`.
+/// visible in Console under `subsystem == "pl.birrer.HyprMac"`.
 /// `.debug`/`.info` are gated by `LogConfig` in DEBUG and by
 /// `verboseInRelease` in Release.
 ///
