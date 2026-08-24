@@ -1,0 +1,45 @@
+#!/bin/bash
+# hyprmacctl — query and subscribe to HyprMac's IPC sockets, in the spirit
+# of Hyprland's `hyprctl` + `socat` on the event socket.
+#
+# Usage:
+#   hyprmacctl workspaces         JSON: all workspaces (id, monitor, visible, focused, windows, color)
+#   hyprmacctl windows <ws>       JSON: windows on workspace <ws> (app, bundleID, title)
+#   hyprmacctl focused            JSON: the focused workspace
+#   hyprmacctl dispatch workspace <ws>   switch to workspace <ws>
+#   hyprmacctl subscribe          stream events, one line each:
+#                                   workspace>>FOCUSED>>PREV
+#                                   windowschanged>>
+#
+# Requires HyprMac(Experiments) to be running. Sockets live in the app's
+# Application Support directory.
+
+set -euo pipefail
+
+DIR="$HOME/Library/Application Support/HyprMac"
+CMD_SOCK="$DIR/hyprmac.sock"
+EVT_SOCK="$DIR/hyprmac.events.sock"
+
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+
+[ $# -ge 1 ] || usage
+
+case "$1" in
+  workspaces|focused)
+    printf '%s\n' "$1" | nc -U "$CMD_SOCK"
+    ;;
+  windows)
+    [ $# -eq 2 ] || usage
+    printf 'windows %s\n' "$2" | nc -U "$CMD_SOCK"
+    ;;
+  dispatch)
+    [ $# -eq 3 ] && [ "$2" = "workspace" ] || usage
+    printf 'dispatch workspace %s\n' "$3" | nc -U "$CMD_SOCK"
+    ;;
+  subscribe)
+    exec nc -U "$EVT_SOCK"
+    ;;
+  *)
+    usage
+    ;;
+esac

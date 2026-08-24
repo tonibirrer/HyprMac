@@ -30,6 +30,9 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
 | 📌 **Window Rules** *(fork)* | Pin apps to workspaces by bundle ID, Hyprland-style |
+| 🔌 **IPC + sketchybar** *(fork)* | Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators |
+| 🎨 **Workspace Identity** *(fork)* | Per-workspace accent colors and wallpapers |
+| 📐 **Per-Side Padding** *(fork)* | Top-only outer padding to reserve space for a status bar |
 | 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
 | ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
 | 📋 **Keybind Overlay** | `Hypr+K` shows all active shortcuts at a glance |
@@ -154,6 +157,28 @@ Semantics:
 - A full target workspace falls back to normal placement instead of rejecting the window.
 - "Never tile" (excluded) apps always float and are ignored by rules.
 - Since workspaces are statically anchored to monitors, a rule also decides which monitor the app lands on — e.g. with two monitors, odd workspaces pin to the left screen and even to the right.
+
+---
+
+## IPC & sketchybar *(fork feature)*
+
+HyprMac exposes its state the way Hyprland does — over unix sockets, not callbacks. `hyprmac.sock` answers queries; `hyprmac.events.sock` streams events to whoever connects (Hyprland's `.socket` / `.socket2` split). `scripts/hyprmacctl` wraps both:
+
+```sh
+hyprmacctl workspaces              # JSON: id, monitor, visible, focused, windows, color
+hyprmacctl windows 2               # JSON: app, bundleID, title per window
+hyprmacctl focused                 # JSON: focused workspace
+hyprmacctl dispatch workspace 3    # switch workspace (clickable indicators)
+hyprmacctl subscribe               # stream: workspace>>FOCUSED>>PREV / windowschanged>>
+```
+
+[`examples/sketchybar/`](examples/sketchybar/) has a ready-made integration: workspace indicators with per-workspace app icons (AeroSpace-setup parity), clickable to switch, highlighted in each workspace's accent color.
+
+## Workspace Colors & Wallpapers *(fork feature)*
+
+Settings → Layout → Workspaces assigns each workspace an accent color and a wallpaper. The color tints the focus border while that workspace is focused and is served over IPC for status bars; the wallpaper swaps in per monitor whenever the workspace is shown (Hyprland needs hyprpaper + an IPC script for this — macOS lets HyprMac do it natively via `NSWorkspace.setDesktopImageURL`).
+
+Per-side outer padding lives in Settings → Layout → Gaps → "Per-side overrides" — e.g. top = 40 reserves space for sketchybar while the other sides keep the uniform padding (`"outerPaddingSides": {"top": 40}` in `config.json`).
 
 ---
 

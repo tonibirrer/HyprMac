@@ -99,6 +99,9 @@ final class WorkspaceOrchestrator {
                 CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
                 focusBorder.hide(); dimmingOverlay.hideAll()
             }
+            // focused workspace changed even though nothing was hidden or
+            // shown — IPC subscribers (status bars) still need the event.
+            NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
             return
         }
 

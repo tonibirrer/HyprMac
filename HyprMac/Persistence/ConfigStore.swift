@@ -233,6 +233,21 @@ struct SavedConfig: Codable {
     let scratchpadTileByDefault: Bool?
     let scratchpadRegionInset: CGFloat?
     let windowRules: [WindowRule]?
+    let outerPaddingSides: PaddingSides?
+    let workspaceWallpapers: [String: String]?
+    let workspaceColors: [String: String]?
+}
+
+/// Optional per-side overrides for the uniform `outerPadding`. A nil side
+/// follows the uniform value; e.g. `{"top": 40}` reserves space for a
+/// status bar while the other three sides keep the slider value.
+struct PaddingSides: Codable, Equatable {
+    var top: CGFloat?
+    var left: CGFloat?
+    var bottom: CGFloat?
+    var right: CGFloat?
+
+    static let none = PaddingSides(top: nil, left: nil, bottom: nil, right: nil)
 }
 
 // monitor-specific settings — stored locally, never synced via iCloud
