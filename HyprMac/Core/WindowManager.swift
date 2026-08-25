@@ -129,6 +129,21 @@ class WindowManager {
     // before clearing dockIsActive so re-activations cancel earlier pending clears.
     private var dockActivationToken: UInt64 = 0
 
+    // user-gesture breadcrumbs for the dock-affordance gate in appDidActivate.
+    // an activation with no recent click, no recent ⌘ keystroke, and no
+    // launcher as the previous frontmost app is programmatic (e.g. a terminal
+    // raising itself when a background job prints) and must not switch
+    // workspaces out from under the user.
+    private var lastLeftMouseDownTime: CFAbsoluteTime = 0
+    private var previousActivationBundleID: String?
+    private static let activationGestureWindow: CFAbsoluteTime = 1.5
+    private static let launcherBundleIDs: Set<String> = [
+        "com.apple.dock",
+        "com.apple.Spotlight",
+        "com.raycast.macos",
+        "com.runningwithcrayons.Alfred",
+    ]
+
     // date-gated suppression flags. owned here, shared with subsystems via closures.
     // keys in use: "activation-switch" (gates appDidActivate workspace switch),
     // "mouse-focus" (will migrate from MouseTrackingManager in a follow-up commit).
@@ -765,6 +780,7 @@ class WindowManager {
             guard let self else { return }
             self.mouseButtonDown = true
             self.mouseDraggedSinceDown = false
+            self.lastLeftMouseDownTime = CFAbsoluteTimeGetCurrent()
             // the event carries the exact click location. sampling
             // NSEvent.mouseLocation inside the handler instead reads
             // wherever the cursor has moved to by the time the AX-heavy
@@ -2239,13 +2255,25 @@ class WindowManager {
     /// 1. Note when the dock is the active app so FFM can be suppressed
     ///    while dock popups (downloads, stacks) are open.
     /// 2. If the activation was not suppressed (FFM, workspace switch,
-    ///    floater-raise) and the activated app has no visible window, jump
-    ///    to a workspace that does — this is the "dock-click takes me to
-    ///    that app's workspace" affordance. Returns early when it fires;
-    ///    the workspace switch will trigger its own poll.
+    ///    floater-raise), looks user-initiated (recent click, recent ⌘
+    ///    keystroke, or launched via Dock/Spotlight/Raycast — see
+    ///    `isUserInitiatedActivation`), and the activated app has no
+    ///    visible window, jump to a workspace that does — this is the
+    ///    "dock-click takes me to that app's workspace" affordance.
+    ///    Returns early when it fires; the workspace switch will trigger
+    ///    its own poll. Programmatic self-activations (a terminal raising
+    ///    itself when a background job prints) are logged and ignored.
     /// 3. Otherwise, schedule a discovery poll and re-raise floating
     ///    windows after a brief settle so they stay visually on top.
     @objc private func appDidActivate(_ notification: Notification) {
+        // remember the previous frontmost app before recording this one — a
+        // launcher (Dock, Spotlight, Raycast) as the predecessor marks this
+        // activation as user-initiated for the dock-affordance gate below.
+        let predecessorBundleID = previousActivationBundleID
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+            previousActivationBundleID = app.bundleIdentifier
+        }
+
         // suppress FFM while dock popups (downloads, stacks) are open
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             let isDock = (app.bundleIdentifier == "com.apple.dock")
@@ -2286,7 +2314,13 @@ class WindowManager {
                     visibleWorkspaces.contains($0) || ($0 == ScratchpadController.workspace && scratchpad.isVisible)
                 }
 
-                if !hasVisibleWindow {
+                if !hasVisibleWindow, !isUserInitiatedActivation(predecessorBundleID: predecessorBundleID) {
+                    // programmatic self-activation — a terminal raising itself
+                    // when a background job prints, an app calling activate().
+                    // honoring it would yank the user to another workspace
+                    // every few seconds; only user gestures may switch.
+                    hyprLog(.notice, .lifecycle, "dock-affordance: ignoring programmatic activation of \(app.bundleIdentifier ?? "?") — no recent click/⌘ gesture, predecessor=\(predecessorBundleID ?? "none")")
+                } else if !hasVisibleWindow {
                     // all of the app's windows live in the hidden scratchpad:
                     // summon the layer instead of a workspace switch —
                     // switchWorkspace(0) would range-guard into a no-op and
@@ -2321,6 +2355,20 @@ class WindowManager {
         }
     }
 
+
+    /// `true` when the current app activation can be traced to a user
+    /// gesture: a recent left click (Dock icon, Spotlight result), a recent
+    /// ⌘-involved keystroke (Cmd-Tab), or a launcher as the previous
+    /// frontmost app (keyboard-driven Spotlight/Raycast launches, where the
+    /// last plain keystroke is Return and carries no ⌘). Programmatic
+    /// self-activations have none of these.
+    private func isUserInitiatedActivation(predecessorBundleID: String?) -> Bool {
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastLeftMouseDownTime < Self.activationGestureWindow { return true }
+        if now - hotkeyManager.lastCommandGestureTime < Self.activationGestureWindow { return true }
+        if let prev = predecessorBundleID, Self.launcherBundleIDs.contains(prev) { return true }
+        return false
+    }
 
     /// Clear `dockIsActive` if the deactivating app is the dock. macOS
     /// doesn't always fire `didActivate` for the next app (e.g. user

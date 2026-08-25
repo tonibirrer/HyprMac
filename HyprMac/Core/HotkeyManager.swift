@@ -49,6 +49,21 @@ class HotkeyManager {
     // O(1) lookup: packed key = (keyCode << 16) | modifiers.rawValue
     private var keybindMap: [UInt32: Keybind] = [:]
 
+    // most recent ⌘-related gesture: a keyDown with ⌘ held, or a ⌘
+    // press/release itself. Cmd-Tab's activation only fires after ⌘ is
+    // released — possibly seconds after the Tab press — so the release
+    // must refresh the timestamp too. written on the tap thread.
+    private var lastCommandGestureTimeLocked: CFAbsoluteTime = 0
+
+    /// Timestamp of the most recent ⌘-involved keystroke. Read on main by
+    /// `WindowManager.appDidActivate` to distinguish a user-driven app
+    /// switch (Cmd-Tab) from a programmatic self-activation.
+    var lastCommandGestureTime: CFAbsoluteTime {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return lastCommandGestureTimeLocked
+    }
+
     private static func packKey(_ keyCode: UInt16, _ modifiers: ModifierFlags) -> UInt32 {
         UInt32(keyCode) << 16 | UInt32(modifiers.rawValue & 0xFFFF)
     }
@@ -225,6 +240,13 @@ class HotkeyManager {
         defer { stateLock.unlock() }
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         trackModifierState(type, keyCode)
+
+        // breadcrumb for the activation gate (see lastCommandGestureTime):
+        // keyCode 55/54 = left/right Command
+        if (type == .keyDown && event.flags.contains(.maskCommand))
+            || (type == .flagsChanged && (keyCode == 55 || keyCode == 54)) {
+            lastCommandGestureTimeLocked = CFAbsoluteTimeGetCurrent()
+        }
 
         // track the configured physical key as our logical Hypr modifier
         if keyCode == hyprKey.keyCode {
