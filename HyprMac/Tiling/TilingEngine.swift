@@ -63,6 +63,11 @@ class TilingEngine {
     /// auto-float the window.
     var onAutoFloat: ((HyprWindow) -> Void)?
 
+    /// Resolves a window's app sort priority (Hyprland-style window
+    /// rule): higher tiles further top-left, lower further bottom-right,
+    /// 0 is neutral. Set by the owner; nil disables priority ordering.
+    var sortPriority: ((HyprWindow) -> Int)?
+
     private let minSizes = MinSizeMemory()
 
     init(displayManager: DisplayManager) {
@@ -363,13 +368,19 @@ class TilingEngine {
         // previous cycle would skew which leaf accepts the window.
         t.root.resetSplitRatios()
 
-        // deterministic batch order: left-to-right by current frame, id
-        // tiebreak. AX enumeration order shifts with focus/z churn, which
-        // made multi-window inserts land differently every time.
+        // deterministic batch order: app sort priority first (higher =
+        // earlier = further top-left), then left-to-right by current
+        // frame, id tiebreak. AX enumeration order shifts with focus/z
+        // churn, which made multi-window inserts land differently every
+        // time.
         var toInsert = tileWindows.filter { !treeIDs.contains($0.windowID) }
         if toInsert.count > 1 {
             let frames = Dictionary(uniqueKeysWithValues: toInsert.map { ($0.windowID, $0.frame ?? .zero) })
+            let priorities = Dictionary(uniqueKeysWithValues: toInsert.map { ($0.windowID, sortPriority?($0) ?? 0) })
             toInsert.sort { a, b in
+                let pa = priorities[a.windowID] ?? 0
+                let pb = priorities[b.windowID] ?? 0
+                if pa != pb { return pa > pb }
                 let fa = frames[a.windowID] ?? .zero
                 let fb = frames[b.windowID] ?? .zero
                 if fa.origin.x != fb.origin.x { return fa.origin.x < fb.origin.x }
@@ -392,7 +403,34 @@ class TilingEngine {
             t.root.clearUserSetRatios()
             t.root.resetSplitRatios()
         }
+        applySortPriority(to: t)
         return TileMembershipResult(key: key, tree: t, rect: rect, insertedWindows: insertedWindows)
+    }
+
+    /// Enforce app sort priorities on `tree`: stable-reorder the window
+    /// references so higher-priority apps sit further top-left (earlier
+    /// in the in-order traversal), lower-priority further bottom-right.
+    /// Equal priorities keep their current relative order, so windows
+    /// without a rule (priority 0) — and manual swaps between them —
+    /// are never touched. Like `swap`, only the leaf → window mapping
+    /// changes; topology, ratios and overrides stay intact.
+    private func applySortPriority(to tree: BSPTree) {
+        guard let sortPriority else { return }
+        let current = tree.allWindows
+        guard current.count > 1 else { return }
+        let priorities = current.map(sortPriority)
+        guard priorities.contains(where: { $0 != 0 }) else { return }
+        // Swift's sort is not guaranteed stable — tiebreak on the
+        // original index to keep equal-priority order.
+        let desired = zip(current, priorities).enumerated()
+            .sorted { a, b in
+                if a.element.1 != b.element.1 { return a.element.1 > b.element.1 }
+                return a.offset < b.offset
+            }
+            .map { $0.element.0 }
+        guard desired.map({ $0.windowID }) != current.map({ $0.windowID }) else { return }
+        hyprLog(.debug, .tiling, "sort priority reorder: \(current.map { $0.title ?? "?" }) → \(desired.map { $0.title ?? "?" })")
+        tree.assignWindows(inOrder: desired)
     }
 
     /// Tile `windows` for `(workspace, screen)`.
@@ -594,6 +632,7 @@ class TilingEngine {
             }
             inserted.append(window)
         }
+        if !inserted.isEmpty { applySortPriority(to: t) }
         retile(key: key, screen: screen, inserted: inserted)
     }
 

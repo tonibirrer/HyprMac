@@ -151,6 +151,22 @@ class BSPNode {
         right?.collectWindows(into: &result)
     }
 
+    /// Occupied leaves in left-to-right traversal order — the same
+    /// order `allWindows()` reports, but as the leaf nodes so callers
+    /// can reassign the window references (see
+    /// `BSPTree.assignWindows(inOrder:)`).
+    func occupiedLeavesInOrder() -> [BSPNode] {
+        var result: [BSPNode] = []
+        collectOccupiedLeavesInOrder(into: &result)
+        return result
+    }
+
+    private func collectOccupiedLeavesInOrder(into result: inout [BSPNode]) {
+        if window != nil { result.append(self); return }
+        left?.collectOccupiedLeavesInOrder(into: &result)
+        right?.collectOccupiedLeavesInOrder(into: &result)
+    }
+
     /// Leaves in deepest-right-first order.
     ///
     /// Used by smart insert: the dwindle default is to split the

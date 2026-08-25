@@ -63,6 +63,34 @@ If no leaf fits — the tree is genuinely full given the monitor
 dimensions — `TilingEngine.onAutoFloat` fires and the window is
 auto-floated.
 
+## App sort priority
+
+Tile order is otherwise pure insertion order (in-order traversal ==
+left-to-right / top-to-bottom on screen). Window rules can override
+it per app: `WindowRule.sortPriority`, resolved through the
+`TilingEngine.sortPriority` closure (higher = further top-left,
+0 = neutral).
+
+Enforcement is two-layered:
+
+1. **Batch insert order** — `updateTreeMembership` sorts the
+   windows it is about to insert by priority (descending) before the
+   frame-position comparator, so a fresh workspace builds with the
+   right topology.
+2. **Reference reorder** — after every membership change,
+   `applySortPriority` stable-sorts `tree.allWindows` by priority
+   (original index as tiebreak — Swift's sort is not stable) and, if
+   the order changed, reassigns the window references onto the
+   occupied leaves in-order via `BSPTree.assignWindows(inOrder:)`.
+   Like `swap`, this touches only the leaf → window mapping:
+   topology, split ratios and overrides are preserved.
+
+Because the sort is stable, priority-0 windows (no rule) are never
+reordered relative to each other — manual swaps between them stick.
+A manual swap that violates a priority survives only until the next
+membership change. The single-window `addWindow` path applies the
+same reorder after its insert; scratchpad trees are exempt.
+
 ## Max depth
 
 `TilingConfig.defaultMaxDepth` is 3. A depth-3 tree has 8 leaves;
