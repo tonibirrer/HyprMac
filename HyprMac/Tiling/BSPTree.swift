@@ -142,6 +142,19 @@ class BSPTree {
         nodeB.window = a
     }
 
+    /// Reassign window references onto the occupied leaves in
+    /// left-to-right order. Generalizes `swap` to a full permutation:
+    /// topology, split ratios and overrides are all preserved — only
+    /// which window sits in which slot changes. `windows` must be a
+    /// permutation of `allWindows`; a count mismatch is a no-op.
+    func assignWindows(inOrder windows: [HyprWindow]) {
+        let leaves = root.occupiedLeavesInOrder()
+        guard leaves.count == windows.count else { return }
+        for (leaf, window) in zip(leaves, windows) {
+            leaf.window = window
+        }
+    }
+
     /// Hyprland-style togglesplit. Flips the parent node's split direction
     /// (horizontal ↔ vertical) regardless of what dwindle would have picked
     /// from rect aspect ratio. Sets `splitOverride` so the choice survives

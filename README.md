@@ -29,7 +29,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
 | 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
-| 📌 **Window Rules** *(fork)* | Pin apps to workspaces by bundle ID, Hyprland-style |
+| 📌 **Window Rules** *(fork)* | Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style |
 | 🔌 **IPC + sketchybar** *(fork)* | Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators |
 | 🎨 **Workspace Identity** *(fork)* | Per-workspace accent colors and wallpapers |
 | 📐 **Per-Side Padding** *(fork)* | Top-only outer padding to reserve space for a status bar |
@@ -136,15 +136,19 @@ A single macOS Space per monitor is recommended for the cleanest experience.
 
 ## Window Rules *(fork feature)*
 
-Hyprland-style app → workspace pins, modeled on `windowrule = workspace N, class:...`. When an app with a rule opens a new window, the window is placed on its pinned workspace instead of the active one — and by default the workspace is switched to, so e.g. opening your terminal takes you straight to its workspace. Set `silent` to move the window without switching (Hyprland's `workspace N silent`).
+Hyprland-style per-app rules, modeled on `windowrule = <effect>, class:...`. Each rule is keyed by bundle ID and can apply two effects, independently or together:
 
-Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9, per-rule "Follow" checkbox), or directly in `~/Library/Application Support/HyprMac/config.json`:
+- **Workspace pin** — when the app opens a new window, it is placed on its pinned workspace instead of the active one, and by default the workspace is switched to, so e.g. opening your terminal takes you straight to its workspace. Set `silent` to move the window without switching (Hyprland's `workspace N silent`).
+- **Sort priority** — keeps the app's tiles at a fixed end of the dwindle order: higher priority tiles further **top-left**, lower further **bottom-right**, 0 (default) leaves the window in plain insertion order. So `"sortPriority": -1` on Mattermost means it always ends up in the rightmost tile, no matter which order your apps opened in. (Hyprland has no native equivalent — the request was [declined upstream](https://github.com/hyprwm/Hyprland/issues/5388) — but per-class window rules are the idiomatic place for it.)
+
+Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9 or "—" for no pin, per-rule "Follow" checkbox, sort stepper), or directly in `~/Library/Application Support/HyprMac/config.json`:
 
 ```json
 "windowRules": [
-  { "bundleID": "com.mitchellh.ghostty", "workspace": 2 },
-  { "bundleID": "dev.zed.Zed",           "workspace": 2 },
-  { "bundleID": "md.obsidian",           "workspace": 3, "silent": true }
+  { "bundleID": "com.mitchellh.ghostty",    "workspace": 2 },
+  { "bundleID": "dev.zed.Zed",              "workspace": 2, "sortPriority": 1 },
+  { "bundleID": "md.obsidian",              "workspace": 3, "silent": true },
+  { "bundleID": "Mattermost.Desktop",       "workspace": 0, "sortPriority": -1 }
 ]
 ```
 
@@ -152,11 +156,13 @@ Find an app's bundle ID with `mdls -name kMDItemCFBundleIdentifier -r /Applicati
 
 Semantics:
 
-- Rules are evaluated **once per window**, when it is first discovered; first match wins. Un-minimizing or switching workspaces never re-triggers a rule, but apps that recycle their window on reopen (Teams-style) are re-pinned correctly.
+- Workspace pins are evaluated **once per window**, when it is first discovered; first match wins. Un-minimizing or switching workspaces never re-triggers a rule, but apps that recycle their window on reopen (Teams-style) are re-pinned correctly.
 - On HyprMac startup and **Retile All**, existing windows of ruled apps are sorted onto their pinned workspaces *silently* — no workspace-switch storm at launch.
 - A full target workspace falls back to normal placement instead of rejecting the window.
 - "Never tile" (excluded) apps always float and are ignored by rules.
 - Since workspaces are statically anchored to monitors, a rule also decides which monitor the app lands on — e.g. with two monitors, odd workspaces pin to the left screen and even to the right.
+- Sort priority, by contrast, is enforced on **every membership change** (a window opens or is discovered) and immediately when you edit a rule. It reorders only which window sits in which tile — tree shape and split ratios stay put. Equal-priority windows keep their relative order, so manual swaps between unruled windows survive; a swap that violates a priority is undone the next time a window opens.
+- `"workspace": 0` (the UI's "—") means no pin — the rule only carries a sort priority.
 
 ---
 

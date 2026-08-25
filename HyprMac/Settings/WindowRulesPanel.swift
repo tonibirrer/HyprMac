@@ -1,16 +1,18 @@
-// "Window Rules" panel: Hyprland-style app → workspace pins. Each rule
-// sends an app's new windows to a fixed workspace; by default the
-// workspace is switched to as well (toggle off for a silent move).
+// "Window Rules" panel: Hyprland-style per-app rules. Each rule can
+// pin an app's new windows to a fixed workspace (by default the
+// workspace is switched to as well; toggle off for a silent move)
+// and/or give the app a tile sort priority — higher keeps its tiles
+// further top-left, lower further bottom-right.
 
 import SwiftUI
 
-/// App → workspace rule list, shown on the Layout tab.
+/// Per-app rule list (workspace pin + sort priority), shown on the Layout tab.
 struct WindowRulesPanel: View {
     @ObservedObject var config = UserConfig.shared
 
     var body: some View {
         HyprPanel("Window Rules",
-                  footer: "New windows of these apps always open on their pinned workspace. \"Follow\" also switches to that workspace.") {
+                  footer: "New windows of these apps open on their pinned workspace (\"—\" = no pin); \"Follow\" also switches to it. Sort keeps the app's tiles in order: higher = top-left, lower = bottom-right.") {
             if config.windowRules.isEmpty {
                 HyprRow("No rules", icon: "circle.dashed",
                         subtitle: "New windows open on the active workspace", divider: false) { EmptyView() }
@@ -41,16 +43,28 @@ struct WindowRulesPanel: View {
             }
             Spacer()
             Picker("", selection: binding(for: rule.bundleID, keyPath: \.workspace)) {
+                Text("—").tag(0)
                 ForEach(1...9, id: \.self) { Text("\($0)").tag($0) }
             }
             .labelsHidden()
             .frame(width: 56)
+            .help("Pin new windows of this app to a workspace (\"—\" = no pin)")
             Toggle("Follow", isOn: Binding(
                 get: { !rule.silent },
                 set: { follow in update(rule.bundleID) { $0.silent = !follow } }
             ))
             .toggleStyle(.checkbox)
             .font(.hyprBody)
+            .disabled(rule.workspace == 0)
+            .help("Also switch to the pinned workspace when a window opens")
+            HStack(spacing: 2) {
+                Text("\(rule.sortPriority)")
+                    .font(.hyprMonoXs)
+                    .frame(width: 20, alignment: .trailing)
+                Stepper("", value: binding(for: rule.bundleID, keyPath: \.sortPriority), in: -9...9)
+                    .labelsHidden()
+            }
+            .help("Sort priority: higher tiles top-left, lower bottom-right, 0 = insertion order")
             Button {
                 config.windowRules.removeAll { $0.bundleID == rule.bundleID }
             } label: {
@@ -73,7 +87,7 @@ struct WindowRulesPanel: View {
 
     private func binding(for bundleID: String, keyPath: WritableKeyPath<WindowRule, Int>) -> Binding<Int> {
         Binding(
-            get: { config.windowRules.first { $0.bundleID == bundleID }?[keyPath: keyPath] ?? 1 },
+            get: { config.windowRules.first { $0.bundleID == bundleID }?[keyPath: keyPath] ?? 0 },
             set: { value in update(bundleID) { $0[keyPath: keyPath] = value } }
         )
     }
@@ -87,7 +101,7 @@ struct WindowRulesPanel: View {
 
     private func pickApp() {
         let panel = NSOpenPanel()
-        panel.title = "Select Application to Pin"
+        panel.title = "Select Application"
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
@@ -96,7 +110,10 @@ struct WindowRulesPanel: View {
         if panel.runModal() == .OK, let url = panel.url,
            let bundle = Bundle(url: url), let id = bundle.bundleIdentifier,
            !config.windowRules.contains(where: { $0.bundleID == id }) {
-            config.windowRules.append(WindowRule(bundleID: id, workspace: 1))
+            // new rules start neutral: no workspace pin, priority 0 —
+            // adding an app must not move its windows until the user
+            // picks an effect.
+            config.windowRules.append(WindowRule(bundleID: id, workspace: 0))
         }
     }
 }

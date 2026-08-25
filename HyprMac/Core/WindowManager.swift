@@ -440,6 +440,11 @@ class WindowManager {
         tilingEngine.gapSize = config.gapSize
         tilingEngine.outerPadding = config.resolvedOuterPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
+        tilingEngine.sortPriority = { [weak self] window in
+            guard let self, !self.config.windowRules.isEmpty else { return 0 }
+            let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+            return self.config.windowRules.sortPriority(bundleID: bundleID)
+        }
 
         wallpaperManager = WallpaperManager(workspaceManager: workspaceManager,
                                             displayManager: displayManager,
@@ -599,6 +604,18 @@ class WindowManager {
                 self.tilingEngine.maxSplitsPerMonitor = newSplits
                 self.snapshotAndTile()
                 hyprLog(.debug, .lifecycle, "max splits updated: \(newSplits)")
+            }.store(in: &configObservers)
+
+        // sort-priority edits reorder existing tiles, so a rule change
+        // retiles immediately instead of waiting for the next new window.
+        // (workspace pins are still only evaluated at window discovery.)
+        config.$windowRules
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.animatedRetile()
+                hyprLog(.debug, .lifecycle, "window rules updated — retiled visible workspaces")
             }.store(in: &configObservers)
 
         config.$disabledMonitors
