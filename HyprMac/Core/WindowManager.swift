@@ -422,15 +422,20 @@ class WindowManager {
         // route AX notifications into the coalescing scheduler. these are the
         // primary discovery triggers; the scheduler's timer is a safety net.
         // schedule() already re-checks suppressions at schedule and fire time,
-        // so no extra guards here. create/miniaturize/deminiaturize get a 0.2s
-        // debounce to let AX settle; focus is snappier at 0.15s; destroy uses
-        // the 0.2s default.
+        // so no extra guards here. create polls near-instantly — the window
+        // is visibly floating over the layout until the poll tiles it, so
+        // every ms of debounce is user-visible latency; attributes AX hasn't
+        // settled yet are reconciled by the focus event that follows a new
+        // window (0.15s) and the 10s net. miniaturize/deminiaturize keep a
+        // 0.2s debounce for their animations; destroy uses the 0.2s default.
         axNotifications.onEvent = { [weak self] kind, _ in
             guard let self else { return }
             switch kind {
             case .windowDestroyed:
                 self.pollingScheduler.schedule()
-            case .windowCreated, .windowMiniaturized, .windowDeminiaturized:
+            case .windowCreated:
+                self.pollingScheduler.schedule(after: 0.02)
+            case .windowMiniaturized, .windowDeminiaturized:
                 self.pollingScheduler.schedule(after: 0.2)
             case .focusedWindowChanged:
                 self.pollingScheduler.schedule(after: 0.15)
