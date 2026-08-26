@@ -126,23 +126,27 @@ class TilingEngine {
     ///
     /// - Parameters:
     ///   - currentScreens: the live screens (after `DisplayManager.refresh()`).
-    ///   - homeScreenForWorkspace: closure that returns a workspace's current
-    ///     home screen, or nil if the workspace has no live home. Caller is
-    ///     responsible for running `WorkspaceManager.initializeMonitors()`
-    ///     **before** calling this — otherwise the home-screen map is stale and
-    ///     migrations target vanished destinations.
+    ///   - homeScreensForWorkspace: closure that returns every screen a
+    ///     workspace may legitimately keep a tree on — one static home
+    ///     normally, all enabled screens in linked-monitors mode — or empty
+    ///     if the workspace has no live home. The first element is the
+    ///     migration destination for stale trees. Caller is responsible for
+    ///     running `WorkspaceManager.initializeMonitors()` **before** calling
+    ///     this — otherwise the home-screen map is stale and migrations
+    ///     target vanished destinations.
     ///
     /// - Note: TilingKey currently keys on screen-origin coordinates. If two
     ///   monitors swap positions during a reconnect, trees follow the position,
     ///   not the physical display. Migrating to `displayID` keying is a future
     ///   change (see plan §4.2 — deferred for risk reasons).
     func handleDisplayChange(currentScreens: [NSScreen],
-                             homeScreenForWorkspace: (Int) -> NSScreen?) {
+                             homeScreensForWorkspace: (Int) -> [NSScreen]) {
         var migrations: [(old: TilingKey, dest: NSScreen)] = []
         var orphans: [TilingKey] = []
 
-        // static anchoring guarantees exactly one home screen per workspace, so
-        // a tree is stale unless it sits on its workspace's *current* home. this
+        // static anchoring guarantees exactly one home screen per workspace
+        // (linked mode: every enabled screen is a valid home), so a tree is
+        // stale unless it sits on one of its workspace's *current* homes. this
         // catches two cases: (1) the home screen vanished (lid close / unplug),
         // and (2) the home moved to a different live screen after a reconnect —
         // e.g. ws1's home is the laptop when it's alone, but the leftmost
@@ -151,15 +155,15 @@ class TilingEngine {
         // misses it and the window ends up duplicated across two trees, feeding
         // intendedTileRects a wrong-monitor rect and scrambling directional focus.
         for key in trees.keys {
-            // scratchpad (ws 0) tree has no static home (homeScreenForWorkspace(0)
-            // is nil) so it would land in orphans and get destroyed on every
+            // scratchpad (ws 0) tree has no static home (homeScreensForWorkspace(0)
+            // is empty) so it would land in orphans and get destroyed on every
             // display change / wake. leave it alone — the next show() reconciles
             // it (tileScratchpad clears any stale (0, deadScreen) tree).
             if key.workspace == Self.scratchpadWorkspace { continue }
-            let dest = homeScreenForWorkspace(key.workspace)
-            let homeID = dest.map { TilingKey(workspace: key.workspace, screen: $0).screenID }
-            if homeID == key.screenID { continue }
-            if let dest {
+            let homes = homeScreensForWorkspace(key.workspace)
+            let homeIDs = homes.map { TilingKey(workspace: key.workspace, screen: $0).screenID }
+            if homeIDs.contains(key.screenID) { continue }
+            if let dest = homes.first {
                 migrations.append((key, dest))
             } else {
                 orphans.append(key)
@@ -343,9 +347,12 @@ class TilingEngine {
     // tree shape), smart-inserts new windows in a stable order
     // (auto-floating those that don't fit), and resets split ratios.
     // pure with respect to AX — only mutates the tree and engine state.
+    // `order` (linked-monitors partitions) pins the final in-order window
+    // sequence exactly; nil leaves insertion order + sort priority in charge.
     private func updateTreeMembership(_ windows: [HyprWindow],
                                       onWorkspace workspace: Int,
-                                      screen: NSScreen) -> TileMembershipResult {
+                                      screen: NSScreen,
+                                      order: [CGWindowID]? = nil) -> TileMembershipResult {
         primeMinimumSizes(windows)
         let key = TilingKey(workspace: workspace, screen: screen)
         let t = tree(for: key)
@@ -404,7 +411,28 @@ class TilingEngine {
             t.root.resetSplitRatios()
         }
         applySortPriority(to: t)
+        if let order { applyOrder(order, to: t) }
         return TileMembershipResult(key: key, tree: t, rect: rect, insertedWindows: insertedWindows)
+    }
+
+    /// Pin the tree's in-order window sequence to `order` (window IDs).
+    /// IDs not in the tree are ignored; tree windows missing from `order`
+    /// sink to the end in their current relative order. Topology-preserving,
+    /// like `applySortPriority`.
+    private func applyOrder(_ order: [CGWindowID], to tree: BSPTree) {
+        let current = tree.allWindows
+        guard current.count > 1 else { return }
+        let rank = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
+        let desired = current.enumerated()
+            .sorted { a, b in
+                let ra = rank[a.element.windowID] ?? Int.max
+                let rb = rank[b.element.windowID] ?? Int.max
+                if ra != rb { return ra < rb }
+                return a.offset < b.offset
+            }
+            .map { $0.element }
+        guard desired.map({ $0.windowID }) != current.map({ $0.windowID }) else { return }
+        tree.assignWindows(inOrder: desired)
     }
 
     /// Enforce app sort priorities on `tree`: stable-reorder the window
@@ -443,8 +471,9 @@ class TilingEngine {
     /// pass-2 still overflows and inserted windows are present, the
     /// engine auto-floats the overflowing windows; otherwise it
     /// preserves the recorded mins and falls back to pass-1 frames.
-    func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) {
-        let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen)
+    func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen,
+                     order: [CGWindowID]? = nil) {
+        let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen, order: order)
         let key = m.key
         let t = m.tree
         let rect = m.rect
@@ -489,6 +518,161 @@ class TilingEngine {
                 trees.removeValue(forKey: key)
             }
         }
+    }
+
+    /// Tile one workspace across several linked screens.
+    ///
+    /// The workspace's tiled windows form a single left-to-right strip:
+    /// each screen's tree read in `screens` order, new windows appended
+    /// (same deterministic comparator as batch insert), app sort
+    /// priorities applied globally. The strip is cut into contiguous
+    /// per-screen chunks sized proportionally to usable screen area —
+    /// a tile lives wholly on one screen, never across the border — and
+    /// each chunk tiles into its own `(workspace, screen)` tree with the
+    /// strip order pinned.
+    ///
+    /// `screens` must be the enabled screens left-to-right. A single
+    /// screen degenerates to plain `tileWindows`.
+    func tileLinked(_ windows: [HyprWindow], onWorkspace workspace: Int, screens: [NSScreen]) {
+        guard screens.count > 1 else {
+            if let only = screens.first { tileWindows(windows, onWorkspace: workspace, screen: only) }
+            return
+        }
+        primeMinimumSizes(windows)
+
+        let tiled = windows.filter { !$0.isFloating }
+        let tiledIDs = Set(tiled.map { $0.windowID })
+
+        // existing strip: current trees in screen order, live members only
+        var strip: [HyprWindow] = []
+        var stripIDs = Set<CGWindowID>()
+        for screen in screens {
+            let key = TilingKey(workspace: workspace, screen: screen)
+            for w in trees[key]?.allWindows ?? [] where tiledIDs.contains(w.windowID) {
+                if stripIDs.insert(w.windowID).inserted { strip.append(w) }
+            }
+        }
+
+        // new windows append at the right end, deterministically ordered
+        // (priority desc, frame position, id — the batch-insert comparator)
+        var incoming = tiled.filter { !stripIDs.contains($0.windowID) }
+        if incoming.count > 1 {
+            let frames = Dictionary(uniqueKeysWithValues: incoming.map { ($0.windowID, $0.frame ?? .zero) })
+            let priorities = Dictionary(uniqueKeysWithValues: incoming.map { ($0.windowID, sortPriority?($0) ?? 0) })
+            incoming.sort { a, b in
+                let pa = priorities[a.windowID] ?? 0
+                let pb = priorities[b.windowID] ?? 0
+                if pa != pb { return pa > pb }
+                let fa = frames[a.windowID] ?? .zero
+                let fb = frames[b.windowID] ?? .zero
+                if fa.origin.x != fb.origin.x { return fa.origin.x < fb.origin.x }
+                if fa.origin.y != fb.origin.y { return fa.origin.y < fb.origin.y }
+                return a.windowID < b.windowID
+            }
+        }
+        strip.append(contentsOf: incoming)
+
+        // sort priorities apply to the whole strip, so "higher = further
+        // top-left" spans the border: the leftmost screen is the top-left end
+        if let sortPriority, strip.count > 1 {
+            let priorities = strip.map(sortPriority)
+            if priorities.contains(where: { $0 != 0 }) {
+                strip = zip(strip, priorities).enumerated()
+                    .sorted { a, b in
+                        if a.element.1 != b.element.1 { return a.element.1 > b.element.1 }
+                        return a.offset < b.offset
+                    }
+                    .map { $0.element.0 }
+            }
+        }
+
+        let weights = screens.map { max(1, displayManager.cgRect(for: $0).width * displayManager.cgRect(for: $0).height) }
+        let capacities = screens.map { 1 << maxDepth(for: $0) }
+        let sizes = Self.linkedChunkSizes(count: strip.count, weights: weights, capacities: capacities)
+        hyprLog(.debug, .tiling, "tileLinked: ws\(workspace) \(strip.count) windows → chunks \(sizes) across \(screens.count) screens")
+
+        var start = 0
+        for (idx, screen) in screens.enumerated() {
+            let end = min(start + sizes[idx], strip.count)
+            let chunk = Array(strip[start..<end])
+            start = end
+            tileWindows(chunk, onWorkspace: workspace, screen: screen,
+                        order: chunk.map { $0.windowID })
+        }
+    }
+
+    /// Cut `count` windows into contiguous per-screen chunk sizes
+    /// proportional to `weights` (usable screen area), capped by
+    /// `capacities` (dwindle leaf budget, `2^maxDepth`).
+    ///
+    /// Guarantees, in priority order:
+    /// 1. no chunk exceeds its capacity (excess falls to screens with
+    ///    headroom; a total beyond all capacities lands on the last
+    ///    screen, whose membership pass auto-floats the overflow),
+    /// 2. every screen gets at least one window once `count >=`
+    ///    screen count (a lone window stays on the first screen),
+    /// 3. sizes sum to `count`, remainder assigned by largest
+    ///    fractional share (ties leftmost-first).
+    static func linkedChunkSizes(count: Int, weights: [CGFloat], capacities: [Int]) -> [Int] {
+        let n = weights.count
+        guard n > 0 else { return [] }
+        guard count > 0 else { return Array(repeating: 0, count: n) }
+
+        // fewer windows than screens: fill leftmost-first (tile 1 on
+        // screen 1, tile 2 on screen 2, ...) — proportional shares are
+        // degenerate here and would jump a lone window to the biggest
+        // screen instead of the primary one.
+        if count < n {
+            return (0..<n).map { $0 < count ? 1 : 0 }
+        }
+
+        let total = weights.reduce(0, +)
+        let ideals = weights.map { CGFloat(count) * $0 / max(total, 1) }
+        var sizes = ideals.map { Int($0.rounded(.down)) }
+
+        // distribute the remainder by largest fractional part, leftmost ties
+        var remainder = count - sizes.reduce(0, +)
+        let byFraction = ideals.enumerated()
+            .sorted { a, b in
+                let fa = a.element - a.element.rounded(.down)
+                let fb = b.element - b.element.rounded(.down)
+                if fa != fb { return fa > fb }
+                return a.offset < b.offset
+            }
+            .map { $0.offset }
+        var fi = 0
+        while remainder > 0 {
+            sizes[byFraction[fi % n]] += 1
+            fi += 1
+            remainder -= 1
+        }
+
+        // min-1: no screen sits empty while another holds several windows
+        if count >= n {
+            for i in 0..<n where sizes[i] == 0 {
+                guard let donor = sizes.indices.max(by: { sizes[$0] < sizes[$1] }), sizes[donor] > 1 else { break }
+                sizes[donor] -= 1
+                sizes[i] += 1
+            }
+        }
+
+        // capacity: shift excess to screens with headroom (leftmost first);
+        // when everything is full, the last screen absorbs the overflow
+        for i in 0..<n where sizes[i] > capacities[i] {
+            var excess = sizes[i] - capacities[i]
+            sizes[i] = capacities[i]
+            for j in 0..<n where j != i && excess > 0 {
+                let room = capacities[j] - sizes[j]
+                if room > 0 {
+                    let take = Swift.min(room, excess)
+                    sizes[j] += take
+                    excess -= take
+                }
+            }
+            if excess > 0 { sizes[n - 1] += excess }
+        }
+
+        return sizes
     }
 
     /// Tile scratchpad members into a caller-supplied `rect` on the layer's
@@ -572,8 +756,9 @@ class TilingEngine {
     ///   animation paths need post-mutation geometry to interpolate toward.
     /// - Returns: `[(window, frame)]` pairs in tree iteration order. Empty
     ///   array if the tree ends up empty.
-    func prepareTileLayout(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> [(HyprWindow, CGRect)] {
-        let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen)
+    func prepareTileLayout(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen,
+                           order: [CGWindowID]? = nil) -> [(HyprWindow, CGRect)] {
+        let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen, order: order)
         rememberPendingInserted(m.insertedWindows, for: m.key)
         return m.tree.layout(in: m.rect, gap: gapSize, padding: outerPadding)
     }

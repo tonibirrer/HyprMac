@@ -479,6 +479,7 @@ class WindowManager {
         focusBrackets.accentCGColor = config.resolvedFocusBorderColor.cgColor
         dimmingOverlay.fadeDurationSec = config.chromeFadeDurationSec
         workspaceManager.disabledMonitors = config.disabledMonitors
+        workspaceManager.linkedMonitors = config.linkedMonitors
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
         hotkeyManager.start()
@@ -604,6 +605,20 @@ class WindowManager {
                 self.tilingEngine.maxSplitsPerMonitor = newSplits
                 self.snapshotAndTile()
                 hyprLog(.debug, .lifecycle, "max splits updated: \(newSplits)")
+            }.store(in: &configObservers)
+
+        // linking/unlinking monitors changes which workspace every screen
+        // shows and where each workspace's trees may live — run the same
+        // reconcile as a monitor connect/disconnect: remap visible
+        // workspaces, migrate/split trees, re-park hidden windows, retile.
+        config.$linkedMonitors
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] linked in
+                guard let self = self else { return }
+                self.workspaceManager.linkedMonitors = linked
+                self.reconcileAfterDisplayChange()
+                hyprLog(.notice, .lifecycle, "linked monitors \(linked ? "enabled" : "disabled") — reconciled")
             }.store(in: &configObservers)
 
         // sort-priority edits reorder existing tiles, so a rule change
@@ -1495,8 +1510,8 @@ class WindowManager {
         workspaceManager.initializeMonitors()
         tilingEngine.handleDisplayChange(
             currentScreens: displayManager.screens,
-            homeScreenForWorkspace: { [weak self] ws in
-                self?.workspaceManager.homeScreenForWorkspace(ws)
+            homeScreensForWorkspace: { [weak self] ws in
+                self?.workspaceManager.homeScreensForWorkspace(ws) ?? []
             }
         )
         let allWindows = accessibility.getAllWindows()
@@ -1547,6 +1562,19 @@ class WindowManager {
             if stateCache.floatingWindowIDs.contains(w.windowID) {
                 w.isFloating = true
             }
+        }
+
+        // linked mode: every enabled screen shows one workspace whose
+        // windows are partitioned across the screens by tileLinked
+        let linkedScreens = workspaceManager.enabledScreensLeftToRight()
+        if workspaceManager.linkedMonitors && linkedScreens.count > 1 {
+            let workspace = workspaceManager.workspaceForScreen(linkedScreens[0])
+            let widsOnWorkspace = workspaceManager.windowIDs(onWorkspace: workspace)
+            let workspaceWindows = allWindows.filter { widsOnWorkspace.contains($0.windowID) }
+            hyprLog(.debug, .lifecycle, "retile(linked): workspace=\(workspace), \(workspaceWindows.count) windows across \(linkedScreens.count) screens")
+            tilingEngine.tileLinked(workspaceWindows, onWorkspace: workspace, screens: linkedScreens)
+            updatePositionCache(windows: allWindows)
+            return
         }
 
         // for each enabled monitor, tile the windows that belong to its active workspace

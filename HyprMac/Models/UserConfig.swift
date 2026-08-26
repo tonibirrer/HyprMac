@@ -54,6 +54,11 @@ class UserConfig: ObservableObject {
     @Published var disabledMonitors: Set<String> {
         didSet { if !isReloading { save() } }
     }
+    // all enabled screens show one workspace, tiles partitioned across
+    // them by usable area. machine-local, stored in the monitor file.
+    @Published var linkedMonitors: Bool {
+        didSet { if !isReloading { save() } }
+    }
     @Published var showFocusBorder: Bool {
         didSet { if !isReloading { save() } }
     }
@@ -215,6 +220,8 @@ class UserConfig: ObservableObject {
         let resolved = ConfigMigration.resolveMonitorConfig(local: monitorConfig, embedded: savedConfig)
         self.maxSplitsPerMonitor = resolved.maxSplits
         self.disabledMonitors = resolved.disabled
+        // linkedMonitors postdates the migration split — local file only
+        self.linkedMonitors = monitorConfig?.linkedMonitors ?? UserConfigDefaults.linkedMonitors
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
@@ -223,7 +230,8 @@ class UserConfig: ObservableObject {
         if resolved.needsLocalWrite {
             store.writeSavedMonitorConfig(SavedMonitorConfig(
                 maxSplitsPerMonitor: resolved.maxSplits,
-                disabledMonitors: Array(resolved.disabled)))
+                disabledMonitors: Array(resolved.disabled),
+                linkedMonitors: linkedMonitors))
         }
 
         store.onFileChanged = { [weak self] in self?.reloadFromDisk() }
@@ -259,7 +267,8 @@ class UserConfig: ObservableObject {
         store.writeSavedConfig(makeSavedConfig())
         store.writeSavedMonitorConfig(SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,
-            disabledMonitors: Array(disabledMonitors)))
+            disabledMonitors: Array(disabledMonitors),
+            linkedMonitors: linkedMonitors))
     }
 
     // build a SavedConfig snapshot from the current @Published state.
@@ -303,6 +312,7 @@ class UserConfig: ObservableObject {
         showMenuBarIndicator = UserConfigDefaults.showMenuBarIndicator
         maxSplitsPerMonitor = [:]
         disabledMonitors = []
+        linkedMonitors = UserConfigDefaults.linkedMonitors
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -358,6 +368,7 @@ class UserConfig: ObservableObject {
         if let mc = store.loadSavedMonitorConfig() {
             maxSplitsPerMonitor = mc.maxSplitsPerMonitor ?? [:]
             disabledMonitors = Set(mc.disabledMonitors ?? [])
+            linkedMonitors = mc.linkedMonitors ?? UserConfigDefaults.linkedMonitors
         }
         // else keep current values — don't overwrite with synced defaults
 

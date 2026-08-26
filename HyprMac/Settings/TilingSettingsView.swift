@@ -211,6 +211,15 @@ struct TilingSettingsView: View {
 
     private var monitorsPanel: some View {
         HyprPanel("Per-Monitor Settings") {
+            if screens.count > 1 {
+                HyprRow("Link monitors", icon: "link",
+                        subtitle: "All monitors show one workspace; tiles balance across screens by size, never spanning a border.",
+                        divider: true) {
+                    Toggle("", isOn: $config.linkedMonitors)
+                        .toggleStyle(HyprToggleStyle())
+                        .labelsHidden()
+                }
+            }
             ForEach(Array(screens.enumerated()), id: \.element.localizedName) { idx, screen in
                 MonitorSplitsRow(
                     screen: screen,
