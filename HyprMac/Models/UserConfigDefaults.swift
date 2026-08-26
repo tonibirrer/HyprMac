@@ -34,6 +34,10 @@ enum UserConfigDefaults {
     // tiled region — 0.06 keeps a visible scrimmed border, 0 maximizes
     // usable area.
     static let scratchpadRegionInset: CGFloat = 0.06
+    // linked monitors: all enabled screens show one workspace, tiles
+    // partitioned across them by usable area. off = static per-monitor
+    // anchoring. machine-local (SavedMonitorConfig), never iCloud-synced.
+    static let linkedMonitors: Bool = false
     // focusBorderColorHex / floatingBorderColorHex are nil by default —
     // resolvedFocusBorderColor / resolvedFloatingBorderColor compute the
     // system color when nil.

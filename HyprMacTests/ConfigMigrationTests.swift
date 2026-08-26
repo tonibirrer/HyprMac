@@ -102,7 +102,8 @@ final class ConfigMigrationTests: XCTestCase {
     func testResolveMonitorConfigPrefersLocalFile() {
         let local = SavedMonitorConfig(
             maxSplitsPerMonitor: ["Display A": 4],
-            disabledMonitors: ["Display B"])
+            disabledMonitors: ["Display B"],
+            linkedMonitors: nil)
         let embedded = SavedConfig(
             version: nil, keybinds: [], gapSize: 8, outerPadding: 8, enabled: true,
             focusFollowsMouse: nil, hyprKey: nil, excludedBundleIDs: nil,

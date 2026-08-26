@@ -548,11 +548,14 @@ final class ActionDispatcher {
 
         let screenSID = workspaceManager.screenID(for: screen)
 
-        // collect occupied workspaces whose static home is this monitor
+        // collect occupied workspaces whose static home is this monitor.
+        // linked mode has no per-monitor scoping — every workspace spans
+        // all screens, so cycle through all occupied ones.
         let occupied = Set((1...total).filter { ws in
+            guard !workspaceManager.windowIDs(onWorkspace: ws).isEmpty else { return false }
+            if workspaceManager.linkedMonitors { return true }
             guard let home = workspaceManager.homeScreenForWorkspace(ws) else { return false }
-            return workspaceManager.screenID(for: home) == screenSID &&
-                !workspaceManager.windowIDs(onWorkspace: ws).isEmpty
+            return workspaceManager.screenID(for: home) == screenSID
         })
 
         guard !occupied.isEmpty else { return }

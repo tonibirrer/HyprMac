@@ -31,7 +31,7 @@ final class HandleDisplayChangeTests: XCTestCase {
         XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: screen))
 
         // simulate the screen vanishing with no home-screen destination
-        engine.handleDisplayChange(currentScreens: [], homeScreenForWorkspace: { _ in nil })
+        engine.handleDisplayChange(currentScreens: [], homeScreensForWorkspace: { _ in [] })
 
         // tree should be pruned
         XCTAssertNil(engine.existingTree(forWorkspace: 1, screen: screen))
@@ -46,7 +46,7 @@ final class HandleDisplayChangeTests: XCTestCase {
 
         // a tree already sitting on its workspace's current home is left alone.
         // (a nil home means "no live home" and prunes — covered above.)
-        engine.handleDisplayChange(currentScreens: [screen], homeScreenForWorkspace: { _ in self.screen })
+        engine.handleDisplayChange(currentScreens: [screen], homeScreensForWorkspace: { _ in [self.screen] })
 
         XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: screen))
         XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.count, countBefore)

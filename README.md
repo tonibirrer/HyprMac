@@ -30,6 +30,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
 | 📌 **Window Rules** *(fork)* | Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style |
+| 🔗 **Linked Monitors** *(fork)* | Toggle: all monitors show one workspace, tiles load-balanced across screens by size |
 | 🔌 **IPC + sketchybar** *(fork)* | Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators |
 | 🎨 **Workspace Identity** *(fork)* | Per-workspace accent colors and wallpapers |
 | 📐 **Per-Side Padding** *(fork)* | Top-only outer padding to reserve space for a status bar |
@@ -163,6 +164,20 @@ Semantics:
 - Since workspaces are statically anchored to monitors, a rule also decides which monitor the app lands on — e.g. with two monitors, odd workspaces pin to the left screen and even to the right.
 - Sort priority, by contrast, is enforced on **every membership change** (a window opens or is discovered) and immediately when you edit a rule. It reorders only which window sits in which tile — tree shape and split ratios stay put. Equal-priority windows keep their relative order, so manual swaps between unruled windows survive; a swap that violates a priority is undone the next time a window opens.
 - `"workspace": 0` (the UI's "—") means no pin — the rule only carries a sort priority.
+
+---
+
+## Linked Monitors *(fork feature)*
+
+Hyprland (like HyprMac's default) binds each workspace to one monitor and [declined](https://github.com/hyprwm/Hyprland/issues/747) a spanning mode — this toggle is a fork experiment. **Settings → Layout → Per-Monitor Settings → Link monitors** (shown with 2+ screens; machine-local, never iCloud-synced):
+
+- All enabled monitors show the **same workspace**; switching workspaces flips every screen at once, and `Hypr+1…9` gives nine spanning workspaces.
+- A tile always lives wholly on one screen — nothing ever straddles the border. The workspace's tiles form one left-to-right strip cut into per-screen chunks: with two equal screens, 1 window → screen 1; 2 → one each; 3 → 2+1; 4 → 2+2. Unequal screens (say an ultrawide next to a 4:3) balance proportionally to usable area, capped by each screen's max-splits depth.
+- App sort priorities span the whole strip: highest priority = leftmost tile of the leftmost screen, lowest = rightmost tile of the rightmost screen.
+- Each screen keeps its own BSP tree, so gaps, padding, per-monitor max splits, resizes, and toggled splits all behave exactly as unlinked.
+- Toggling runs the same reconcile as a monitor connect/disconnect: workspaces remap, trees migrate, hidden windows re-park. Unlinking restores static anchoring.
+
+Known v1 limits: cross-screen **drag**-swap works, but keyboard swap stays within one screen; "move window to monitor" is a no-op while linked (the balancer owns which screen a tile lands on); capacity checks for workspace pins consider only the leftmost screen.
 
 ---
 

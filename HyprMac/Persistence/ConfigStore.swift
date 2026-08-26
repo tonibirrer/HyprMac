@@ -254,4 +254,5 @@ struct PaddingSides: Codable, Equatable {
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
+    let linkedMonitors: Bool?
 }

@@ -91,6 +91,36 @@ A manual swap that violates a priority survives only until the next
 membership change. The single-window `addWindow` path applies the
 same reorder after its insert; scratchpad trees are exempt.
 
+## Linked monitors
+
+With `linkedMonitors` on, every enabled screen shows the same
+workspace and `TilingEngine.tileLinked` partitions its windows:
+
+1. **Strip assembly** — current trees read in screen order
+   (left-to-right) give the existing sequence; new windows append at
+   the right end via the batch comparator; app sort priorities
+   stable-sort the whole strip, so priority spans the border.
+2. **Chunking** — `linkedChunkSizes(count:weights:capacities:)` cuts
+   the strip into contiguous per-screen chunks proportional to usable
+   screen area (`cgRect` width×height), largest-remainder rounding,
+   with three guarantees: capacity-capped (2^maxDepth per screen,
+   overflow spills to screens with headroom), no screen empty while
+   another holds several (once count ≥ screen count), and
+   fewer-windows-than-screens fills leftmost-first.
+3. **Per-screen tiling** — each chunk goes through the normal
+   `tileWindows` membership pass with `order:` pinning the strip
+   sequence onto the tree's leaves (`applyOrder`, topology-preserving
+   like the sort-priority reorder). Windows migrating between screens
+   are just membership diffs: removed from one tree, inserted into
+   the other.
+
+A tile therefore always lives wholly on one screen. Workspace
+switching flips all screens at once
+(`WorkspaceManager.switchAllLinked`), every enabled screen is a valid
+tree home for `handleDisplayChange`
+(`homeScreensForWorkspace`), and toggling the setting reuses
+`reconcileAfterDisplayChange`.
+
 ## Max depth
 
 `TilingConfig.defaultMaxDepth` is 3. A depth-3 tree has 8 leaves;

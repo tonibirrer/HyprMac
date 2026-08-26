@@ -41,6 +41,15 @@ class WorkspaceManager {
     /// Disabled monitors host floating windows only.
     var disabledMonitors: Set<String> = []
 
+    /// Linked-monitors mode: every enabled screen shows the SAME
+    /// workspace, and the workspace's tiles are partitioned across the
+    /// screens (each tile lives wholly on one screen — see
+    /// `TilingEngine.tileLinked`). Static anchoring is suspended: every
+    /// workspace's home is the leftmost enabled screen, and a switch
+    /// flips all screens at once. Set from `UserConfig.linkedMonitors`
+    /// by the owner; the owner reconciles visibility after a change.
+    var linkedMonitors = false
+
     /// Total number of virtual workspaces (1...9).
     let workspaceCount = 9
 
@@ -72,16 +81,26 @@ class WorkspaceManager {
         displayManager.screens.sorted { $0.frame.origin.x < $1.frame.origin.x }
     }
 
-    /// Enabled screens left-to-right. Drives `homeScreenForWorkspace`.
-    private func enabledScreensLeftToRight() -> [NSScreen] {
+    /// Enabled screens left-to-right. Drives `homeScreenForWorkspace`,
+    /// and in linked mode the partition order for `tileLinked`.
+    func enabledScreensLeftToRight() -> [NSScreen] {
         screensLeftToRight().filter { !isMonitorDisabled($0) }
     }
 
     /// Workspaces whose static home is `screen`. Useful for choosing a
     /// monitor's default visible workspace and for capacity checks that
-    /// need to know which workspaces "live here."
+    /// need to know which workspaces "live here." In linked mode every
+    /// workspace anchors to the leftmost enabled screen.
     func workspacesAnchoredTo(_ screen: NSScreen) -> [Int] {
         let enabled = enabledScreensLeftToRight()
+        if linkedMonitors {
+            return screen == enabled.first ? Array(1...workspaceCount) : []
+        }
+        return staticWorkspacesAnchoredTo(screen, enabled: enabled)
+    }
+
+    // the pure static-anchoring computation, independent of `linkedMonitors`.
+    private func staticWorkspacesAnchoredTo(_ screen: NSScreen, enabled: [NSScreen]) -> [Int] {
         guard let idx = enabled.firstIndex(of: screen) else { return [] }
         let count = enabled.count
         return Array(stride(from: idx + 1, through: workspaceCount, by: count))
@@ -107,17 +126,27 @@ class WorkspaceManager {
             }
         }
 
-        // for each enabled screen, ensure its current visible workspace
-        // is one whose static home is this screen — otherwise default
-        // to that screen's lowest-numbered home workspace.
-        for screen in enabled {
-            let sid = screenID(for: screen)
-            let homeWorkspaces = workspacesAnchoredTo(screen)
-            let valid: Set<Int> = Set(homeWorkspaces)
-            if let current = monitorWorkspace[sid], valid.contains(current) {
-                continue
+        if linkedMonitors {
+            // linked mode: one global workspace on every enabled screen.
+            // the leftmost screen's current workspace wins (deterministic,
+            // and it's the screen a fresh link most likely keeps).
+            let global = enabled.first.flatMap { monitorWorkspace[screenID(for: $0)] } ?? 1
+            for screen in enabled {
+                monitorWorkspace[screenID(for: screen)] = global
             }
-            monitorWorkspace[sid] = homeWorkspaces.first ?? 1
+        } else {
+            // for each enabled screen, ensure its current visible workspace
+            // is one whose static home is this screen — otherwise default
+            // to that screen's lowest-numbered home workspace.
+            for screen in enabled {
+                let sid = screenID(for: screen)
+                let homeWorkspaces = staticWorkspacesAnchoredTo(screen, enabled: enabled)
+                let valid: Set<Int> = Set(homeWorkspaces)
+                if let current = monitorWorkspace[sid], valid.contains(current) {
+                    continue
+                }
+                monitorWorkspace[sid] = homeWorkspaces.first ?? 1
+            }
         }
 
         // clean up stale entries for screens that no longer exist
@@ -144,22 +173,36 @@ class WorkspaceManager {
     }
 
     /// Screen currently showing `workspace`, or `nil` when the
-    /// workspace is hidden.
+    /// workspace is hidden. In linked mode several screens show the
+    /// same workspace — the leftmost wins so the answer is
+    /// deterministic (dictionary iteration order is not).
     func screenForWorkspace(_ workspace: Int) -> NSScreen? {
-        let targetSID = monitorWorkspace.first { $0.value == workspace }?.key
-        guard let sid = targetSID else { return nil }
-        return displayManager.screens.first { screenID(for: $0) == sid }
+        screensLeftToRight().first { monitorWorkspace[screenID(for: $0)] == workspace }
     }
 
     /// Static home screen for `workspace`. Pure function of `workspace`
     /// and the current enabled-screens layout. Indexed by
-    /// `(workspace - 1) % enabledScreens.count`. Returns `nil` only
-    /// when no enabled screens exist.
+    /// `(workspace - 1) % enabledScreens.count`. In linked mode every
+    /// workspace's home is the leftmost enabled screen (the full set is
+    /// `homeScreensForWorkspace`). Returns `nil` only when no enabled
+    /// screens exist.
     func homeScreenForWorkspace(_ workspace: Int) -> NSScreen? {
         guard workspace >= 1 && workspace <= workspaceCount else { return nil }
         let enabled = enabledScreensLeftToRight()
         guard !enabled.isEmpty else { return nil }
+        if linkedMonitors { return enabled.first }
         return enabled[(workspace - 1) % enabled.count]
+    }
+
+    /// Every screen `workspace` may legitimately occupy trees on. One
+    /// static home normally; all enabled screens in linked mode. Drives
+    /// `TilingEngine.handleDisplayChange` tree validity.
+    func homeScreensForWorkspace(_ workspace: Int) -> [NSScreen] {
+        if linkedMonitors {
+            guard workspace >= 1 && workspace <= workspaceCount else { return [] }
+            return enabledScreensLeftToRight()
+        }
+        return homeScreenForWorkspace(workspace).map { [$0] } ?? []
     }
 
     /// `true` when `workspace` is currently shown on any screen.
@@ -315,15 +358,22 @@ class WorkspaceManager {
     }
 
     /// Switch to workspace `number`. Always lands on the workspace's
-    /// static home monitor.
+    /// static home monitor — except in linked mode, where every enabled
+    /// screen switches to `number` together.
     ///
     /// - Parameter cursorScreen: kept for signature compatibility;
     ///   only used as the empty-result fallback when no enabled screens
-    ///   exist or `number` is out of range.
+    ///   exist or `number` is out of range, and as the linked-mode
+    ///   result screen (the warp target for an empty workspace).
     func switchWorkspace(_ number: Int, cursorScreen: NSScreen) -> SwitchResult {
         guard number >= 1 && number <= workspaceCount else {
             return SwitchResult(toHide: [], toShow: [], screen: cursorScreen, alreadyVisible: false)
         }
+
+        if linkedMonitors {
+            return switchAllLinked(to: number, cursorScreen: cursorScreen)
+        }
+
         guard let targetScreen = homeScreenForWorkspace(number) else {
             return SwitchResult(toHide: [], toShow: [], screen: cursorScreen, alreadyVisible: false)
         }
@@ -344,5 +394,38 @@ class WorkspaceManager {
 
         hyprLog(.notice, .lifecycle, "switch: \(targetScreen.localizedName) ws\(oldWorkspace)→ws\(number) (hide \(toHide.count), show \(toShow.count))")
         return SwitchResult(toHide: toHide, toShow: toShow, screen: targetScreen, alreadyVisible: false)
+    }
+
+    /// Linked-mode switch: every enabled screen flips to `number` at
+    /// once. `toHide` is the union of all previously-visible workspaces'
+    /// windows (a fresh link can leave different workspaces on different
+    /// screens); already-visible means every enabled screen shows
+    /// `number`. The result screen is the cursor's, so the
+    /// empty-workspace warp stays where the user is looking.
+    private func switchAllLinked(to number: Int, cursorScreen: NSScreen) -> SwitchResult {
+        let enabled = enabledScreensLeftToRight()
+        guard !enabled.isEmpty else {
+            return SwitchResult(toHide: [], toShow: [], screen: cursorScreen, alreadyVisible: false)
+        }
+
+        let oldWorkspaces = Set(enabled.compactMap { monitorWorkspace[screenID(for: $0)] })
+        if oldWorkspaces == [number] {
+            hyprLog(.notice, .lifecycle, "switch(linked): ws\(number) already visible on all screens")
+            return SwitchResult(toHide: [], toShow: windowIDs(onWorkspace: number),
+                                screen: cursorScreen, alreadyVisible: true)
+        }
+
+        var toHide: Set<CGWindowID> = []
+        for ws in oldWorkspaces where ws != number {
+            toHide.formUnion(windowIDs(onWorkspace: ws))
+        }
+        let toShow = windowIDs(onWorkspace: number)
+
+        for screen in enabled {
+            monitorWorkspace[screenID(for: screen)] = number
+        }
+
+        hyprLog(.notice, .lifecycle, "switch(linked): ws\(oldWorkspaces.sorted())→ws\(number) on \(enabled.count) screens (hide \(toHide.count), show \(toShow.count))")
+        return SwitchResult(toHide: toHide, toShow: toShow, screen: cursorScreen, alreadyVisible: false)
     }
 }
