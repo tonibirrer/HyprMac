@@ -12,7 +12,7 @@ struct WindowRulesPanel: View {
 
     var body: some View {
         HyprPanel("Window Rules",
-                  footer: "New windows of these apps open on their pinned workspace (\"—\" = no pin); \"Follow\" also switches to it. Sort keeps the app's tiles in order: higher = top-left, lower = bottom-right.") {
+                  footer: "New windows of these apps open on their pinned workspace (\"—\" = no pin); \"Follow\" also switches to it. \"Activate\" honors the app's activation requests (URL opens) even without a user gesture. Sort keeps the app's tiles in order: higher = top-left, lower = bottom-right.") {
             if config.windowRules.isEmpty {
                 HyprRow("No rules", icon: "circle.dashed",
                         subtitle: "New windows open on the active workspace", divider: false) { EmptyView() }
@@ -57,6 +57,13 @@ struct WindowRulesPanel: View {
             .font(.hyprBody)
             .disabled(rule.workspace == 0)
             .help("Also switch to the pinned workspace when a window opens")
+            Toggle("Activate", isOn: Binding(
+                get: { rule.focusOnActivate },
+                set: { on in update(rule.bundleID) { $0.focusOnActivate = on } }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.hyprBody)
+            .help("Always honor this app's activation requests: switch to its workspace even without a click or keystroke — e.g. when another app opens a URL in it (Hyprland's focus_on_activate)")
             HStack(spacing: 2) {
                 Text("\(rule.sortPriority)")
                     .font(.hyprMonoXs)

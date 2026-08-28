@@ -34,4 +34,21 @@ final class WindowRuleTests: XCTestCase {
         let decoded = try JSONDecoder().decode([WindowRule].self, from: data)
         XCTAssertEqual(decoded, original)
     }
+
+    func testFocusOnActivateDefaultsFalseAndRoundTrips() throws {
+        let json = #"{"bundleID": "md.obsidian", "workspace": 5}"#.data(using: .utf8)!
+        let rule = try JSONDecoder().decode(WindowRule.self, from: json)
+        XCTAssertFalse(rule.focusOnActivate)
+
+        let original = [WindowRule(bundleID: "app.zen-browser.zen", workspace: 0, focusOnActivate: true)]
+        let decoded = try JSONDecoder().decode([WindowRule].self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded, original)
+    }
+
+    func testFocusOnActivateHelperMatchesWithoutWorkspacePin() {
+        let rules = [WindowRule(bundleID: "app.zen-browser.zen", workspace: 0, focusOnActivate: true)]
+        XCTAssertTrue(rules.focusOnActivate(bundleID: "app.zen-browser.zen"))
+        XCTAssertFalse(rules.focusOnActivate(bundleID: "com.mitchellh.ghostty"))
+        XCTAssertFalse(rules.focusOnActivate(bundleID: nil))
+    }
 }

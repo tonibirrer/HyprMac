@@ -29,24 +29,33 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
     /// further bottom-right. 0 (the default) leaves the window in
     /// plain insertion order.
     var sortPriority: Int
+    /// Hyprland's `focus_on_activate` / `windowrule = activate`, per app:
+    /// always honor this app's activation requests — switch to its
+    /// workspace even without a user gesture. Needed for browsers, where
+    /// another app opening a URL activates them programmatically. Default
+    /// off: activations without a user gesture are ignored.
+    var focusOnActivate: Bool
 
     var id: String { bundleID }
 
-    init(bundleID: String, workspace: Int, silent: Bool = false, sortPriority: Int = 0) {
+    init(bundleID: String, workspace: Int, silent: Bool = false, sortPriority: Int = 0,
+         focusOnActivate: Bool = false) {
         self.bundleID = bundleID
         self.workspace = workspace
         self.silent = silent
         self.sortPriority = sortPriority
+        self.focusOnActivate = focusOnActivate
     }
 
-    // `silent` and `sortPriority` decode as optional so hand-edited
-    // configs (and configs written before the field existed) can omit them.
+    // everything but the key fields decodes as optional so hand-edited
+    // configs (and configs written before a field existed) can omit them.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bundleID = try c.decode(String.self, forKey: .bundleID)
         workspace = try c.decode(Int.self, forKey: .workspace)
         silent = try c.decodeIfPresent(Bool.self, forKey: .silent) ?? false
         sortPriority = try c.decodeIfPresent(Int.self, forKey: .sortPriority) ?? 0
+        focusOnActivate = try c.decodeIfPresent(Bool.self, forKey: .focusOnActivate) ?? false
     }
 }
 
@@ -64,5 +73,13 @@ extension Array where Element == WindowRule {
     func sortPriority(bundleID: String?) -> Int {
         guard let bundleID else { return 0 }
         return first { $0.bundleID == bundleID }?.sortPriority ?? 0
+    }
+
+    /// `true` when the first rule matching `bundleID` opts the app into
+    /// focus-on-activate. Like `sortPriority`, a workspace pin is not
+    /// required for the flag to apply.
+    func focusOnActivate(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return first { $0.bundleID == bundleID }?.focusOnActivate ?? false
     }
 }
