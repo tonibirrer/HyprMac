@@ -136,7 +136,10 @@ class WindowManager {
     // workspaces out from under the user.
     private var lastLeftMouseDownTime: CFAbsoluteTime = 0
     private var previousActivationBundleID: String?
-    private static let activationGestureWindow: CFAbsoluteTime = 1.5
+    // 0.75s: a Cmd-Tab's activation lands well under 0.5s after the ⌘
+    // release; the original 1.5s let programmatic activations ride a
+    // stale gesture and yank the workspace "randomly".
+    private static let activationGestureWindow: CFAbsoluteTime = 0.75
     private static let launcherBundleIDs: Set<String> = [
         "com.apple.dock",
         "com.apple.Spotlight",
@@ -2349,9 +2352,21 @@ class WindowManager {
             scratchpad.noteAppActivation(pid: app.processIdentifier, bundleID: app.bundleIdentifier)
         }
 
-        // dock-click workspace switch — only when NOT suppressed by FFM/switch/raise
-        if !suppressions.isSuppressed("activation-switch") {
-            if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+        // dock-click workspace switch. the activation-switch suppression
+        // exists to keep HyprMac's OWN focus churn (FFM focus, workspace
+        // switch, floater raise — all of which only ever activate apps
+        // with visible windows) from re-triggering the affordance — but a
+        // fresh user gesture proves this activation is not our own doing,
+        // so it overrides the suppression: without the override, FFM's
+        // 0.5s suppression on every hover silently ate Cmd-Tabs that
+        // landed right after a mouse move.
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+            let userInitiated = isUserInitiatedActivation(predecessorBundleID: predecessorBundleID)
+            let ruleActivate = config.windowRules.focusOnActivate(bundleID: app.bundleIdentifier)
+
+            if suppressions.isSuppressed("activation-switch") && !userInitiated {
+                hyprLog(.notice, .lifecycle, "dock-affordance: activation of \(app.bundleIdentifier ?? "?") suppressed (activation-switch window, no user gesture)")
+            } else {
                 let pid = app.processIdentifier
                 let visibleWorkspaces = Set(workspaceManager.monitorWorkspace.values)
 
@@ -2364,11 +2379,12 @@ class WindowManager {
                     visibleWorkspaces.contains($0) || ($0 == ScratchpadController.workspace && scratchpad.isVisible)
                 }
 
-                if !hasVisibleWindow, !isUserInitiatedActivation(predecessorBundleID: predecessorBundleID) {
+                if !hasVisibleWindow, !userInitiated, !ruleActivate {
                     // programmatic self-activation — a terminal raising itself
                     // when a background job prints, an app calling activate().
                     // honoring it would yank the user to another workspace
-                    // every few seconds; only user gestures may switch.
+                    // every few seconds; only user gestures — or an explicit
+                    // focus-on-activate window rule — may switch.
                     hyprLog(.notice, .lifecycle, "dock-affordance: ignoring programmatic activation of \(app.bundleIdentifier ?? "?") — no recent click/⌘ gesture, predecessor=\(predecessorBundleID ?? "none")")
                 } else if !hasVisibleWindow {
                     // all of the app's windows live in the hidden scratchpad:
@@ -2379,6 +2395,7 @@ class WindowManager {
                     if hiddenWs.contains(ScratchpadController.workspace), !scratchpad.isVisible {
                         let member = appWindows.keys.first { scratchpad.contains($0) }
                         hyprLog(.notice, .lifecycle, "dock-affordance: \(app.bundleIdentifier ?? "?") lives in scratchpad — auto-showing layer")
+                        consumeActivationGesture()
                         scratchpad.show(focusing: member)
                         return
                     }
@@ -2386,7 +2403,8 @@ class WindowManager {
                         let bid = app.bundleIdentifier ?? "?"
                         let wsSorted = appWorkspaces.sorted()
                         let widList = appWindows.map { "\($0.key)→ws\(workspaceManager.workspaceFor($0.key) ?? -1)" }.joined(separator: ",")
-                        hyprLog(.notice, .lifecycle, "dock-affordance: \(bid) pid=\(pid) appWorkspaces=\(wsSorted) visible=\(visibleWorkspaces.sorted()) wids=[\(widList)] → switchWorkspace(\(targetWS))")
+                        hyprLog(.notice, .lifecycle, "dock-affordance: \(bid) pid=\(pid) appWorkspaces=\(wsSorted) visible=\(visibleWorkspaces.sorted()) wids=[\(widList)] ruleActivate=\(ruleActivate) → switchWorkspace(\(targetWS))")
+                        consumeActivationGesture()
                         workspaceOrchestrator.switchWorkspace(targetWS)
                         return
                     }
@@ -2418,6 +2436,18 @@ class WindowManager {
         if now - hotkeyManager.lastCommandGestureTime < Self.activationGestureWindow { return true }
         if let prev = predecessorBundleID, Self.launcherBundleIDs.contains(prev) { return true }
         return false
+    }
+
+    /// One gesture authorizes one workspace switch. Called by the
+    /// dock-affordance right before it fires: invalidating the click/⌘
+    /// breadcrumbs means a programmatic activation arriving moments later
+    /// (a browser self-activating right after a Cmd-Tab, e.g.) finds no
+    /// gesture to ride and cannot yank the workspace back — the
+    /// flip-flop wars where two apps alternately re-activated within the
+    /// gesture window switched workspaces several times per second.
+    private func consumeActivationGesture() {
+        lastLeftMouseDownTime = 0
+        hotkeyManager.consumeCommandGesture()
     }
 
     /// Clear `dockIsActive` if the deactivating app is the dock. macOS

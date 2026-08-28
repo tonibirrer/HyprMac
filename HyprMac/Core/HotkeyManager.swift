@@ -64,6 +64,16 @@ class HotkeyManager {
         return lastCommandGestureTimeLocked
     }
 
+    /// Invalidate the ⌘ breadcrumb. Called by the dock-affordance after it
+    /// consumes a gesture for a workspace switch — one gesture authorizes
+    /// one switch, so a programmatic activation arriving moments later
+    /// cannot ride the same keystroke and yank the workspace again.
+    func consumeCommandGesture() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        lastCommandGestureTimeLocked = 0
+    }
+
     private static func packKey(_ keyCode: UInt16, _ modifiers: ModifierFlags) -> UInt32 {
         UInt32(keyCode) << 16 | UInt32(modifiers.rawValue & 0xFFFF)
     }
