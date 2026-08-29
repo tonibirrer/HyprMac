@@ -68,6 +68,13 @@ class MouseTrackingManager {
     var isWindowVisible: (CGWindowID) -> Bool = { _ in false }
     var cachedWindow: (CGWindowID) -> HyprWindow? = { _ in nil }
     var tiledPositions: () -> [CGWindowID: CGRect] = { [:] }
+
+    /// `true` when the screen at this CG point is in accordion mode.
+    /// Accordion suppresses ALL hover-driven focus: the stack re-layouts
+    /// around whichever window is in front, so hover focus would shuffle
+    /// windows under the cursor while it moves. Activation is click-only
+    /// there (`WindowManager.syncFocusTrackerToCursor`).
+    var isAccordionAt: (CGPoint) -> Bool = { _ in false }
     var onFocusForFFM: (HyprWindow) -> Void = { _ in }
     var onUpdateFocusBorder: (HyprWindow) -> Void = { _ in }
     var onHideFocusBorder: () -> Void = {}
@@ -108,6 +115,9 @@ class MouseTrackingManager {
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
 
         if isInMenuBarDeadZone(cgPoint) { return }
+
+        // accordion mode: no hover activation, click-only.
+        if isAccordionAt(cgPoint) { return }
 
         guard let target = determineFocusTarget(at: cgPoint) else { return }
         recordFocus(target.windowID, target.reason)
@@ -239,6 +249,12 @@ class MouseTrackingManager {
         let mouseNS = NSEvent.mouseLocation
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
+
+        // accordion mode: never refocus from cursor position — the
+        // containment scan below is nondeterministic over the stack's
+        // overlapping rects. click sync handles clicks; the ensureFocus
+        // invariants recover a vanished window via the accordion front.
+        if isAccordionAt(cgPoint) { return }
 
         // already-focused fast path: cursor is still over the last-focused
         // tile and that tile still exists — no refocus needed. without this,

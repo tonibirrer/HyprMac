@@ -382,6 +382,18 @@ final class ActionDispatcher {
             updateFocusBorder(focused)
             return
         }
+        // accordion mode: "any tiled window" is a random pick from the
+        // stack and the focus-change hook would raise it — recover onto
+        // the front window instead.
+        if tilingEngine.isAccordionActive(on: screen),
+           let front = tilingEngine.accordionFrontWindow(onWorkspace: workspace, screen: screen),
+           wsWindows.contains(front.windowID) {
+            front.focusWithoutRaise()
+            focusController.recordFocus(front.windowID, reason: "ensureInvariant-accordion")
+            updateFocusBorder(front)
+            return
+        }
+
         // any tiled window on this workspace
         for (wid, _) in stateCache.tiledPositions where wsWindows.contains(wid) {
             if let w = stateCache.cachedWindows[wid] {

@@ -93,6 +93,30 @@ class TilingEngine {
         trees[TilingKey(workspace: workspace, screen: screen)]?.allWindows ?? []
     }
 
+    /// Deterministic accordion hit test for `cgPoint` — the front window
+    /// or the peek-strip neighbor the point lands on; `nil` outside the
+    /// tiled area. Mouse pickers use this instead of rect containment
+    /// over `tiledPositions`, whose near-identical overlapping accordion
+    /// rects made the dictionary-order pick land on hidden background
+    /// tiles (click misfires raising the wrong window).
+    func accordionWindowAt(_ cgPoint: CGPoint, onWorkspace workspace: Int, screen: NSScreen) -> HyprWindow? {
+        AccordionLayout.windowAt(cgPoint,
+                                 order: accordionOrder(onWorkspace: workspace, screen: screen),
+                                 focusedID: accordionFocusedWindowID(),
+                                 in: displayManager.cgRect(for: screen),
+                                 padding: outerPadding,
+                                 overlap: accordionOverlap)
+    }
+
+    /// The window in the accordion's front slot, or `nil` for an empty
+    /// tree. Deterministic fallback target for the focus-invariant
+    /// recovery paths ("pick any tiled window" would drag a random
+    /// background tile to the front in accordion mode).
+    func accordionFrontWindow(onWorkspace workspace: Int, screen: NSScreen) -> HyprWindow? {
+        AccordionLayout.frontWindow(order: accordionOrder(onWorkspace: workspace, screen: screen),
+                                    focusedID: accordionFocusedWindowID())
+    }
+
     /// Apply accordion frames + z-order for `tree` inside `rect`.
     ///
     /// Replaces the two-pass min-size layout: every window gets a

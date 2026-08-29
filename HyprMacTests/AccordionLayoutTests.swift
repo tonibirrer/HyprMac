@@ -91,6 +91,45 @@ final class AccordionLayoutTests: XCTestCase {
         XCTAssertEqual(raised, [1, 2, 5, 4, 3])
     }
 
+    private func windowAt(_ x: CGFloat, _ y: CGFloat = 300,
+                          order: [HyprWindow], focused: CGWindowID?) -> CGWindowID? {
+        AccordionLayout.windowAt(CGPoint(x: x, y: y), order: order, focusedID: focused,
+                                 in: rect, padding: pad, overlap: overlap)?.windowID
+    }
+
+    func testWindowAtResolvesStripsAndFront() {
+        let order = (1...4).map { makeWindow(id: CGWindowID($0)) }
+        // focused = 2: inner (10,10,980,580), left strip x < 60, right strip x > 940
+        XCTAssertEqual(windowAt(30, order: order, focused: 2), 1)   // left strip → prev
+        XCTAssertEqual(windowAt(500, order: order, focused: 2), 2)  // middle → front
+        XCTAssertEqual(windowAt(960, order: order, focused: 2), 3)  // right strip → next
+    }
+
+    func testWindowAtEdgesHaveNoPhantomStrip() {
+        let order = (1...3).map { makeWindow(id: CGWindowID($0)) }
+        // first focused: no left strip — far-left click is still the front
+        XCTAssertEqual(windowAt(30, order: order, focused: 1), 1)
+        // last focused: no right strip
+        XCTAssertEqual(windowAt(960, order: order, focused: 3), 3)
+    }
+
+    func testWindowAtOutsideInsetReturnsNil() {
+        let order = [makeWindow(id: 1), makeWindow(id: 2)]
+        XCTAssertNil(windowAt(5, order: order, focused: 1))          // in padding
+        XCTAssertNil(windowAt(500, 5, order: order, focused: 1))     // above inset
+        XCTAssertNil(AccordionLayout.windowAt(CGPoint(x: 500, y: 300), order: [],
+                                              focusedID: nil, in: rect,
+                                              padding: pad, overlap: overlap))
+    }
+
+    func testFrontWindowFallsBackToFirst() {
+        let order = (1...3).map { makeWindow(id: CGWindowID($0)) }
+        XCTAssertEqual(AccordionLayout.frontWindow(order: order, focusedID: 2)?.windowID, 2)
+        XCTAssertEqual(AccordionLayout.frontWindow(order: order, focusedID: 99)?.windowID, 1)
+        XCTAssertEqual(AccordionLayout.frontWindow(order: order, focusedID: nil)?.windowID, 1)
+        XCTAssertNil(AccordionLayout.frontWindow(order: [], focusedID: 1))
+    }
+
     func testRaiseOrderEdges() {
         let order = (1...3).map { makeWindow(id: CGWindowID($0)) }
         XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1).map { $0.windowID }, [3, 2, 1])

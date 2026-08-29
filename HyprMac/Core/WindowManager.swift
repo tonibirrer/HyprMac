@@ -307,6 +307,10 @@ class WindowManager {
         mouseTracker.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
         mouseTracker.lastFocusedID = { [weak self] in self?.focusController.lastFocusedID ?? 0 }
         mouseTracker.recordFocus = { [weak self] id, reason in self?.focusController.recordFocus(id, reason: reason) }
+        mouseTracker.isAccordionAt = { [weak self] cgPoint in
+            guard let self, let screen = self.displayManager.screen(at: cgPoint) else { return false }
+            return self.isAccordionScreen(screen)
+        }
         mouseTracker.onHideFocusBorder = { [weak self] in
             self?.focusBorder.hide()
             self?.dimmingOverlay.hideAll()
@@ -1277,6 +1281,18 @@ class WindowManager {
             }
         }
 
+        // accordion mode: the containment loop and the nearest-center
+        // fallback below are both nondeterministic over the stack's
+        // overlapping rects — recover onto the accordion's front window.
+        if isAccordionScreen(screen),
+           let front = tilingEngine.accordionFrontWindow(onWorkspace: workspace, screen: screen),
+           wsWindows.contains(front.windowID) {
+            front.focusWithoutRaise()
+            focusController.recordFocus(front.windowID, reason: "ensureFocus-accordion")
+            updateFocusBorder(for: front)
+            return
+        }
+
         // tiled window under cursor
         for (wid, rect) in stateCache.tiledPositions {
             if wsWindows.contains(wid), rect.contains(cgPoint),
@@ -2071,6 +2087,19 @@ class WindowManager {
                 return
             }
         }
+        // accordion mode: containment over tiledPositions is nondeterministic
+        // (the stack's rects nearly all overlap), and a wrong record here made
+        // the focus-change hook raise a hidden background tile on every other
+        // click. resolve by visible region instead — front window, or the
+        // peek-strip neighbor (which makes clicking a strip activate it).
+        if let screen = displayManager.screen(at: cgPoint), isAccordionScreen(screen) {
+            let workspace = workspaceManager.workspaceForScreen(screen)
+            if let w = tilingEngine.accordionWindowAt(cgPoint, onWorkspace: workspace, screen: screen) {
+                focusController.recordFocus(w.windowID, reason: "syncTracker-accordion")
+            }
+            return
+        }
+
         for (wid, rect) in stateCache.tiledPositions where rect.contains(cgPoint) {
             focusController.recordFocus(wid, reason: "syncTracker-tiled")
             return

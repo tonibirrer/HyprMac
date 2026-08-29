@@ -76,6 +76,38 @@ enum AccordionLayout {
         return result
     }
 
+    /// Deterministic hit test for the accordion stack.
+    ///
+    /// Frame containment is useless here — every window's rect overlaps
+    /// nearly the whole screen — so the pick is by *visible region*: the
+    /// front window owns everything between the peek strips, the left
+    /// strip belongs to the adjacent window before it in order, the right
+    /// strip to the one after. Returns `nil` outside the inset area
+    /// (padding, menu bar), so callers leave focus alone there.
+    static func windowAt(_ point: CGPoint,
+                         order: [HyprWindow],
+                         focusedID: CGWindowID?,
+                         in rect: CGRect,
+                         padding: OuterPadding,
+                         overlap: CGFloat) -> HyprWindow? {
+        let inner = padding.inset(rect)
+        guard !order.isEmpty, inner.contains(point) else { return nil }
+        let idx = focusedIndex(order: order, focusedID: focusedID)
+        let peek = clampedOverlap(overlap, innerWidth: inner.width)
+        let hasLeft = idx > 0
+        let hasRight = idx < order.count - 1
+        if hasLeft, point.x < inner.minX + peek { return order[idx - 1] }
+        if hasRight, point.x > inner.maxX - peek { return order[idx + 1] }
+        return order[idx]
+    }
+
+    /// The window currently in the front slot — `focusedID` when it is in
+    /// `order`, else the first window (matching `frames`' fallback).
+    static func frontWindow(order: [HyprWindow], focusedID: CGWindowID?) -> HyprWindow? {
+        guard !order.isEmpty else { return nil }
+        return order[focusedIndex(order: order, focusedID: focusedID)]
+    }
+
     private static func focusedIndex(order: [HyprWindow], focusedID: CGWindowID?) -> Int {
         guard let focusedID,
               let idx = order.firstIndex(where: { $0.windowID == focusedID }) else { return 0 }
