@@ -38,6 +38,13 @@ enum UserConfigDefaults {
     // partitioned across them by usable area. off = static per-monitor
     // anchoring. machine-local (SavedMonitorConfig), never iCloud-synced.
     static let linkedMonitors: Bool = false
+    // accordion mode: when the selected monitor is the only screen
+    // connected, windows stack near-fullscreen with `accordionOverlap` px
+    // of the neighbor stacks peeking out per side instead of tiling.
+    // machine-local (SavedMonitorConfig) like linkedMonitors; the monitor
+    // default (nil) resolves to the built-in display.
+    static let accordionMode: Bool = false
+    static let accordionOverlap: CGFloat = 60
     // focusBorderColorHex / floatingBorderColorHex are nil by default —
     // resolvedFocusBorderColor / resolvedFloatingBorderColor compute the
     // system color when nil.

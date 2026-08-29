@@ -404,11 +404,56 @@ final class ActionDispatcher {
 
     // MARK: - focus / swap
 
+    /// Accordion navigation context for `focused`: the tree-order window
+    /// sequence, `focused`'s index in it, and the tree's (workspace,
+    /// screen). `nil` when accordion mode isn't active on the window's
+    /// screen, the window floats, or it isn't in the tree — callers fall
+    /// through to the geometric tile-mode path.
+    private func accordionContext(for focused: HyprWindow)
+        -> (order: [HyprWindow], index: Int, workspace: Int, screen: NSScreen)? {
+        guard !stateCache.floatingWindowIDs.contains(focused.windowID) else { return nil }
+        guard let screen = displayManager.screen(for: focused) ?? displayManager.screens.first,
+              tilingEngine.isAccordionActive(on: screen) else { return nil }
+        let workspace = workspaceManager.workspaceForScreen(screen)
+        let order = tilingEngine.accordionOrder(onWorkspace: workspace, screen: screen)
+        guard let index = order.firstIndex(where: { $0.windowID == focused.windowID }) else { return nil }
+        return (order, index, workspace, screen)
+    }
+
+    /// Accordion order is a horizontal strip: left/up step back,
+    /// right/down step forward — all four tile-mode directions keep
+    /// working with one obvious meaning each.
+    private static func accordionStep(for direction: Direction) -> Int {
+        switch direction {
+        case .left, .up: return -1
+        case .right, .down: return 1
+        }
+    }
+
     /// Move keyboard focus to the nearest visible tiled window in
     /// `direction`. Floating windows and hidden-corner windows are
     /// excluded from the candidate set.
+    ///
+    /// On an accordion screen the geometric picker is meaningless
+    /// (frames overlap almost entirely), so the target is the adjacent
+    /// window in accordion order instead; the focus-change hook then
+    /// re-applies the layout with the target in front.
     private func focusInDirection(_ direction: Direction) {
         guard let focused = currentFocusedWindow() else { return }
+
+        if let ctx = accordionContext(for: focused) {
+            let i = ctx.index + Self.accordionStep(for: direction)
+            guard ctx.order.indices.contains(i) else { return } // edge — same as tile mode
+            let target = ctx.order[i]
+            // full focus (with raise): the target is behind the stack, and
+            // the accordion re-layout triggered by recordFocus raises it
+            // properly a beat later anyway.
+            target.focus()
+            cursorManager.warpToCenter(of: target)
+            focusController.recordFocus(target.windowID, reason: "focusInDirection-accordion")
+            updateFocusBorder(target)
+            return
+        }
         // only consider windows on visible workspaces — hidden corner windows must be excluded
         let windows = accessibility.getAllWindows().filter {
             workspaceManager.isWindowVisible($0.windowID) && !stateCache.floatingWindowIDs.contains($0.windowID)
@@ -447,6 +492,26 @@ final class ActionDispatcher {
     private func swapInDirection(_ direction: Direction) {
         guard let focused = currentFocusedWindow() else { return }
         guard !stateCache.floatingWindowIDs.contains(focused.windowID) else { return }
+
+        // accordion: swap with the adjacent window in accordion order.
+        // the swap mutates the BSP tree exactly like tile mode (so the
+        // tile layout stays correct in the background) and the retile
+        // inside swapWindows re-applies accordion frames.
+        if let ctx = accordionContext(for: focused) {
+            let i = ctx.index + Self.accordionStep(for: direction)
+            guard ctx.order.indices.contains(i) else { return }
+            let target = ctx.order[i]
+            guard tilingEngine.canSwapWindows(focused, target, onWorkspace: ctx.workspace, screen: ctx.screen) else {
+                rejectSwap(focused, reason: "swap would violate min-size constraints (tile layout)")
+                return
+            }
+            if !tilingEngine.swapWindows(focused, target, onWorkspace: ctx.workspace, screen: ctx.screen) {
+                rejectSwap(focused, reason: "swap overflows min-size constraints (post-readback)")
+            }
+            updatePositionCache()
+            return
+        }
+
         guard let screen = displayManager.screen(for: focused) ?? displayManager.screens.first else { return }
         let workspace = workspaceManager.workspaceForScreen(screen)
         // restrict swap candidates to focused's (workspace, screen) tree.

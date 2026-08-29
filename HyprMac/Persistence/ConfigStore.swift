@@ -255,4 +255,9 @@ struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
     let linkedMonitors: Bool?
+    // accordion mode (single-screen stacked layout). accordionMonitor nil
+    // resolves to the built-in display at runtime.
+    var accordionMode: Bool? = nil
+    var accordionMonitor: String? = nil
+    var accordionOverlap: CGFloat? = nil
 }
