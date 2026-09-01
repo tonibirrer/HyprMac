@@ -63,6 +63,80 @@ class TilingEngine {
     /// auto-float the window.
     var onAutoFloat: ((HyprWindow) -> Void)?
 
+    // MARK: - accordion mode
+
+    /// `true` when `screen` should render as an accordion instead of a
+    /// tiled layout. Set by the owner (`WindowManager` checks the config
+    /// toggle, the single-screen condition, and the selected monitor);
+    /// defaults to never so tests and the scratchpad see plain tiling.
+    ///
+    /// Accordion is presentation-only: tree membership, insertion, swap
+    /// and removal run identically to tile mode, so switching back to
+    /// tiling restores the exact BSP layout.
+    var accordionActive: (NSScreen) -> Bool = { _ in false }
+
+    /// Visible peek, in px, of the neighbor stacks on each side of the
+    /// focused window. Runtime-tunable from the settings UI.
+    var accordionOverlap: CGFloat = UserConfigDefaults.accordionOverlap
+
+    /// Resolves the window that currently has focus intent — accordion
+    /// frames depend on which window is in front. `nil`/unknown falls
+    /// back to the first window in tree order.
+    var accordionFocusedWindowID: () -> CGWindowID? = { nil }
+
+    /// Public probe for the dispatcher's order-based navigation.
+    func isAccordionActive(on screen: NSScreen) -> Bool { accordionActive(screen) }
+
+    /// The accordion (= tree in-order) window sequence for
+    /// `(workspace, screen)`. Empty when no tree exists.
+    func accordionOrder(onWorkspace workspace: Int, screen: NSScreen) -> [HyprWindow] {
+        trees[TilingKey(workspace: workspace, screen: screen)]?.allWindows ?? []
+    }
+
+    /// Deterministic accordion hit test for `cgPoint` — the front window
+    /// or the peek-strip neighbor the point lands on; `nil` outside the
+    /// tiled area. Mouse pickers use this instead of rect containment
+    /// over `tiledPositions`, whose near-identical overlapping accordion
+    /// rects made the dictionary-order pick land on hidden background
+    /// tiles (click misfires raising the wrong window).
+    func accordionWindowAt(_ cgPoint: CGPoint, onWorkspace workspace: Int, screen: NSScreen) -> HyprWindow? {
+        AccordionLayout.windowAt(cgPoint,
+                                 order: accordionOrder(onWorkspace: workspace, screen: screen),
+                                 focusedID: accordionFocusedWindowID(),
+                                 in: displayManager.cgRect(for: screen),
+                                 padding: outerPadding,
+                                 overlap: accordionOverlap)
+    }
+
+    /// The window in the accordion's front slot, or `nil` for an empty
+    /// tree. Deterministic fallback target for the focus-invariant
+    /// recovery paths ("pick any tiled window" would drag a random
+    /// background tile to the front in accordion mode).
+    func accordionFrontWindow(onWorkspace workspace: Int, screen: NSScreen) -> HyprWindow? {
+        AccordionLayout.frontWindow(order: accordionOrder(onWorkspace: workspace, screen: screen),
+                                    focusedID: accordionFocusedWindowID())
+    }
+
+    /// Apply accordion frames + z-order for `tree` inside `rect`.
+    ///
+    /// Replaces the two-pass min-size layout: every window gets a
+    /// near-fullscreen rect, so min-size conflicts cannot occur and no
+    /// readback is needed. Raising outermost-first keeps the nearest
+    /// neighbor on top of each peek stack, focused window frontmost.
+    private func applyAccordionLayout(_ tree: BSPTree, rect: CGRect) {
+        let order = tree.allWindows
+        guard !order.isEmpty else { return }
+        let focusedID = accordionFocusedWindowID()
+        let frames = AccordionLayout.frames(order: order, focusedID: focusedID,
+                                            in: rect, padding: outerPadding,
+                                            overlap: accordionOverlap)
+        applyLayoutFinal(frames)
+        for w in AccordionLayout.raiseOrder(order, focusedID: focusedID) {
+            w.raise()
+        }
+        hyprLog(.debug, .tiling, "accordion: \(order.count) windows, front=\(focusedID.map(String.init) ?? "first")")
+    }
+
     /// Resolves a window's app sort priority (Hyprland-style window
     /// rule): higher tiles further top-left, lower further bottom-right,
     /// 0 is neutral. Set by the owner; nil disables priority ordering.
@@ -478,6 +552,21 @@ class TilingEngine {
         let t = m.tree
         let rect = m.rect
 
+        // accordion mode: membership above ran identically (so the BSP
+        // tree stays tile-mode-correct in the background); only the frame
+        // application differs. no readback/min-size passes — every window
+        // gets a near-fullscreen rect.
+        if accordionActive(screen) {
+            _ = consumePendingInserted(for: key, in: t)
+            applyAccordionLayout(t, rect: rect)
+            for (otherKey, other) in trees where otherKey.workspace == workspace {
+                if other.allWindows.isEmpty && otherKey != key {
+                    trees.removeValue(forKey: otherKey)
+                }
+            }
+            return
+        }
+
         // pass 1: layout + readback
         let layouts = t.layout(in: rect, gap: gapSize, padding: outerPadding)
         hyprLog(.debug, .lifecycle, "tiling \(layouts.count) windows on workspace \(workspace) screen \(Int(screen.frame.width))x\(Int(screen.frame.height))")
@@ -784,7 +873,15 @@ class TilingEngine {
             }
             let rect = displayManager.cgRect(for: screen)
             hyprLog(.debug, .tiling, "intendedRects: tree ws\(key.workspace) sid=\(key.screenID) -> '\(screen.localizedName)' rect=\(rect) (\(t.allWindows.count) windows)")
-            for (window, frame) in t.layout(in: rect, gap: gapSize, padding: outerPadding) {
+            // accordion screens report accordion frames — those ARE the
+            // intent there; BSP rects would disagree with every live frame.
+            let layout = accordionActive(screen)
+                ? AccordionLayout.frames(order: t.allWindows,
+                                         focusedID: accordionFocusedWindowID(),
+                                         in: rect, padding: outerPadding,
+                                         overlap: accordionOverlap)
+                : t.layout(in: rect, gap: gapSize, padding: outerPadding)
+            for (window, frame) in layout {
                 let tag = "ws\(key.workspace)@\(screen.localizedName)"
                 if let prev = sourceTree[window.windowID] {
                     hyprLog(.notice, .tiling, "intendedRects: DUP windowID \(window.windowID) '\(window.title ?? "?")' in both [\(prev)] and [\(tag)] — \(tag) wins rect=\(frame)")
@@ -860,6 +957,15 @@ class TilingEngine {
         let t = tree(for: key)
         primeMinimumSizes(t.allWindows)
         let rect = displayManager.cgRect(for: screen)
+
+        // accordion mode: same tree, presentation-only frames, no
+        // readback (see tileWindows).
+        if accordionActive(screen) {
+            _ = consumePendingInserted(for: key, in: t)
+            applyAccordionLayout(t, rect: rect)
+            return
+        }
+
         let insertedForOverflow = mergedInserted(inserted, pending: consumePendingInserted(for: key, in: t))
 
         t.root.resetSplitRatios()

@@ -120,3 +120,14 @@ class DisplayManager {
 
     var mainScreen: NSScreen? { NSScreen.main }
 }
+
+extension NSScreen {
+    /// `true` for the laptop's built-in panel. Default target for
+    /// accordion mode when the user hasn't picked a monitor explicitly.
+    var isBuiltIn: Bool {
+        guard let num = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return false
+        }
+        return CGDisplayIsBuiltin(CGDirectDisplayID(num.uint32Value)) != 0
+    }
+}

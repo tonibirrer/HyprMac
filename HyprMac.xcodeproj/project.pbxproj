@@ -29,6 +29,7 @@
 		29EF01F22534CC2B51FE0390 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54EA610EADBFADA21DC625C3 /* AppDelegate.swift */; };
 		2A235468195A778CCCA51C70 /* DefaultKeybindsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B23E3313247FD77173D35DD /* DefaultKeybindsTests.swift */; };
 		2F7C20004633B3B6A8CCF6D6 /* Action.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B20DF87F29CD5B1164F1E80 /* Action.swift */; };
+		2FD561E33DCC0C12765F24AB /* AccordionLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1BF4A13B8D8E5DDDD0DC479 /* AccordionLayoutTests.swift */; };
 		3096F5E0A6427D2DB64D076E /* FocusBorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38E1F4DBD1DB2807610AB4E /* FocusBorder.swift */; };
 		321ED983E085852543CE66E5 /* TilingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05FDF12C01F99F4A9DEAEB09 /* TilingEngine.swift */; };
 		33D18D1F45F3CB1C3E2FDA03 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F06CFE0CDB28ECDC9411EEB1 /* HotkeyManager.swift */; };
@@ -64,6 +65,7 @@
 		860959AD6A92DB57753D655E /* ToggleSplitFallthroughRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC08AAC03ABC15E772214598 /* ToggleSplitFallthroughRegressionTests.swift */; };
 		86B3C95B411DB51B9AFBE08D /* WorkspacePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC4754A615E4871D79F5D066 /* WorkspacePicker.swift */; };
 		87509383B627C5F0A3B32B23 /* PollingScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4BF3E3B39107A11D98F0575 /* PollingScheduler.swift */; };
+		885B8A821F467AE752F847B4 /* AccordionLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */; };
 		8C3306FE7A9CD13A28CA5C87 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49CB059612127CA6F3E7766 /* SettingsComponents.swift */; };
 		94D0B3F1FB21CB77289D4AF0 /* MouseTrackingManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CD84800A82DD5466833975C /* MouseTrackingManager.swift */; };
 		96D7C04382452A795D840940 /* FocusBrackets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8680AE34CAB9F0BAA3C9D8F0 /* FocusBrackets.swift */; };
@@ -206,6 +208,7 @@
 		CB845A902D1A884872996805 /* FocusStateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusStateController.swift; sourceTree = "<group>"; };
 		CE7C6CB56D09DB0F05AE6EDC /* ThreadAssertions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadAssertions.swift; sourceTree = "<group>"; };
 		D14B540996EBFC8839339556 /* BSPNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BSPNode.swift; sourceTree = "<group>"; };
+		D1BF4A13B8D8E5DDDD0DC479 /* AccordionLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccordionLayoutTests.swift; sourceTree = "<group>"; };
 		D2B096217238208C5F5BCA3E /* ActionDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDispatcher.swift; sourceTree = "<group>"; };
 		D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindDecoderToleranceTests.swift; sourceTree = "<group>"; };
 		DBF9449D559067A61BBA8394 /* BSPTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BSPTree.swift; sourceTree = "<group>"; };
@@ -222,6 +225,7 @@
 		EC19E9DB53B109940984B5D5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EC42FAA3FF330DDCE44361AF /* WallpaperManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WallpaperManager.swift; sourceTree = "<group>"; };
 		EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCodeUtils.swift; sourceTree = "<group>"; };
+		EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccordionLayout.swift; sourceTree = "<group>"; };
 		EDAAA3743D0898468DBA8EBC /* ConfigMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigMigration.swift; sourceTree = "<group>"; };
 		EDB2A500B78D0C9A7FAE6173 /* DragSwapHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragSwapHandler.swift; sourceTree = "<group>"; };
 		EEBFDE19D0C8E2633C66241B /* CGSPrivate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = CGSPrivate.h; sourceTree = "<group>"; };
@@ -433,6 +437,7 @@
 		B0A0AB76785D9D6DA70BB530 /* HyprMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				D1BF4A13B8D8E5DDDD0DC479 /* AccordionLayoutTests.swift */,
 				16AC17310FABAC0CFEA327E7 /* BSPNodeTests.swift */,
 				1A85F3FF392095FDDB36DAB7 /* BSPTestSupport.swift */,
 				2796ACDEF732F4AB5C0EC77C /* BSPTreeTests.swift */,
@@ -480,6 +485,7 @@
 		F4C9B4A031C3E8E526CCA0AE /* Tiling */ = {
 			isa = PBXGroup;
 			children = (
+				EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */,
 				D14B540996EBFC8839339556 /* BSPNode.swift */,
 				DBF9449D559067A61BBA8394 /* BSPTree.swift */,
 				9F1105FD856A5A007D619120 /* FrameReadbackPoller.swift */,
@@ -609,6 +615,7 @@
 			files = (
 				F3955661BE1DE991B5D3743E /* AXNotificationService.swift in Sources */,
 				498931AB0DE01FD760A0C1DC /* AccessibilityManager.swift in Sources */,
+				885B8A821F467AE752F847B4 /* AccordionLayout.swift in Sources */,
 				2F7C20004633B3B6A8CCF6D6 /* Action.swift in Sources */,
 				4F7E79CBC44F654BDF24C05B /* ActionDispatcher.swift in Sources */,
 				29EF01F22534CC2B51FE0390 /* AppDelegate.swift in Sources */,
@@ -693,6 +700,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2FD561E33DCC0C12765F24AB /* AccordionLayoutTests.swift in Sources */,
 				049A911F001515424E52E5B9 /* BSPNodeTests.swift in Sources */,
 				0A95C40458C159F8851E03E4 /* BSPTestSupport.swift in Sources */,
 				4F220AC370184B0540805075 /* BSPTreeTests.swift in Sources */,

@@ -307,6 +307,10 @@ class WindowManager {
         mouseTracker.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
         mouseTracker.lastFocusedID = { [weak self] in self?.focusController.lastFocusedID ?? 0 }
         mouseTracker.recordFocus = { [weak self] id, reason in self?.focusController.recordFocus(id, reason: reason) }
+        mouseTracker.isAccordionAt = { [weak self] cgPoint in
+            guard let self, let screen = self.displayManager.screen(at: cgPoint) else { return false }
+            return self.isAccordionScreen(screen)
+        }
         mouseTracker.onHideFocusBorder = { [weak self] in
             self?.focusBorder.hide()
             self?.dimmingOverlay.hideAll()
@@ -448,6 +452,19 @@ class WindowManager {
         tilingEngine.gapSize = config.gapSize
         tilingEngine.outerPadding = config.resolvedOuterPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
+        tilingEngine.accordionOverlap = config.accordionOverlap
+        tilingEngine.accordionActive = { [weak self] screen in
+            self?.isAccordionScreen(screen) ?? false
+        }
+        tilingEngine.accordionFocusedWindowID = { [weak self] in
+            guard let id = self?.focusController.lastFocusedID, id != 0 else { return nil }
+            return id
+        }
+        // focus moves are layout changes on an accordion screen — the
+        // stack re-shuffles around whichever window came to the front.
+        focusController.onFocusChanged = { [weak self] id in
+            self?.accordionFocusDidChange(id)
+        }
         tilingEngine.sortPriority = { [weak self] window in
             guard let self, !self.config.windowRules.isEmpty else { return 0 }
             let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
@@ -627,6 +644,32 @@ class WindowManager {
                 self.workspaceManager.linkedMonitors = linked
                 self.reconcileAfterDisplayChange()
                 hyprLog(.notice, .lifecycle, "linked monitors \(linked ? "enabled" : "disabled") — reconciled")
+            }.store(in: &configObservers)
+
+        // accordion toggles/tuning re-apply frames immediately: flipping the
+        // mode on (or off) swaps between accordion and BSP presentation of
+        // the same trees, overlap/monitor changes shift the peek strips.
+        config.$accordionMode
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] on in
+                guard let self = self else { return }
+                self.animatedRetile()
+                hyprLog(.notice, .lifecycle, "accordion mode \(on ? "enabled" : "disabled") — retiled")
+            }.store(in: &configObservers)
+        config.$accordionOverlap
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] overlap in
+                guard let self = self else { return }
+                self.tilingEngine.accordionOverlap = overlap
+                self.animatedRetile()
+            }.store(in: &configObservers)
+        config.$accordionMonitor
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                self?.animatedRetile()
             }.store(in: &configObservers)
 
         // sort-priority edits reorder existing tiles, so a rule change
@@ -1238,6 +1281,18 @@ class WindowManager {
             }
         }
 
+        // accordion mode: the containment loop and the nearest-center
+        // fallback below are both nondeterministic over the stack's
+        // overlapping rects — recover onto the accordion's front window.
+        if isAccordionScreen(screen),
+           let front = tilingEngine.accordionFrontWindow(onWorkspace: workspace, screen: screen),
+           wsWindows.contains(front.windowID) {
+            front.focusWithoutRaise()
+            focusController.recordFocus(front.windowID, reason: "ensureFocus-accordion")
+            updateFocusBorder(for: front)
+            return
+        }
+
         // tiled window under cursor
         for (wid, rect) in stateCache.tiledPositions {
             if wsWindows.contains(wid), rect.contains(cgPoint),
@@ -1526,6 +1581,53 @@ class WindowManager {
         classifyAndAssign(allWindows)
         reparkHiddenWorkspaceWindows(allWindows)
         tileAllVisibleSpaces(windows: allWindows)
+    }
+
+    // MARK: - accordion mode
+
+    /// `true` when `screen` should render as an accordion: the feature is
+    /// on, `screen` is the only enabled screen connected, and it is the
+    /// user-selected accordion monitor (built-in display when unset).
+    ///
+    /// The single-screen condition is what auto-switches the mode as
+    /// external monitors unplug/return: `reconcileAfterDisplayChange`
+    /// retiles on every topology change, and the tiling engine consults
+    /// this closure per screen on every layout pass.
+    private func isAccordionScreen(_ screen: NSScreen) -> Bool {
+        guard config.accordionMode else { return false }
+        let enabled = displayManager.screens.filter { !workspaceManager.isMonitorDisabled($0) }
+        guard enabled.count == 1,
+              let only = enabled.first,
+              only.localizedName == screen.localizedName else { return false }
+        if let name = config.accordionMonitor {
+            return screen.localizedName == name
+        }
+        return screen.isBuiltIn
+    }
+
+    /// Coalesces focus-driven accordion re-layouts — focus can change
+    /// several times inside one dispatch (action + invariant checks).
+    private var accordionRelayoutScheduled = false
+
+    /// Re-apply the accordion layout after a focus change so the newly
+    /// focused window slides to the front position. No-op outside
+    /// accordion mode or for floating/unmanaged windows. Deferred to the
+    /// next runloop turn: `recordFocus` fires synchronously inside focus
+    /// paths that are themselves mid-layout.
+    private func accordionFocusDidChange(_ windowID: CGWindowID) {
+        guard windowID != 0, config.accordionMode else { return }
+        guard !stateCache.floatingWindowIDs.contains(windowID) else { return }
+        guard let window = stateCache.cachedWindows[windowID],
+              let screen = displayManager.screen(for: window) ?? displayManager.screens.first,
+              isAccordionScreen(screen) else { return }
+        guard !accordionRelayoutScheduled else { return }
+        accordionRelayoutScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.accordionRelayoutScheduled = false
+            guard self.isRunning else { return }
+            self.tileAllVisibleSpaces()
+        }
     }
 
     /// Re-park every window assigned to a hidden workspace at the current
@@ -1985,6 +2087,19 @@ class WindowManager {
                 return
             }
         }
+        // accordion mode: containment over tiledPositions is nondeterministic
+        // (the stack's rects nearly all overlap), and a wrong record here made
+        // the focus-change hook raise a hidden background tile on every other
+        // click. resolve by visible region instead — front window, or the
+        // peek-strip neighbor (which makes clicking a strip activate it).
+        if let screen = displayManager.screen(at: cgPoint), isAccordionScreen(screen) {
+            let workspace = workspaceManager.workspaceForScreen(screen)
+            if let w = tilingEngine.accordionWindowAt(cgPoint, onWorkspace: workspace, screen: screen) {
+                focusController.recordFocus(w.windowID, reason: "syncTracker-accordion")
+            }
+            return
+        }
+
         for (wid, rect) in stateCache.tiledPositions where rect.contains(cgPoint) {
             focusController.recordFocus(wid, reason: "syncTracker-tiled")
             return

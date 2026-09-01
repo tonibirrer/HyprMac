@@ -31,6 +31,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
 | 📌 **Window Rules** *(fork)* | Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style |
 | 🔗 **Linked Monitors** *(fork)* | Toggle: all monitors show one workspace, tiles load-balanced across screens by size |
+| 🪗 **Accordion Mode** *(fork)* | AeroSpace-style stacked layout when only the chosen screen (default: built-in) is connected, with configurable side peek; the tiled layout is kept in the background and restored when monitors return |
 | 🔌 **IPC + sketchybar** *(fork)* | Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators |
 | 🎨 **Workspace Identity** *(fork)* | Per-workspace accent colors and wallpapers |
 | 📐 **Per-Side Padding** *(fork)* | Top-only outer padding to reserve space for a status bar |

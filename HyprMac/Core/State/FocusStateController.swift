@@ -28,6 +28,14 @@ final class FocusStateController {
     /// the bordered window without depending on `FocusBorder` directly.
     var borderTrackedID: CGWindowID? { focusBorder.trackedWindowID }
 
+    /// Fired after `lastFocusedID` actually changes (not on repeat
+    /// records). Set by `WindowManager` to re-apply the accordion layout
+    /// when focus moves within an accordion screen — accordion frames
+    /// depend on which window is in front, so a focus change is a layout
+    /// change there. Called synchronously from `recordFocus`; the handler
+    /// is responsible for deferring any heavy work.
+    var onFocusChanged: ((CGWindowID) -> Void)?
+
     init(focusBorder: FocusBorder) {
         self.focusBorder = focusBorder
     }
@@ -46,5 +54,6 @@ final class FocusStateController {
         let prev = lastFocusedID
         lastFocusedID = id
         hyprLog(.debug, .focus, "focus \(prev) → \(id) (\(reason))")
+        onFocusChanged?(id)
     }
 }

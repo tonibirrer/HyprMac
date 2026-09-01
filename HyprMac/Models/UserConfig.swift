@@ -59,6 +59,20 @@ class UserConfig: ObservableObject {
     @Published var linkedMonitors: Bool {
         didSet { if !isReloading { save() } }
     }
+    // accordion mode: when accordionMonitor is the only connected screen,
+    // windows stack near-fullscreen instead of tiling. machine-local,
+    // stored in the monitor file like linkedMonitors.
+    @Published var accordionMode: Bool {
+        didSet { if !isReloading { save() } }
+    }
+    // localizedName of the screen accordion applies to; nil = built-in
+    @Published var accordionMonitor: String? {
+        didSet { if !isReloading { save() } }
+    }
+    // visible px of the neighbor stacks on each side of the focused window
+    @Published var accordionOverlap: CGFloat {
+        didSet { if !isReloading { save() } }
+    }
     @Published var showFocusBorder: Bool {
         didSet { if !isReloading { save() } }
     }
@@ -222,6 +236,10 @@ class UserConfig: ObservableObject {
         self.disabledMonitors = resolved.disabled
         // linkedMonitors postdates the migration split — local file only
         self.linkedMonitors = monitorConfig?.linkedMonitors ?? UserConfigDefaults.linkedMonitors
+        // accordion settings postdate the split too — local file only
+        self.accordionMode = monitorConfig?.accordionMode ?? UserConfigDefaults.accordionMode
+        self.accordionMonitor = monitorConfig?.accordionMonitor
+        self.accordionOverlap = monitorConfig?.accordionOverlap ?? UserConfigDefaults.accordionOverlap
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
@@ -268,7 +286,10 @@ class UserConfig: ObservableObject {
         store.writeSavedMonitorConfig(SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,
             disabledMonitors: Array(disabledMonitors),
-            linkedMonitors: linkedMonitors))
+            linkedMonitors: linkedMonitors,
+            accordionMode: accordionMode,
+            accordionMonitor: accordionMonitor,
+            accordionOverlap: accordionOverlap))
     }
 
     // build a SavedConfig snapshot from the current @Published state.
@@ -313,6 +334,9 @@ class UserConfig: ObservableObject {
         maxSplitsPerMonitor = [:]
         disabledMonitors = []
         linkedMonitors = UserConfigDefaults.linkedMonitors
+        accordionMode = UserConfigDefaults.accordionMode
+        accordionMonitor = nil
+        accordionOverlap = UserConfigDefaults.accordionOverlap
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -369,6 +393,9 @@ class UserConfig: ObservableObject {
             maxSplitsPerMonitor = mc.maxSplitsPerMonitor ?? [:]
             disabledMonitors = Set(mc.disabledMonitors ?? [])
             linkedMonitors = mc.linkedMonitors ?? UserConfigDefaults.linkedMonitors
+            accordionMode = mc.accordionMode ?? UserConfigDefaults.accordionMode
+            accordionMonitor = mc.accordionMonitor
+            accordionOverlap = mc.accordionOverlap ?? UserConfigDefaults.accordionOverlap
         }
         // else keep current values — don't overwrite with synced defaults
 

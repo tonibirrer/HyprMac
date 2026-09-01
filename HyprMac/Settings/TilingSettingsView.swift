@@ -16,6 +16,7 @@ struct TilingSettingsView: View {
             WindowRulesPanel()
             WallpapersPanel()
             scratchpadPanel
+            accordionPanel
             monitorsPanel
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
@@ -205,6 +206,65 @@ struct TilingSettingsView: View {
                 }
             }
         }
+    }
+
+    // MARK: accordion
+
+    private var accordionPanel: some View {
+        HyprPanel("Accordion (Single Screen)",
+                  footer: "When the chosen monitor is the only screen connected, windows stack near-fullscreen with the neighbors peeking out on each side. Focus and swap keybinds step through the stack. Behind the scenes windows still slot into the tiling layout, so reconnecting a monitor restores the exact tiled arrangement.") {
+            HyprRow("Accordion on single screen", icon: "rectangle.stack",
+                    subtitle: "Replace tiling with a stacked, AeroSpace-style accordion while only one screen is connected.",
+                    divider: true) {
+                Toggle("", isOn: $config.accordionMode)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+            }
+            if config.accordionMode {
+                HyprRow("Monitor", icon: "display",
+                        subtitle: "Accordion only activates when this screen is the one left.",
+                        divider: true) {
+                    Picker("", selection: $config.accordionMonitor) {
+                        Text(builtInLabel).tag(String?.none)
+                        ForEach(accordionMonitorChoices, id: \.self) { name in
+                            Text(name).tag(String?.some(name))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 220)
+                }
+                HyprRow("Side overlap", icon: "arrow.left.and.right",
+                        subtitle: "Visible sliver of the neighboring windows on each side.",
+                        divider: false) {
+                    HStack(spacing: HyprSpacing.sm) {
+                        Slider(value: $config.accordionOverlap, in: 10...200, step: 5)
+                            .frame(width: 180)
+                        HyprChip("\(Int(config.accordionOverlap)) px")
+                            .frame(width: 56, alignment: .trailing)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Label for the "built-in display" default choice, naming the panel
+    /// when it is currently connected.
+    private var builtInLabel: String {
+        if let builtIn = screens.first(where: { $0.isBuiltIn }) {
+            return "Built-in display (\(builtIn.localizedName))"
+        }
+        return "Built-in display"
+    }
+
+    /// Current screens plus a previously-saved selection that isn't
+    /// connected right now — so the stored choice never silently renders
+    /// as something else.
+    private var accordionMonitorChoices: [String] {
+        var names = screens.map { $0.localizedName }
+        if let saved = config.accordionMonitor, !names.contains(saved) {
+            names.append(saved)
+        }
+        return names
     }
 
     // MARK: monitors
