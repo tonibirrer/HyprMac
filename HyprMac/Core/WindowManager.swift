@@ -457,7 +457,14 @@ class WindowManager {
             self?.isAccordionScreen(screen) ?? false
         }
         tilingEngine.accordionFocusedWindowID = { [weak self] in
-            guard let id = self?.focusController.lastFocusedID, id != 0 else { return nil }
+            guard let self else { return nil }
+            let id = self.focusController.lastFocusedID
+            guard id != 0 else { return nil }
+            // only a *visible* window may define the front slot. A stale id
+            // pointing at a hidden workspace is not in the tree being laid
+            // out, so AccordionLayout.focusedIndex would fall back to index
+            // 0 and promote that tree's first window to the front.
+            guard self.workspaceManager.isWindowVisible(id) else { return nil }
             return id
         }
         // focus moves are layout changes on an accordion screen — the
@@ -1617,8 +1624,16 @@ class WindowManager {
     private func accordionFocusDidChange(_ windowID: CGWindowID) {
         guard windowID != 0, config.accordionMode else { return }
         guard !stateCache.floatingWindowIDs.contains(windowID) else { return }
+        // a window on a hidden workspace is parked in the off-screen corner,
+        // not unmapped — it stays a live, focusable AX window. Without this
+        // gate a stray focus record for one (AX activation, app self-raise)
+        // retiles and raises it over the workspace the user is actually on.
+        guard workspaceManager.isWindowVisible(windowID) else { return }
+        // no `?? screens.first` fallback: a window whose frame resolves to no
+        // screen is parked or off-screen, and defaulting it onto the first
+        // screen is what let such a window pass the accordion gate.
         guard let window = stateCache.cachedWindows[windowID],
-              let screen = displayManager.screen(for: window) ?? displayManager.screens.first,
+              let screen = displayManager.screen(for: window),
               isAccordionScreen(screen) else { return }
         guard !accordionRelayoutScheduled else { return }
         accordionRelayoutScheduled = true

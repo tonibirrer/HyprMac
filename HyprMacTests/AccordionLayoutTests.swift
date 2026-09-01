@@ -69,6 +69,21 @@ final class AccordionLayoutTests: XCTestCase {
         XCTAssertEqual(withStale, withFirst)
     }
 
+    // Regression guard for the cross-workspace focus steal: a stale
+    // focusedID (one not in this tree — e.g. the user's focus is on
+    // another workspace) makes index 0 the front slot, so raiseOrder
+    // puts a *foreign* tree's first window frontmost. WindowManager
+    // must therefore never hand a non-visible id to the layout; this
+    // pins the consequence if that guard is ever removed.
+    func testStaleFocusPromotesFirstWindowToFront() {
+        let order = [makeWindow(id: 1), makeWindow(id: 2), makeWindow(id: 3)]
+        let raised = AccordionLayout.raiseOrder(order, focusedID: 99)
+        XCTAssertEqual(raised.last?.windowID, 1)
+        XCTAssertEqual(AccordionLayout.frontWindow(order: order, focusedID: 99)?.windowID, 1)
+        // and with a real member it is that member, not index 0
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 3).last?.windowID, 3)
+    }
+
     func testOverlapClampedOnNarrowRect() {
         // overlap larger than a quarter of the inner width gets clamped so
         // the shared window width can't collapse
