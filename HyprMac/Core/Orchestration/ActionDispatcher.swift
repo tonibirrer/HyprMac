@@ -246,6 +246,8 @@ final class ActionDispatcher {
             toggleScratchpad()
         case .moveToScratchpad:
             moveToScratchpad()
+        case .resizeDirection(let dir):
+            resizeInDirection(dir)
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -273,6 +275,7 @@ final class ActionDispatcher {
         case .cycleWorkspace:      return "cycleWorkspace"
         case .toggleScratchpad:    return "toggleScratchpad"
         case .moveToScratchpad:    return "moveToScratchpad"
+        case .resizeDirection:     return "resizeDirection"
         }
     }
 
@@ -657,6 +660,17 @@ final class ActionDispatcher {
               let screen = displayManager.screen(for: focused) ?? displayManager.screens.first else { return }
         let workspace = workspaceManager.workspaceForScreen(screen)
         floatingController.toggle(focused, on: screen, in: workspace)
+    }
+
+    /// Resize the focused tiled window in a cardinal direction.
+    private func resizeInDirection(_ direction: Direction) {
+        guard let focused = currentFocusedWindow(),
+              !stateCache.floatingWindowIDs.contains(focused.windowID),
+              let screen = displayManager.screen(for: focused) ?? displayManager.screens.first else { return }
+        let workspace = workspaceManager.workspaceForScreen(screen)
+
+        tilingEngine.resizeInDirection(focused, direction: direction, onWorkspace: workspace, screen: screen)
+        updatePositionCache()
     }
 
     /// Toggle the BSP split direction at the focused leaf's parent.
