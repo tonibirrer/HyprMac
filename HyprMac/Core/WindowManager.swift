@@ -477,6 +477,22 @@ class WindowManager {
             let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
             return self.config.windowRules.sortPriority(bundleID: bundleID)
         }
+        // full-height rule: the trees ask on every structural change and
+        // before layout, so the closure must stay cheap (bundle lookup only)
+        tilingEngine.fullHeight = { [weak self] window in
+            guard let self, !self.config.windowRules.isEmpty else { return false }
+            let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+            return self.config.windowRules.isFullHeight(bundleID: bundleID)
+        }
+        // sticky rules (Hyprland's `pin`): resolved live from the owner
+        // cache so a rule edit applies on the very next switch.
+        workspaceManager.stickyWorkspaces = config.stickyWorkspaces
+        workspaceManager.isStickyWindow = { [weak self] wid in
+            guard let self, !self.config.windowRules.isEmpty,
+                  let pid = self.stateCache.windowOwners[wid] else { return false }
+            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            return self.config.windowRules.isSticky(bundleID: bundleID)
+        }
 
         wallpaperManager = WallpaperManager(workspaceManager: workspaceManager,
                                             displayManager: displayManager,
@@ -680,15 +696,34 @@ class WindowManager {
             }.store(in: &configObservers)
 
         // sort-priority edits reorder existing tiles, so a rule change
-        // retiles immediately instead of waiting for the next new window.
+        // retiles immediately instead of waiting for the next new window;
+        // a sticky edit pulls the app onto the visible opted-in workspaces.
         // (workspace pins are still only evaluated at window discovery.)
+        // @Published emits in willSet — defer one runloop turn so the
+        // sortPriority / isStickyWindow closures read the NEW rules.
         config.$windowRules
             .dropFirst()
             .removeDuplicates()
             .sink { [weak self] _ in
-                guard let self = self else { return }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.reconcileStickyWindows()
+                    self.animatedRetile()
+                    hyprLog(.debug, .lifecycle, "window rules updated — retiled visible workspaces")
+                }
+            }.store(in: &configObservers)
+
+        // opting a workspace in/out changes where sticky windows may live
+        // right now — carry them onto the visible opted-in workspaces.
+        config.$stickyWorkspaces
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] workspaces in
+                guard let self else { return }
+                self.workspaceManager.stickyWorkspaces = workspaces
+                self.reconcileStickyWindows()
                 self.animatedRetile()
-                hyprLog(.debug, .lifecycle, "window rules updated — retiled visible workspaces")
+                hyprLog(.notice, .lifecycle, "sticky workspaces updated: \(workspaces.sorted())")
             }.store(in: &configObservers)
 
         config.$disabledMonitors
@@ -1518,7 +1553,35 @@ class WindowManager {
         let allWindows = accessibility.getAllWindows()
         classifyAndAssign(allWindows)
         distributeWindowsAcrossWorkspaces()
+        reconcileStickyWindows(allWindows)
         tileAllVisibleSpaces()
+    }
+
+    /// Carry sticky windows onto every visible workspace that opts in.
+    ///
+    /// The switch path carries incrementally; this is the bulk version
+    /// for moments where assignments were rewritten or the rules changed
+    /// under the windows: startup / Retile All (distribution may have
+    /// put a sticky app on a hidden workspace), rule or opt-in edits,
+    /// and monitor reconciles. Floaters pulled from a hidden workspace
+    /// restore their saved frame; tiles are placed by the retile that
+    /// callers run afterwards.
+    private func reconcileStickyWindows(_ windows: [HyprWindow]? = nil) {
+        guard !workspaceManager.stickyWorkspaces.isEmpty, !config.windowRules.isEmpty else { return }
+        let allWindows = windows ?? accessibility.getAllWindows()
+        // linked mode: every screen shows the same workspace — one pass
+        let screens = workspaceManager.linkedMonitors
+            ? Array(workspaceManager.enabledScreensLeftToRight().prefix(1))
+            : workspaceManager.enabledScreensLeftToRight()
+        for screen in screens {
+            let ws = workspaceManager.workspaceForScreen(screen)
+            let carried = workspaceOrchestrator.carryStickyWindows(into: ws, allWindows: allWindows)
+            for wid in carried where stateCache.floatingWindowIDs.contains(wid) {
+                if let w = findWindow(wid, in: allWindows) {
+                    workspaceManager.restoreFloatingFrame(w)
+                }
+            }
+        }
     }
 
     /// Classification half of the snapshot: capture original frames,
@@ -1586,6 +1649,9 @@ class WindowManager {
         )
         let allWindows = accessibility.getAllWindows()
         classifyAndAssign(allWindows)
+        // visible workspaces may have changed (monitor came/went, link
+        // toggled) — sticky windows follow before the hidden ones re-park
+        reconcileStickyWindows(allWindows)
         reparkHiddenWorkspaceWindows(allWindows)
         tileAllVisibleSpaces(windows: allWindows)
     }

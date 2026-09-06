@@ -91,6 +91,34 @@ A manual swap that violates a priority survives only until the next
 membership change. The single-window `addWindow` path applies the
 same reorder after its insert; scratchpad trees are exempt.
 
+## Full-height columns
+
+`WindowRule.fullHeight`, resolved through `TilingEngine.fullHeight`
+and installed on every tree as `BSPTree.isFullHeight`, guarantees a
+window a full-height column. Two mechanisms:
+
+1. **Insert direction** — `BSPTree.splitDirection(forLeaf:rect:)`
+   returns `.horizontal` (left | right) for a leaf whose tenant is
+   full height, regardless of aspect ratio. Both insert paths
+   (`LayoutEngine.fittingLeaf` and `BSPTree.smartInsert`) use it for
+   the child-slot minimum and the pair-fit check. A full-height
+   *newcomer* additionally has its candidate leaves re-ranked so slots
+   with no top/bottom split above them come first (shallowest first)
+   — see `BSPTree.hasStackedAncestor`.
+2. **Column lock** — `BSPNode.forcedColumn` makes
+   `BSPNode.direction(for:)` return `.horizontal`, ahead of
+   `splitOverride`. `BSPTree.applyFullHeight` clears every lock and
+   re-locks every ancestor of every full-height leaf; the tree calls
+   it after `insert`, `smartInsert`, `remove`, `swap` and
+   `assignWindows(inOrder:)`, and the engine calls it at the end of
+   `updateTreeMembership` (after the sort-priority reorder) and at the
+   top of `retile` (so a rule edit lands on the next layout).
+
+Because the lock is derived state, a full-height window leaving a
+subtree releases it on the same pass. `togglesplit` on a locked node
+still writes `splitOverride` but has no visible effect. Snapshots
+capture the flag so speculative swap trials restore it.
+
 ## Linked monitors
 
 With `linkedMonitors` on, every enabled screen shows the same

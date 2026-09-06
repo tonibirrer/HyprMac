@@ -30,6 +30,8 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
 | 📌 **Window Rules** *(fork)* | Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style |
+| 🧷 **Sticky Apps** *(fork)* | Hyprland's `pin`, extended to tiles: chosen apps follow you across the workspaces that opt in |
+| 🏛 **Full-Height Apps** *(fork)* | Per-app guarantee of a full-height column in the dwindle layout, master-layout style |
 | 🔗 **Linked Monitors** *(fork)* | Toggle: all monitors show one workspace, tiles load-balanced across screens by size |
 | 🪗 **Accordion Mode** *(fork)* | AeroSpace-style stacked layout when only the chosen screen (default: built-in) is connected, with configurable side peek; the tiled layout is kept in the background and restored when monitors return |
 | 🔌 **IPC + sketchybar** *(fork)* | Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators |
@@ -144,15 +146,20 @@ Hyprland-style per-app rules, modeled on `windowrule = <effect>, class:...`. Eac
 - **Sort priority** — keeps the app's tiles at a fixed end of the dwindle order: higher priority tiles further **top-left**, lower further **bottom-right**, 0 (default) leaves the window in plain insertion order. So `"sortPriority": -1` on Mattermost means it always ends up in the rightmost tile, no matter which order your apps opened in. (Hyprland has no native equivalent — the request was [declined upstream](https://github.com/hyprwm/Hyprland/issues/5388) — but per-class window rules are the idiomatic place for it.)
 - **Focus on activate** (`"focusOnActivate": true`, the UI's "Activate") — Hyprland's `focus_on_activate` / `windowrule = activate`, per app: always honor the app's activation requests and switch to its workspace even without a click or keystroke. By default, activations of apps with no visible window are honored only when a user gesture (recent click, recent ⌘ keystroke, or a launcher as the previous app) proves intent — a terminal self-raising when a background job prints must not yank the workspace. Set this on your browser so a URL opened from another app (an SSO login from the terminal, e.g.) still takes you there.
 
-Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9 or "—" for no pin, per-rule "Follow" checkbox, sort stepper), or directly in `~/Library/Application Support/HyprMac/config.json`:
+- **Sticky** (`"sticky": true`) — Hyprland's `windowrule = pin` ("show it on all workspaces"), per app. The app's windows follow you across every workspace that opts in; see [Sticky Apps](#sticky-apps-fork-feature) below.
+- **Full height** (`"fullHeight": true`) — the app's tiles always span the full tiled height. Hyprland's dwindle has no per-window equivalent (its `split_width_multiplier` and `preserve_split` are global); the semantics come from Hyprland's **master layout**, where a master window is a full-height column and slaves stack beside it. See [Full-Height Apps](#full-height-apps-fork-feature).
+
+Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9 or "—" for no pin, per-rule "Follow" / "Activate" / "Sticky" checkboxes, sort stepper), or directly in `~/Library/Application Support/HyprMac/config.json`:
 
 ```json
 "windowRules": [
   { "bundleID": "com.mitchellh.ghostty",    "workspace": 2 },
   { "bundleID": "dev.zed.Zed",              "workspace": 2, "sortPriority": 1 },
   { "bundleID": "md.obsidian",              "workspace": 3, "silent": true },
-  { "bundleID": "Mattermost.Desktop",       "workspace": 0, "sortPriority": -1 }
-]
+  { "bundleID": "Mattermost.Desktop",       "workspace": 0, "sortPriority": -1, "sticky": true, "fullHeight": true },
+  { "bundleID": "app.zen-browser.zen",      "workspace": 0, "sticky": true, "fullHeight": true }
+],
+"stickyWorkspaces": [1, 2, 3]
 ```
 
 Find an app's bundle ID with `mdls -name kMDItemCFBundleIdentifier -r /Applications/App.app`.
@@ -166,6 +173,43 @@ Semantics:
 - Since workspaces are statically anchored to monitors, a rule also decides which monitor the app lands on — e.g. with two monitors, odd workspaces pin to the left screen and even to the right.
 - Sort priority, by contrast, is enforced on **every membership change** (a window opens or is discovered) and immediately when you edit a rule. It reorders only which window sits in which tile — tree shape and split ratios stay put. Equal-priority windows keep their relative order, so manual swaps between unruled windows survive; a swap that violates a priority is undone the next time a window opens.
 - `"workspace": 0` (the UI's "—") means no pin — the rule only carries a sort priority.
+
+---
+
+## Sticky Apps *(fork feature)*
+
+Hyprland's `pin` (`windowrule = pin` / the `pin` dispatcher) shows a window "on all workspaces" — but only floating windows, and always on every workspace of the monitor. HyprMac adapts the idea in two ways: sticky works for **tiled** windows too, and **workspaces opt in** individually, so a chat client and a browser can ride along on your working workspaces while a presentation or focus workspace stays clean.
+
+- Mark the app **Sticky** in Settings → Layout → Window Rules (`"sticky": true`; no workspace pin needed).
+- Tick **Sticky** on each workspace that should show sticky apps in Settings → Layout → Workspaces (`"stickyWorkspaces": [1, 2, 3]`). Nothing happens until at least one workspace opts in.
+
+Semantics:
+
+- A sticky window is a member of exactly one workspace at a time and is **carried** into the workspace being shown on its monitor, if that workspace opts in. The carried tile is removed from the workspace it leaves and inserted into the new one's layout — sort priority applies, so `"sortPriority": -1` keeps Mattermost in the rightmost tile everywhere. Its former slot on the old workspace collapses; when you come back, the tile is re-inserted.
+- Switching to a workspace that does **not** opt in hides sticky windows like any other window. The next switch to an opted-in workspace on that monitor brings them back.
+- Sticky windows stay on their monitor: workspaces are statically anchored, and a sticky window on the left screen's workspaces never jumps to the right screen. With linked monitors the workspace spans all screens and the balancer decides which screen the tile lands on.
+- Explicit moves still work — `Hypr+Shift+N` sends a sticky window to workspace N (even a non-opt-in one) and it stays there until an opt-in workspace is shown on that monitor.
+- Floating sticky windows keep their frame and simply stay put across switches (Hyprland's exact behavior).
+- Capacity is respected: if the target workspace is already at its dwindle depth, the sticky tile stays behind (hidden) rather than being auto-floated.
+- Editing a rule or the opt-in list, "Retile All", startup, and monitor changes all run a reconcile that carries sticky windows onto the currently visible opted-in workspaces.
+- After a switch, focus goes to the workspace's own windows first — the sticky app was already in front of you.
+- IPC: `hyprmacctl workspaces` reports `"sticky": true` for opted-in workspaces and `hyprmacctl windows <ws>` marks sticky windows, so status bars can render them differently.
+
+---
+
+## Full-Height Apps *(fork feature)*
+
+Dwindle's spiral alternates split axes, so the second window on a wide screen gets cut in half the moment a third one opens. For a browser or a chat client you usually want a column that keeps its full height no matter what opens next. Hyprland's dwindle has nothing per window for this; its master layout does (the master area is a full-height column, `orientation = left`, slaves stacked beside it), and so does its scrolling layout (every window is a column). HyprMac takes the master semantics and makes them a per-app window rule: **Full height** in Settings → Layout → Window Rules, or `"fullHeight": true`.
+
+How it works inside the BSP tree:
+
+- A full-height tile only ever splits **left | right**. A new window opening "into" it lands beside it, never below it.
+- Every split above a full-height tile is **column-locked**: it always divides left | right, whatever the aspect ratio says and whatever `togglesplit` asks for. So with Zen and Mattermost both full height, three windows give three columns; a fourth stacks under the third, never under Zen or Mattermost.
+- A full-height window that opens into an existing layout prefers a slot that is already a column (shallowest first) so it does not pry open someone else's stack.
+- The lock follows the window, not the slot: close or swap the window away and the column is released on the same pass, and dwindle stacking resumes there.
+- Column widths follow the usual split ratios (50 % for the first column, 25 % for the next, and so on); drag-resize a boundary to change them, the resize sticks like any other.
+- Combine with a **sort priority** so the column stays at a screen edge; without one, a full-height window still gets a column, just wherever it opened.
+- Depth still applies: the max-splits cap is unchanged, and if a full-height column would push the layout past it the window auto-floats like any other overflow.
 
 ---
 

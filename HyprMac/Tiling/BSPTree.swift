@@ -17,6 +17,58 @@ import Foundation
 class BSPTree {
     var root: BSPNode = BSPNode()
 
+    /// Full-height window rule predicate (per app, via
+    /// `TilingEngine.fullHeight`). A full-height window always gets a
+    /// column: its leaf only ever splits left | right, and every ancestor
+    /// is column-locked (`BSPNode.forcedColumn`) so no stack above it can
+    /// cut its height. Default: nothing is full height.
+    var isFullHeight: (HyprWindow) -> Bool = { _ in false }
+
+    /// Recompute the column locks from the current leaf → window mapping:
+    /// clear every `forcedColumn`, then lock every ancestor of every
+    /// full-height leaf. Idempotent; called after each structural or
+    /// mapping change (`insert`, `remove`, `swap`, `assignWindows`) and
+    /// by the engine before layout, so a lock never outlives the window
+    /// that earned it.
+    func applyFullHeight() {
+        func clear(_ node: BSPNode) {
+            node.forcedColumn = false
+            if let l = node.left { clear(l) }
+            if let r = node.right { clear(r) }
+        }
+        clear(root)
+        for leaf in root.occupiedLeavesInOrder() {
+            guard let w = leaf.window, isFullHeight(w) else { continue }
+            var node = leaf.parent
+            while let p = node {
+                p.forcedColumn = true
+                node = p.parent
+            }
+        }
+    }
+
+    /// Direction the split of `leaf` would take: a full-height tenant
+    /// forces left | right so the newcomer lands beside it, not under it;
+    /// otherwise the node's own rule (override, then aspect ratio).
+    func splitDirection(forLeaf leaf: BSPNode, rect: CGRect) -> SplitDirection {
+        if let w = leaf.window, isFullHeight(w) { return .horizontal }
+        return leaf.direction(for: rect)
+    }
+
+    /// `true` when some ancestor of `leaf` currently splits top / bottom
+    /// — inserting a full-height window here would force that stack into
+    /// columns. Used to steer full-height newcomers toward slots that are
+    /// already columns.
+    func hasStackedAncestor(_ leaf: BSPNode, in rect: CGRect, gap: CGFloat, padding: OuterPadding) -> Bool {
+        var node = leaf.parent
+        while let p = node {
+            if let r = rectForNode(p, in: rect, gap: gap, padding: padding),
+               p.direction(for: r) == .vertical { return true }
+            node = p.parent
+        }
+        return false
+    }
+
     /// Insert a window via plain dwindle: split the deepest-right leaf.
     ///
     /// Used as a fallback path when smart-insert isn't applicable (empty tree,
@@ -41,6 +93,7 @@ class BSPTree {
         }
 
         target.insert(window)
+        applyFullHeight()
         return true
     }
 
@@ -71,7 +124,7 @@ class BSPTree {
             guard leaf.depth < maxDepth else { continue }
             guard let leafRect = rectForNodeHelper(node: root, target: leaf, rect: padded, gap: gap) else { continue }
 
-            let dir = leaf.direction(for: leafRect)
+            let dir = splitDirection(forLeaf: leaf, rect: leafRect)
             let childMin: CGFloat
             switch dir {
             case .horizontal:
@@ -82,6 +135,7 @@ class BSPTree {
 
             if childMin >= minSlotDimension {
                 leaf.insert(window)
+                applyFullHeight()
                 hyprLog(.debug, .lifecycle, "smart insert at depth \(leaf.depth) (\(Int(leafRect.width))x\(Int(leafRect.height)))")
                 return true
             }
@@ -90,6 +144,7 @@ class BSPTree {
         // no leaf meets the minimum — fall back to deepest-right anyway
         if let fallback = leaves.first(where: { $0.depth < maxDepth }) {
             fallback.insert(window)
+            applyFullHeight()
             hyprLog(.debug, .lifecycle, "smart insert fallback — no slot met \(Int(minSlotDimension))px minimum")
             return true
         }
@@ -109,6 +164,7 @@ class BSPTree {
         }
 
         node.remove()
+        applyFullHeight()
     }
 
     /// Rebuild the tree from scratch in left-to-right window order.
@@ -140,6 +196,7 @@ class BSPTree {
         guard let nodeA = root.find(a), let nodeB = root.find(b) else { return }
         nodeA.window = b
         nodeB.window = a
+        applyFullHeight()
     }
 
     /// Reassign window references onto the occupied leaves in
@@ -153,6 +210,7 @@ class BSPTree {
         for (leaf, window) in zip(leaves, windows) {
             leaf.window = window
         }
+        applyFullHeight()
     }
 
     /// Hyprland-style togglesplit. Flips the parent node's split direction
@@ -179,15 +237,12 @@ class BSPTree {
 
     private func resolveDirectionHelper(node: BSPNode, target: BSPNode, rect: CGRect, gap: CGFloat) -> SplitDirection? {
         if node === target {
-            if let forced = node.splitOverride { return forced }
-            return rect.width >= rect.height ? .horizontal : .vertical
+            return node.direction(for: rect)
         }
 
         guard let l = node.left, let r = node.right else { return nil }
 
-        let dir: SplitDirection
-        if let forced = node.splitOverride { dir = forced }
-        else { dir = rect.width >= rect.height ? .horizontal : .vertical }
+        let dir = node.direction(for: rect)
 
         let halfGap = gap / 2
 
@@ -428,6 +483,7 @@ class BSPTree {
             let splitRatio: CGFloat
             let userSetRatio: Bool
             let splitOverride: SplitDirection?
+            let forcedColumn: Bool
             let window: HyprWindow?
         }
     }
@@ -439,6 +495,7 @@ class BSPTree {
                                              splitRatio: node.splitRatio,
                                              userSetRatio: node.userSetRatio,
                                              splitOverride: node.splitOverride,
+                                             forcedColumn: node.forcedColumn,
                                              window: node.window))
             if let left = node.left { walk(left) }
             if let right = node.right { walk(right) }
@@ -452,6 +509,7 @@ class BSPTree {
             state.node.splitRatio = state.splitRatio
             state.node.userSetRatio = state.userSetRatio
             state.node.splitOverride = state.splitOverride
+            state.node.forcedColumn = state.forcedColumn
             state.node.window = state.window
         }
     }

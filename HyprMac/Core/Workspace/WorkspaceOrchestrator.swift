@@ -110,14 +110,29 @@ final class WorkspaceOrchestrator {
         // take ~0.5s and the desktop image change should feel instant).
         NotificationCenter.default.post(name: .hyprMacWorkspaceWillShow, object: nil)
 
+        // sticky windows follow into an opted-in workspace: a carried
+        // window that was visible on the displaced workspace must not be
+        // parked; one coming from a hidden workspace shows with the
+        // incoming set (floaters restore their saved frame there).
+        var toHide = result.toHide
+        var toShow = result.toShow
+        let carried = carryStickyWindows(into: number, allWindows: allWindows)
+        for wid in carried {
+            if toHide.remove(wid) != nil {
+                // stayed on screen — a stale saved frame must not yank it
+                workspaceManager.clearSavedFloatingFrame(for: wid)
+            }
+            toShow.insert(wid)
+        }
+
         // batch: hide old + restore floating new in one tight pass
-        for wid in result.toHide {
+        for wid in toHide {
             if let w = allWindows.first(where: { $0.windowID == wid }) ?? stateCache.cachedWindows[wid] {
                 if stateCache.floatingWindowIDs.contains(wid) { workspaceManager.saveFloatingFrame(w) }
                 workspaceManager.hideInCorner(w, on: result.screen)
             }
         }
-        for wid in result.toShow where stateCache.floatingWindowIDs.contains(wid) {
+        for wid in toShow where stateCache.floatingWindowIDs.contains(wid) {
             if let w = allWindows.first(where: { $0.windowID == wid }) ?? stateCache.cachedWindows[wid] {
                 workspaceManager.restoreFloatingFrame(w)
             }
@@ -128,9 +143,14 @@ final class WorkspaceOrchestrator {
 
         // focus best tiled window on the new workspace; if none, fall back to
         // any floating window before giving up. only warp+hide if truly empty.
-        let newWorkspaceWindows = allWindows.filter { result.toShow.contains($0.windowID) }
-        let tiled = newWorkspaceWindows.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
-        if let best = tiled ?? newWorkspaceWindows.first {
+        // the workspace's own windows win over carried sticky ones — the user
+        // switched here for this workspace's content, and the sticky app
+        // was already in front of them.
+        let newWorkspaceWindows = allWindows.filter { toShow.contains($0.windowID) }
+        let own = newWorkspaceWindows.filter { !carried.contains($0.windowID) }
+        let tiled = own.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
+            ?? newWorkspaceWindows.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
+        if let best = tiled ?? own.first ?? newWorkspaceWindows.first {
             best.focus()
             cursorManager.warpToCenter(of: best)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")
@@ -142,6 +162,61 @@ final class WorkspaceOrchestrator {
         }
 
         NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
+    }
+
+    // MARK: - sticky windows
+
+    /// Pull sticky windows (Hyprland's `pin`, per app) onto `workspace`,
+    /// which is — or is about to be — visible on its home screen(s).
+    ///
+    /// `WorkspaceManager.stickyWindowsToCarry` picks the candidates; this
+    /// applies the dwindle-depth capacity check (a sticky tile that would
+    /// not fit stays where it is rather than auto-floating), detaches
+    /// tiled windows from their old trees, and reassigns them. The retile
+    /// that follows inserts the tiles into the target tree; floaters keep
+    /// their frame and are shown by the caller.
+    ///
+    /// Called from `switchWorkspace` (after the mapping flip) and from
+    /// `WindowManager`'s sticky reconcile (startup, Retile All, rule or
+    /// opt-in edits, monitor changes).
+    ///
+    /// - Returns: the window ids that were carried.
+    @discardableResult
+    func carryStickyWindows(into workspace: Int, allWindows: [HyprWindow]) -> Set<CGWindowID> {
+        let candidates = workspaceManager.stickyWindowsToCarry(into: workspace)
+        guard !candidates.isEmpty else { return [] }
+
+        // capacity: live tiled windows on the target plus carried tiles
+        // must stay within the dwindle depth (summed over screens in
+        // linked mode — the balancer spreads the strip across all of them).
+        let homes = workspaceManager.homeScreensForWorkspace(workspace)
+        let capacity = homes.reduce(0) { $0 + (1 << tilingEngine.maxDepth(for: $1)) }
+        var tiledCount = workspaceManager.windowIDs(onWorkspace: workspace)
+            .subtracting(stateCache.hiddenWindowIDs)
+            .filter { !stateCache.floatingWindowIDs.contains($0) }
+            .count
+
+        var carried: Set<CGWindowID> = []
+        for wid in candidates.sorted() {
+            guard let from = workspaceManager.workspaceFor(wid) else { continue }
+            let window = allWindows.first { $0.windowID == wid } ?? stateCache.cachedWindows[wid]
+            let floating = stateCache.floatingWindowIDs.contains(wid)
+            let live = !stateCache.hiddenWindowIDs.contains(wid)
+            if !floating && live {
+                guard tiledCount < capacity else {
+                    hyprLog(.notice, .workspace, "sticky: ws\(workspace) full (\(tiledCount)/\(capacity)) — '\(window?.title ?? "?")' (\(wid)) stays on ws\(from)")
+                    continue
+                }
+                tiledCount += 1
+            }
+            if !floating, let window {
+                tilingEngine.detachWindow(window, fromWorkspace: from)
+            }
+            workspaceManager.moveWindow(wid, toWorkspace: workspace)
+            carried.insert(wid)
+            hyprLog(.notice, .workspace, "sticky: carried '\(window?.title ?? "?")' (\(wid)) ws\(from) → ws\(workspace) floating=\(floating)")
+        }
+        return carried
     }
 
     // MARK: - move focused window to workspace

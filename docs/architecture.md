@@ -216,6 +216,21 @@ first launch and on explicit "Retile All". Discovery polling is
 suppressed through the settle window so drift detection cannot
 reassign windows from their OS-shuffled mid-transition positions.
 
+**Sticky windows** (Hyprland's `pin`, per app via `WindowRule.sticky`):
+a sticky window still has exactly one workspace assignment, but on a
+switch `WorkspaceOrchestrator.carryStickyWindows` reassigns it into the
+incoming workspace when that workspace is in
+`UserConfig.stickyWorkspaces`. `WorkspaceManager.stickyWindowsToCarry`
+picks candidates (sticky windows on hidden workspaces homed on the
+target's screen — any hidden workspace in linked mode; never ws 0);
+the orchestrator applies the dwindle-depth capacity check, detaches
+tiled candidates from their old tree without retiling
+(`TilingEngine.detachWindow`), moves them, and folds them out of the
+switch's `toHide` / into its `toShow` set before the park pass. The
+retile that follows inserts the tile into the target tree.
+`WindowManager.reconcileStickyWindows` runs the same carry in bulk for
+startup, Retile All, rule / opt-in edits, and display reconciles.
+
 See `docs/desktop-switching-notes.md` for the deeper implementation
 notes on workspace switching.
 

@@ -76,12 +76,27 @@ struct LayoutEngine {
                      maxDepth: Int,
                      rect: CGRect,
                      minimumSize: (HyprWindow?) -> CGSize) -> BSPNode? {
-        let leaves = tree.root.allLeavesRightToLeft()
+        var leaves = tree.root.allLeavesRightToLeft()
+        // a full-height newcomer prefers a slot that is already a column
+        // (no top/bottom split above it), shallowest first — landing in a
+        // stack would column-lock that whole stack. dwindle order remains
+        // the tiebreak within each group.
+        if let window, tree.isFullHeight(window) {
+            let ranked = leaves.enumerated().map { (offset, leaf) in
+                (leaf: leaf, offset: offset,
+                 stacked: tree.hasStackedAncestor(leaf, in: rect, gap: gapSize, padding: outerPadding))
+            }
+            leaves = ranked.sorted { a, b in
+                if a.stacked != b.stacked { return !a.stacked }
+                if !a.stacked, a.leaf.depth != b.leaf.depth { return a.leaf.depth < b.leaf.depth }
+                return a.offset < b.offset
+            }.map { $0.leaf }
+        }
         for pass in 0...1 {
             for leaf in leaves {
                 guard leaf.depth < maxDepth else { continue }
                 guard let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) else { continue }
-                let dir = leaf.direction(for: leafRect)
+                let dir = tree.splitDirection(forLeaf: leaf, rect: leafRect)
 
                 if pass == 0 {
                     let (a, b) = splitRects(leafRect, dir: dir)
@@ -118,6 +133,7 @@ struct LayoutEngine {
         }
 
         leaf.insert(window)
+        tree.applyFullHeight()
         if let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) {
             hyprLog(.debug, .lifecycle, "smart insert fit at depth \(leaf.depth) (\(Int(leafRect.width))x\(Int(leafRect.height)))")
         }

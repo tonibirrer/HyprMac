@@ -45,6 +45,14 @@ class BSPNode {
     /// restructure (insert / remove on this node) clears it.
     var splitOverride: SplitDirection?
 
+    /// Column lock from the full-height window rule: this node is an
+    /// ancestor of a full-height leaf, so it always splits left | right.
+    /// Wins over `splitOverride` and the aspect-ratio default. Derived
+    /// state — `BSPTree.applyFullHeight` recomputes it from the current
+    /// leaf → window mapping, so a full-height window leaving the tree
+    /// releases the column on the next pass.
+    var forcedColumn: Bool = false
+
     var window: HyprWindow?
     var left: BSPNode?
     var right: BSPNode?
@@ -80,6 +88,7 @@ class BSPNode {
         self.splitRatio = TilingConfig.defaultRatio
         self.userSetRatio = false
         self.splitOverride = nil
+        self.forcedColumn = false
 
         self.left = BSPNode(window: existing)
         self.left?.parent = self
@@ -104,6 +113,7 @@ class BSPNode {
         parent.splitRatio = sibling?.splitRatio ?? TilingConfig.defaultRatio
         parent.userSetRatio = sibling?.userSetRatio ?? false
         parent.splitOverride = sibling?.splitOverride
+        parent.forcedColumn = sibling?.forcedColumn ?? false
 
         parent.left?.parent = parent
         parent.right?.parent = parent
@@ -210,10 +220,11 @@ class BSPNode {
         return isEmpty
     }
 
-    /// Split direction for `rect`. `splitOverride` wins when set;
-    /// otherwise dwindle picks the longer axis. The `>=` biases
-    /// horizontal on exact squares.
+    /// Split direction for `rect`. A column lock (`forcedColumn`) wins,
+    /// then `splitOverride`; otherwise dwindle picks the longer axis.
+    /// The `>=` biases horizontal on exact squares.
     func direction(for rect: CGRect) -> SplitDirection {
+        if forcedColumn { return .horizontal }
         if let forced = splitOverride { return forced }
         return rect.width >= rect.height ? .horizontal : .vertical
     }

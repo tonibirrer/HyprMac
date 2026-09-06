@@ -1,8 +1,9 @@
-// "Workspaces" panel: per-workspace accent color and desktop image.
-// The color drives the focus border on that workspace and is served
-// over IPC so status bars (sketchybar) can color-match. Switching to a
-// workspace swaps its monitor's wallpaper; workspaces without an image
-// keep whatever is currently set.
+// "Workspaces" panel: per-workspace accent color, desktop image, and
+// sticky opt-in. The color drives the focus border on that workspace
+// and is served over IPC so status bars (sketchybar) can color-match.
+// Switching to a workspace swaps its monitor's wallpaper; workspaces
+// without an image keep whatever is currently set. "Sticky" opts the
+// workspace into showing sticky-ruled apps (Window Rules panel).
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,7 +14,7 @@ struct WallpapersPanel: View {
 
     var body: some View {
         HyprPanel("Workspaces",
-                  footer: "The accent color tints the focus border on that workspace and is exposed over IPC for status bars. The wallpaper swaps in when the workspace is shown; workspaces without one keep the current desktop image.") {
+                  footer: "The accent color tints the focus border on that workspace and is exposed over IPC for status bars. The wallpaper swaps in when the workspace is shown; workspaces without one keep the current desktop image. \"Sticky\" opts the workspace into showing sticky apps from Window Rules — they follow you between opted-in workspaces on their monitor.") {
             ForEach(1...9, id: \.self) { ws in
                 wallpaperRow(ws, isLast: ws == 9)
             }
@@ -57,6 +58,15 @@ struct WallpapersPanel: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            Toggle("Sticky", isOn: Binding(
+                get: { config.stickyWorkspaces.contains(ws) },
+                set: { on in
+                    if on { config.stickyWorkspaces.insert(ws) } else { config.stickyWorkspaces.remove(ws) }
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.hyprBody)
+            .help("Show sticky apps (Window Rules → Sticky) on this workspace")
             Button("Choose…") { pickImage(for: ws) }
                 .controlSize(.small)
             if path != nil {

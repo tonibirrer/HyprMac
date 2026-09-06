@@ -60,6 +60,15 @@ class WorkspaceManager {
     /// cycling, raise-behind, dim carve-outs, and discovery for free.
     var scratchpadVisible = false
 
+    /// Workspaces (1...9) that opt into showing sticky windows. Mirrors
+    /// `UserConfig.stickyWorkspaces`; set by the owner.
+    var stickyWorkspaces: Set<Int> = []
+
+    /// Owner-supplied predicate: `true` when the window's app carries a
+    /// sticky window rule (Hyprland's `pin`). Evaluated live so rule
+    /// edits apply on the next switch without re-indexing.
+    var isStickyWindow: (CGWindowID) -> Bool = { _ in false }
+
     init(displayManager: DisplayManager) {
         self.displayManager = displayManager
     }
@@ -345,6 +354,37 @@ class WorkspaceManager {
     /// caller substitutes the frame it knows it placed.
     func setSavedFloatingFrame(_ frame: CGRect, for id: CGWindowID) {
         savedFloatingFrames[id] = frame
+    }
+
+    /// Sticky windows that should follow the user into `workspace`.
+    ///
+    /// Hyprland's pinned windows show on every workspace of their
+    /// monitor; here a sticky window is a member of exactly one workspace
+    /// at a time and is *carried* — reassigned — into the workspace being
+    /// shown, provided that workspace opts in. Candidates are sticky
+    /// windows sitting on hidden workspaces anchored to `workspace`'s
+    /// home screen (any hidden workspace in linked mode). Windows on the
+    /// scratchpad (ws 0) and on other monitors' workspaces are never
+    /// carried. Call after the monitor→workspace flip so the displaced
+    /// workspace already counts as hidden; the caller applies capacity
+    /// checks and performs the moves.
+    func stickyWindowsToCarry(into workspace: Int) -> Set<CGWindowID> {
+        guard (1...workspaceCount).contains(workspace),
+              stickyWorkspaces.contains(workspace) else { return [] }
+        let targetHomes = Set(homeScreensForWorkspace(workspace).map { screenID(for: $0) })
+        guard !targetHomes.isEmpty else { return [] }
+        var result: Set<CGWindowID> = []
+        for ws in 1...workspaceCount where ws != workspace && !isWorkspaceVisible(ws) {
+            if !linkedMonitors {
+                // static anchoring: a sticky window stays on its own monitor
+                guard let home = homeScreenForWorkspace(ws),
+                      targetHomes.contains(screenID(for: home)) else { continue }
+            }
+            for wid in windowIDs(onWorkspace: ws) where isStickyWindow(wid) {
+                result.insert(wid)
+            }
+        }
+        return result
     }
 
     /// Result of `switchWorkspace`. `toHide` and `toShow` are window

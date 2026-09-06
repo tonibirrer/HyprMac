@@ -129,6 +129,13 @@ class UserConfig: ObservableObject {
     @Published var workspaceColors: [String: String] {
         didSet { if !isReloading { save() } }
     }
+    // workspaces that opt into showing sticky-ruled apps (WindowRule.sticky).
+    // a sticky window follows the user between these workspaces on its
+    // monitor and hides like any other window on workspaces not listed.
+    // empty = sticky rules have no effect.
+    @Published var stickyWorkspaces: Set<Int> {
+        didSet { if !isReloading { save() } }
+    }
 
     /// Focus-border accent for a window on `workspace` — the workspace's
     /// own color when set, else the global focus border color.
@@ -205,6 +212,7 @@ class UserConfig: ObservableObject {
             self.outerPaddingSides = saved.outerPaddingSides ?? .none
             self.workspaceWallpapers = saved.workspaceWallpapers ?? [:]
             self.workspaceColors = saved.workspaceColors ?? [:]
+            self.stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -227,6 +235,7 @@ class UserConfig: ObservableObject {
             self.outerPaddingSides = .none
             self.workspaceWallpapers = [:]
             self.workspaceColors = [:]
+            self.stickyWorkspaces = []
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -318,7 +327,8 @@ class UserConfig: ObservableObject {
             windowRules: windowRules,
             outerPaddingSides: outerPaddingSides == .none ? nil : outerPaddingSides,
             workspaceWallpapers: workspaceWallpapers.isEmpty ? nil : workspaceWallpapers,
-            workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors)
+            workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors,
+            stickyWorkspaces: stickyWorkspaces.isEmpty ? nil : stickyWorkspaces.sorted())
     }
 
     func resetToDefaults() {
@@ -349,6 +359,7 @@ class UserConfig: ObservableObject {
         outerPaddingSides = .none
         workspaceWallpapers = [:]
         workspaceColors = [:]
+        stickyWorkspaces = []
     }
 
     // resolve the border color — custom hex or brand cyan
@@ -387,6 +398,7 @@ class UserConfig: ObservableObject {
         outerPaddingSides = saved.outerPaddingSides ?? .none
         workspaceWallpapers = saved.workspaceWallpapers ?? [:]
         workspaceColors = saved.workspaceColors ?? [:]
+        stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -432,7 +444,8 @@ extension SavedConfig {
             windowRules: nil,
             outerPaddingSides: nil,
             workspaceWallpapers: nil,
-            workspaceColors: nil)
+            workspaceColors: nil,
+            stickyWorkspaces: nil)
     }
 }
 

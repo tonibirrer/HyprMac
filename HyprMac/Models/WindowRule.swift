@@ -2,8 +2,11 @@
 // identifier, modeled on Hyprland's `windowrule = <effect>, class:...`.
 // Two effects exist: a workspace pin (`windowrule = workspace N`; by
 // default opening a ruled app switches to the target workspace, `silent`
-// moves the window without switching) and a tile sort priority that
-// keeps an app's tiles at a fixed end of the dwindle order.
+// moves the window without switching), a tile sort priority that
+// keeps an app's tiles at a fixed end of the dwindle order, a sticky
+// flag (Hyprland's `pin`) that makes the app's windows follow the user
+// across every workspace that opts in, and a full-height flag that
+// guarantees the app a full-height column in the dwindle layout.
 
 import Foundation
 
@@ -35,16 +38,32 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
     /// another app opening a URL activates them programmatically. Default
     /// off: activations without a user gesture are ignored.
     var focusOnActivate: Bool
+    /// Hyprland's `windowrule = pin` ("show it on all workspaces"), per
+    /// app. Hyprland pins floating windows only and shows them on every
+    /// workspace of their monitor; HyprMac extends this to tiled
+    /// windows — a sticky tile is carried into whichever workspace is
+    /// shown on its monitor — and lets workspaces opt in individually
+    /// via `UserConfig.stickyWorkspaces`. Default off.
+    var sticky: Bool
+    /// The app's tiles always span the full tiled height: the tile only
+    /// ever splits left | right, and every split above it is locked to
+    /// left | right (`BSPNode.forcedColumn`). Hyprland's dwindle has no
+    /// per-window equivalent; this mirrors the master layout, where a
+    /// master window is a full-height column and everything else stacks
+    /// beside it. Default off.
+    var fullHeight: Bool
 
     var id: String { bundleID }
 
     init(bundleID: String, workspace: Int, silent: Bool = false, sortPriority: Int = 0,
-         focusOnActivate: Bool = false) {
+         focusOnActivate: Bool = false, sticky: Bool = false, fullHeight: Bool = false) {
         self.bundleID = bundleID
         self.workspace = workspace
         self.silent = silent
         self.sortPriority = sortPriority
         self.focusOnActivate = focusOnActivate
+        self.sticky = sticky
+        self.fullHeight = fullHeight
     }
 
     // everything but the key fields decodes as optional so hand-edited
@@ -56,6 +75,8 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
         silent = try c.decodeIfPresent(Bool.self, forKey: .silent) ?? false
         sortPriority = try c.decodeIfPresent(Int.self, forKey: .sortPriority) ?? 0
         focusOnActivate = try c.decodeIfPresent(Bool.self, forKey: .focusOnActivate) ?? false
+        sticky = try c.decodeIfPresent(Bool.self, forKey: .sticky) ?? false
+        fullHeight = try c.decodeIfPresent(Bool.self, forKey: .fullHeight) ?? false
     }
 }
 
@@ -81,5 +102,19 @@ extension Array where Element == WindowRule {
     func focusOnActivate(bundleID: String?) -> Bool {
         guard let bundleID else { return false }
         return first { $0.bundleID == bundleID }?.focusOnActivate ?? false
+    }
+
+    /// `true` when the first rule matching `bundleID` marks the app
+    /// sticky. A workspace pin is not required.
+    func isSticky(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return first { $0.bundleID == bundleID }?.sticky ?? false
+    }
+
+    /// `true` when the first rule matching `bundleID` grants the app a
+    /// full-height column. A workspace pin is not required.
+    func isFullHeight(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return first { $0.bundleID == bundleID }?.fullHeight ?? false
     }
 }
