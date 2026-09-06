@@ -284,12 +284,19 @@ and the monitor identity contract (user-facing config keys by
 
 `UserConfig` (the `@Published` SwiftUI-observable surface) →
 `ConfigStore` (raw I/O + iCloud sync) → JSON on disk at
-`~/Library/Application Support/HyprMac/config.json`.
+`~/Library/Application Support/HyprMacExperiments/config.json`. The
+directory (and the iCloud Drive folder, and the IPC sockets) is named
+by `AppIdentity` and is deliberately separate from the stock app's
+`HyprMac/` directory so the two builds never read or rewrite each
+other's config.
 
 `ConfigMigration` handles one-time data migrations and schema
 versioning. Today: the monitor-config split (per-machine
 `maxSplitsPerMonitor` and `disabledMonitors` extracted from the
-synced config). Future schema bumps land here too.
+synced config) and `importUpstreamDirectory`, which on the first
+launch with a dedicated directory copies `config.json` and
+`monitor-config.json` over from the stock app's directory (read-only,
+gated by a marker file). Future schema bumps land here too.
 
 The on-disk JSON wire format for keybinds is frozen — see
 `docs/keybinds-and-actions.md` for the contract.

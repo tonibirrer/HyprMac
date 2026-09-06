@@ -125,10 +125,7 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 
-    private var configURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return support.appendingPathComponent("HyprMac/config.json")
-    }
+    private var configURL: URL { ConfigStore.configPath }
 
     private var configPathDisplay: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path

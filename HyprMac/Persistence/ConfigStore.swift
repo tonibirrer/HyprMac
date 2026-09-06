@@ -24,10 +24,23 @@ final class ConfigStore {
 
     static let configDir: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("HyprMac", isDirectory: true)
+            .appendingPathComponent(AppIdentity.directoryName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+
+    /// The stock HyprMac app's directory. Source of the one-time import in
+    /// `ConfigMigration.importUpstreamDirectory`; never written to.
+    static let upstreamConfigDir: URL = FileManager.default
+        .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        .appendingPathComponent(AppIdentity.upstreamDirectoryName, isDirectory: true)
+
+    init() {
+        // first launch with a dedicated directory: carry the config over
+        // from the shared one so the switch is invisible; the stock app
+        // keeps its files untouched.
+        ConfigMigration.importUpstreamDirectory(from: Self.upstreamConfigDir, to: Self.configDir)
+    }
 
     // main config — may be a symlink to iCloud when sync is on
     static let configPath = configDir.appendingPathComponent("config.json")
@@ -38,7 +51,7 @@ final class ConfigStore {
     // iCloud Drive path — no entitlements needed, just plain file access
     var iCloudConfigURL: URL {
         let iCloudDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/HyprMac", isDirectory: true)
+            .appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs/\(AppIdentity.iCloudDirectoryName)", isDirectory: true)
         return iCloudDir.appendingPathComponent("config.json")
     }
 

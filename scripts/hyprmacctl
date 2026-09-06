@@ -11,12 +11,12 @@
 #                                   workspace>>FOCUSED>>PREV
 #                                   windowschanged>>
 #
-# Requires HyprMac(Experiments) to be running. Sockets live in the app's
-# Application Support directory.
+# Requires HyprMacExperiments to be running. Sockets live in the app's
+# Application Support directory; override with HYPRMAC_DIR.
 
 set -euo pipefail
 
-DIR="$HOME/Library/Application Support/HyprMac"
+DIR="${HYPRMAC_DIR:-$HOME/Library/Application Support/HyprMacExperiments}"
 CMD_SOCK="$DIR/hyprmac.sock"
 EVT_SOCK="$DIR/hyprmac.events.sock"
 

@@ -148,10 +148,12 @@ to round-trip both shapes.
 
 Two on-disk files:
 
-- `~/Library/Application Support/HyprMac/config.json` — main config.
+- `~/Library/Application Support/HyprMacExperiments/config.json` — main config.
   Synced via iCloud Drive when the user enables sync (resolves to
-  a symlink into `~/Library/Mobile Documents/com~apple~CloudDocs/HyprMac/`).
-- `~/Library/Application Support/HyprMac/monitor-config.json` —
+  a symlink into `~/Library/Mobile Documents/com~apple~CloudDocs/HyprMacExperiments/`).
+  This fork never touches the stock app's `HyprMac/` directory apart
+  from a one-time read-only import on first launch.
+- `~/Library/Application Support/HyprMacExperiments/monitor-config.json` —
   per-machine settings. Local only, never synced.
   `maxSplitsPerMonitor` and `disabledMonitors` live here. These
   used to live in `config.json`, but per-machine settings round-tripping
@@ -183,7 +185,7 @@ silently rather than crashing.
 
 ## Hand-editing config.json
 
-Config lives at `~/Library/Application Support/HyprMac/config.json`
+Config lives at `~/Library/Application Support/HyprMacExperiments/config.json`
 (delete to reset to defaults). Keybind entries look like:
 
 ```json
