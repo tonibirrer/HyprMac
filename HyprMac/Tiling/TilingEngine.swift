@@ -1298,6 +1298,53 @@ class TilingEngine {
         retile(key: key, screen: screen)
     }
 
+    /// Resize the focused window by moving the nearest matching-axis split
+    /// boundary in `direction`. Walks from the leaf upward to find the first
+    /// ancestor whose split direction matches the resize axis, then shifts
+    /// its `splitRatio` by `resizeStep` toward the arrow. Flags the ancestor
+    /// `userSetRatio = true` so the adjustment survives retiles.
+    func resizeInDirection(_ window: HyprWindow, direction: Direction,
+                           onWorkspace workspace: Int, screen: NSScreen) {
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let t = tree(for: key)
+        let rect = displayManager.cgRect(for: screen)
+
+        guard let leaf = t.root.find(window) else { return }
+
+        let axis: SplitDirection = (direction == .left || direction == .right) ? .horizontal : .vertical
+        let positive = (direction == .right || direction == .down)
+
+        var node = leaf
+        var didResize = false
+        while let parent = node.parent {
+            guard let parentRect = t.rectForNode(parent, in: rect, gap: gapSize, padding: outerPadding) else {
+                node = parent
+                continue
+            }
+            guard parent.direction(for: parentRect) == axis else {
+                node = parent
+                continue
+            }
+
+            // move the split boundary in the arrow direction. ratio is the
+            // left/top fraction, so right/down = +, left/up = -. position
+            // independent: the focused window's edge on that axis follows
+            // the arrow, growing or shrinking as geometry allows.
+            let delta: CGFloat = positive ? TilingConfig.resizeStep : -TilingConfig.resizeStep
+            let newRatio = min(max(parent.splitRatio + delta, TilingConfig.minRatio), TilingConfig.maxRatio)
+            guard newRatio != parent.splitRatio else { break }
+            parent.splitRatio = newRatio
+            parent.userSetRatio = true
+            didResize = true
+            hyprLog(.debug, .tiling, "resizeDirection \(direction): ratio → \(String(format: "%.2f", newRatio))")
+            break
+        }
+
+        if didResize {
+            retile(key: key, screen: screen)
+        }
+    }
+
     /// Toggle the split direction of `window`'s parent and return post-toggle
     /// layout rects without applying frames.
     ///

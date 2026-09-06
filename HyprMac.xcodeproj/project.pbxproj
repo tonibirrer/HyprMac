@@ -75,6 +75,7 @@
 		98D72FEBD5773242B4F199B7 /* PollingSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F440861EC1F33CEB326CB4 /* PollingSchedulerTests.swift */; };
 		9D75A3D3BAA41C0012711D6D /* UserConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A029C0AE0E8E5DEE2416684 /* UserConfig.swift */; };
 		A34F6208901205B1100F08AE /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB697B2619BEB7E2434E157E /* WelcomeView.swift */; };
+		A78F1FAAB49BEEEAE2A1844D /* ResizeDirectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E97E23BFC7B85A7E6BF506 /* ResizeDirectionTests.swift */; };
 		AC01521BE9F2030CF901A2C9 /* DragSwapHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB2A500B78D0C9A7FAE6173 /* DragSwapHandler.swift */; };
 		B197A8FA64AB6AB25DEAD5AE /* DominantColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A1F63AB253C70871CD653E8 /* DominantColor.swift */; };
 		B44C416E3958C82361083048 /* KeybindOverlayController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7BD70717FD497B0899FBCE5 /* KeybindOverlayController.swift */; };
@@ -168,6 +169,7 @@
 		60699CDEB76B9498153F2157 /* StickyWindowsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickyWindowsTests.swift; sourceTree = "<group>"; };
 		61E1DEE768A398E963AAB1CA /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		63E30549B7EABECD4FCDBC0F /* BundleIDUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleIDUtils.swift; sourceTree = "<group>"; };
+		64E97E23BFC7B85A7E6BF506 /* ResizeDirectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResizeDirectionTests.swift; sourceTree = "<group>"; };
 		65F2F88E3A815333F6542EEA /* ColorPickerRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorPickerRow.swift; sourceTree = "<group>"; };
 		66D21946C610CB845DEC5502 /* WindowRule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRule.swift; sourceTree = "<group>"; };
 		6B23E3313247FD77173D35DD /* DefaultKeybindsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultKeybindsTests.swift; sourceTree = "<group>"; };
@@ -458,6 +460,7 @@
 				4669F48BAF163487682A94CC /* LinkedMonitorsTests.swift */,
 				18F440861EC1F33CEB326CB4 /* PollingSchedulerTests.swift */,
 				12DCA371573CAAC4B23A96AA /* PrepareLayoutMutationTests.swift */,
+				64E97E23BFC7B85A7E6BF506 /* ResizeDirectionTests.swift */,
 				35C7B5E311DCD9C3D2109A6A /* SortPriorityTests.swift */,
 				60699CDEB76B9498153F2157 /* StickyWindowsTests.swift */,
 				306A7B2B7B3F09F08F953F35 /* SuppressionRegistryTests.swift */,
@@ -723,6 +726,7 @@
 				8564EAF2C0A899D4DB0774C7 /* LinkedMonitorsTests.swift in Sources */,
 				98D72FEBD5773242B4F199B7 /* PollingSchedulerTests.swift in Sources */,
 				CAF7E4C0660A5075D1D9DD62 /* PrepareLayoutMutationTests.swift in Sources */,
+				A78F1FAAB49BEEEAE2A1844D /* ResizeDirectionTests.swift in Sources */,
 				5093977D6BDF7A6F17C395E1 /* SortPriorityTests.swift in Sources */,
 				6DD01311B1866859DE6569CC /* StickyWindowsTests.swift in Sources */,
 				EDC0EDCDC01F4A5310E4A07E /* SuppressionRegistryTests.swift in Sources */,
@@ -918,7 +922,7 @@
 				CODE_SIGN_IDENTITY = "HyprMac Dev Signing";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 81;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = HyprMac/Info.plist;
@@ -926,7 +930,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.10.2;
+				MARKETING_VERSION = 0.11.1;
 				OTHER_LDFLAGS = (
 					"-F/System/Library/PrivateFrameworks",
 					"-framework",
@@ -947,7 +951,7 @@
 				CODE_SIGN_IDENTITY = "HyprMac Dev Signing";
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 77;
+				CURRENT_PROJECT_VERSION = 81;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				INFOPLIST_FILE = HyprMac/Info.plist;
@@ -955,7 +959,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.10.2;
+				MARKETING_VERSION = 0.11.1;
 				OTHER_LDFLAGS = (
 					"-F/System/Library/PrivateFrameworks",
 					"-framework",

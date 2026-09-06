@@ -43,6 +43,9 @@ enum Action: Equatable {
     /// Send the focused window to the scratchpad (or put a summoned
     /// scratchpad window away — the key is symmetric).
     case moveToScratchpad
+    /// Resize the focused window by moving the nearest matching-axis split
+    /// boundary in the BSP tree one step in that direction.
+    case resizeDirection(Direction)
 }
 
 // MARK: - Codable
@@ -79,6 +82,7 @@ extension Action: Codable {
         case cycleWorkspace
         case toggleScratchpad
         case moveToScratchpad
+        case resizeDirection
     }
 
     /// Accepted-but-not-emitted aliases. Lets a hand-edited config
@@ -137,6 +141,8 @@ extension Action: Codable {
         case .closeWindow:    self = .closeWindow
         case .toggleScratchpad: self = .toggleScratchpad
         case .moveToScratchpad: self = .moveToScratchpad
+        case .resizeDirection:
+            self = .resizeDirection(try Self.decodeDirection(inner, field: "resizeDirection"))
         }
     }
 
@@ -192,6 +198,9 @@ extension Action: Codable {
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleScratchpad)
         case .moveToScratchpad:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToScratchpad)
+        case .resizeDirection(let d):
+            var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .resizeDirection)
+            try p.encode(d.rawValue, forKey: ._0)
         }
     }
 }

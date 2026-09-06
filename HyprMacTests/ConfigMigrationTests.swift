@@ -63,6 +63,7 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertNil(saved.excludedBundleIDs)
         XCTAssertNil(saved.dimIntensity)
         XCTAssertNil(saved.maxSplitsPerMonitor)
+        XCTAssertNil(saved.windowCornerRadius)
         XCTAssertNil(saved.scratchpadTileByDefault)
         XCTAssertNil(saved.scratchpadRegionInset)
     }
@@ -80,6 +81,7 @@ final class ConfigMigrationTests: XCTestCase {
             focusBorderColorHex: "007AFF", floatingBorderColorHex: nil,
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
+            windowCornerRadius: 13,
             scratchpadTileByDefault: true, scratchpadRegionInset: 0.03,
             windowRules: nil,
             outerPaddingSides: nil,
@@ -94,6 +96,7 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertEqual(decoded.excludedBundleIDs, ["com.apple.FaceTime"])
         XCTAssertEqual(decoded.dimIntensity, 0.5)
         XCTAssertEqual(decoded.focusBorderColorHex, "007AFF")
+        XCTAssertEqual(decoded.windowCornerRadius, 13)
         XCTAssertEqual(decoded.scratchpadTileByDefault, true)
         XCTAssertEqual(decoded.scratchpadRegionInset, 0.03)
     }
@@ -113,6 +116,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: nil,
             floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
+            windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
             windowRules: nil,
             outerPaddingSides: nil,
@@ -136,6 +140,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: nil,
             floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
+            windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
             windowRules: nil,
             outerPaddingSides: nil,
@@ -165,6 +170,7 @@ final class ConfigMigrationTests: XCTestCase {
             showFocusBorder: nil, focusBorderColorHex: nil,
             floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
+            windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
             windowRules: nil,
             outerPaddingSides: nil,
@@ -181,6 +187,11 @@ final class ConfigMigrationTests: XCTestCase {
     func testFromHexValidSixDigit() {
         XCTAssertNotNil(NSColor.fromHex("007AFF"))
         XCTAssertNotNil(NSColor.fromHex("#007AFF"))  // strip leading hash
+    }
+
+    func testWindowCornerRadiusDefaultsPreservePreviousBehavior() {
+        XCTAssertEqual(UserConfigDefaults.windowCornerRadius(forOSMajorVersion: 15), 10)
+        XCTAssertEqual(UserConfigDefaults.windowCornerRadius(forOSMajorVersion: 26), 16)
     }
 
     func testFromHexEmptyReturnsNil() {
