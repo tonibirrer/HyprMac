@@ -142,6 +142,13 @@ class TilingEngine {
     /// 0 is neutral. Set by the owner; nil disables priority ordering.
     var sortPriority: ((HyprWindow) -> Int)?
 
+    /// Per-app full-height rule (`WindowRule.fullHeight`): `true` when the
+    /// window must always occupy a full-height column. Installed on every
+    /// tree as `BSPTree.isFullHeight`; the trees keep their column locks
+    /// current on each mapping change and the engine re-applies before
+    /// layout so a rule edit takes effect on the next retile.
+    var fullHeight: ((HyprWindow) -> Bool)?
+
     private let minSizes = MinSizeMemory()
 
     init(displayManager: DisplayManager) {
@@ -178,6 +185,7 @@ class TilingEngine {
     private func tree(for key: TilingKey) -> BSPTree {
         if let existing = trees[key] { return existing }
         let tree = BSPTree()
+        tree.isFullHeight = { [weak self] window in self?.fullHeight?(window) ?? false }
         trees[key] = tree
         return tree
     }
@@ -486,6 +494,9 @@ class TilingEngine {
         }
         applySortPriority(to: t)
         if let order { applyOrder(order, to: t) }
+        // column locks follow the final leaf → window mapping (sort and
+        // order reorders above may have moved a full-height window)
+        t.applyFullHeight()
         return TileMembershipResult(key: key, tree: t, rect: rect, insertedWindows: insertedWindows)
     }
 
@@ -937,6 +948,20 @@ class TilingEngine {
         }
     }
 
+    /// Remove `window` from `workspace`'s tree(s) without retiling.
+    ///
+    /// For a window that is leaving a workspace which is being hidden at
+    /// the same moment (a sticky window carried into the incoming
+    /// workspace): `removeWindow` would retile the source and re-place
+    /// windows the caller is about to park. The tree is pruned so the
+    /// sibling takes over the slot the next time the workspace shows.
+    func detachWindow(_ window: HyprWindow, fromWorkspace workspace: Int) {
+        for (key, t) in trees where key.workspace == workspace && t.contains(window) {
+            t.remove(window)
+            t.root.pruneEmptyNodes()
+        }
+    }
+
     // preserveMinSizesOnOverflow:
     //   true  → swap-rejection callers (swapWindows + applyComputedLayout's
     //           animated swap revert) need the readback-confirmed mins to
@@ -957,6 +982,9 @@ class TilingEngine {
         let t = tree(for: key)
         primeMinimumSizes(t.allWindows)
         let rect = displayManager.cgRect(for: screen)
+        // rule edits change which windows are full height without any
+        // mapping change — refresh the column locks before laying out
+        t.applyFullHeight()
 
         // accordion mode: same tree, presentation-only frames, no
         // readback (see tileWindows).

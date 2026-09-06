@@ -16,7 +16,7 @@ import Cocoa
 ///
 /// Commands (newline-terminated):
 ///   workspaces        → JSON array: id, monitor, visible, focused, windows
-///   windows <ws>      → JSON array: window id, app, bundleID, title
+///   windows <ws>      → JSON array: window id, app, bundleID, title, hidden, sticky
 ///   focused           → JSON object: focused workspace + monitor
 ///
 /// Events:
@@ -220,6 +220,7 @@ final class IPCServer {
                 "focused": ws == focused,
                 "windows": windowIDs.count,
                 "color": config.workspaceColors[String(ws)].map { "#\($0)" } ?? "",
+                "sticky": workspaceManager.stickyWorkspaces.contains(ws),
             ]
         }
     }
@@ -234,6 +235,7 @@ final class IPCServer {
                 "bundleID": app.bundleIdentifier ?? "",
                 "title": stateCache.cachedWindows[wid]?.title ?? "",
                 "hidden": stateCache.hiddenWindowIDs.contains(wid),
+                "sticky": workspaceManager.isStickyWindow(wid),
             ]
         }
     }

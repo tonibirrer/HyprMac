@@ -51,4 +51,26 @@ final class WindowRuleTests: XCTestCase {
         XCTAssertFalse(rules.focusOnActivate(bundleID: "com.mitchellh.ghostty"))
         XCTAssertFalse(rules.focusOnActivate(bundleID: nil))
     }
+
+    func testStickyDefaultsFalseAndRoundTrips() throws {
+        let json = #"{"bundleID": "Mattermost.Desktop", "workspace": 0}"#.data(using: .utf8)!
+        let rule = try JSONDecoder().decode(WindowRule.self, from: json)
+        XCTAssertFalse(rule.sticky)
+
+        let original = [WindowRule(bundleID: "app.zen-browser.zen", workspace: 0, sticky: true)]
+        let decoded = try JSONDecoder().decode([WindowRule].self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded, original)
+        XCTAssertTrue(decoded[0].sticky)
+    }
+
+    func testIsStickyHelperMatchesWithoutWorkspacePin() {
+        let rules = [
+            WindowRule(bundleID: "app.zen-browser.zen", workspace: 0, sticky: true),
+            WindowRule(bundleID: "Mattermost.Desktop", workspace: 2, sortPriority: -1),
+        ]
+        XCTAssertTrue(rules.isSticky(bundleID: "app.zen-browser.zen"))
+        XCTAssertFalse(rules.isSticky(bundleID: "Mattermost.Desktop"))
+        XCTAssertFalse(rules.isSticky(bundleID: "com.apple.finder"))
+        XCTAssertFalse(rules.isSticky(bundleID: nil))
+    }
 }

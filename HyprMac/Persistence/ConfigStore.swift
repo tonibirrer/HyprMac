@@ -236,6 +236,8 @@ struct SavedConfig: Codable {
     let outerPaddingSides: PaddingSides?
     let workspaceWallpapers: [String: String]?
     let workspaceColors: [String: String]?
+    // workspaces (1...9) that show sticky-ruled apps; sorted on write
+    let stickyWorkspaces: [Int]?
 }
 
 /// Optional per-side overrides for the uniform `outerPadding`. A nil side

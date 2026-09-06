@@ -2,7 +2,10 @@
 // pin an app's new windows to a fixed workspace (by default the
 // workspace is switched to as well; toggle off for a silent move)
 // and/or give the app a tile sort priority — higher keeps its tiles
-// further top-left, lower further bottom-right.
+// further top-left, lower further bottom-right — and/or make the app
+// sticky (Hyprland's `pin`): its windows follow the user across every
+// workspace that opts in on the Workspaces panel — and/or grant the app
+// a full-height column in the dwindle layout.
 
 import SwiftUI
 
@@ -12,7 +15,7 @@ struct WindowRulesPanel: View {
 
     var body: some View {
         HyprPanel("Window Rules",
-                  footer: "New windows of these apps open on their pinned workspace (\"—\" = no pin); \"Follow\" also switches to it. \"Activate\" honors the app's activation requests (URL opens) even without a user gesture. Sort keeps the app's tiles in order: higher = top-left, lower = bottom-right.") {
+                  footer: "New windows of these apps open on their pinned workspace (\"—\" = no pin); \"Follow\" also switches to it. \"Activate\" honors the app's activation requests (URL opens) even without a user gesture. \"Sticky\" shows the app on every workspace that opts in (Workspaces panel below). \"Full height\" always gives the app a full-height column — other windows stack beside it, never above or below. Sort keeps the app's tiles in order: higher = top-left, lower = bottom-right.") {
             if config.windowRules.isEmpty {
                 HyprRow("No rules", icon: "circle.dashed",
                         subtitle: "New windows open on the active workspace", divider: false) { EmptyView() }
@@ -64,6 +67,20 @@ struct WindowRulesPanel: View {
             .toggleStyle(.checkbox)
             .font(.hyprBody)
             .help("Always honor this app's activation requests: switch to its workspace even without a click or keystroke — e.g. when another app opens a URL in it (Hyprland's focus_on_activate)")
+            Toggle("Sticky", isOn: Binding(
+                get: { rule.sticky },
+                set: { on in update(rule.bundleID) { $0.sticky = on } }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.hyprBody)
+            .help("Show this app's windows on every workspace that opts in (Workspaces → Sticky): they follow you between those workspaces on their monitor and hide like any other window elsewhere (Hyprland's pin, extended to tiled windows)")
+            Toggle("Full height", isOn: Binding(
+                get: { rule.fullHeight },
+                set: { on in update(rule.bundleID) { $0.fullHeight = on } }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.hyprBody)
+            .help("Always give this app a full-height column: new windows open beside it, never above or below, and no split above it can stack (like a master window in Hyprland's master layout)")
             HStack(spacing: 2) {
                 Text("\(rule.sortPriority)")
                     .font(.hyprMonoXs)
