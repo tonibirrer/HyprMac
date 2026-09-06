@@ -11,8 +11,8 @@
 import Cocoa
 
 /// Serves workspace/window state over `hyprmac.sock` and broadcasts
-/// change events over `hyprmac.events.sock` (both in the HyprMac
-/// Application Support directory).
+/// change events over `hyprmac.events.sock` (both in this build's
+/// Application Support directory, `ConfigStore.configDir`).
 ///
 /// Commands (newline-terminated):
 ///   workspaces        → JSON array: id, monitor, visible, focused, windows

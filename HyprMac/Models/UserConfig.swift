@@ -1,7 +1,8 @@
 // User-facing configuration. SwiftUI views bind to the published
 // properties; mutations write through to disk via `ConfigStore` and
 // notify observers. Persists to
-// `~/Library/Application Support/HyprMac/config.json`.
+// `~/Library/Application Support/HyprMacExperiments/config.json`
+// (`AppIdentity.directoryName` — separate from the stock app's).
 
 import Foundation
 import Cocoa

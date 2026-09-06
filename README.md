@@ -1,7 +1,7 @@
 # HyprMac
 
 > [!WARNING]
-> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style window rules. It builds as **HyprMacExperiments** with its own bundle ID so it can run alongside a regular HyprMac install, auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
+> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style window rules. It builds as **HyprMacExperiments** with its own bundle ID, its own config directory (`~/Library/Application Support/HyprMacExperiments/`, iCloud folder and IPC sockets included) so it can be installed and switched with a regular HyprMac install without the two ever sharing state — the first launch copies an existing HyprMac config over once. Auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
 
 A keyboard-driven tiling window manager for macOS.
 
@@ -150,7 +150,7 @@ Hyprland-style per-app rules, modeled on `windowrule = <effect>, class:...`. Eac
 - **Sticky** (`"sticky": true`) — Hyprland's `windowrule = pin` ("show it on all workspaces"), per app. The app's windows follow you across every workspace that opts in; see [Sticky Apps](#sticky-apps-fork-feature) below.
 - **Full height** (`"fullHeight": true`) — the app's tiles always span the full tiled height. Hyprland's dwindle has no per-window equivalent (its `split_width_multiplier` and `preserve_split` are global); the semantics come from Hyprland's **master layout**, where a master window is a full-height column and slaves stack beside it. See [Full-Height Apps](#full-height-apps-fork-feature).
 
-Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9 or "—" for no pin, per-rule "Follow" / "Activate" / "Sticky" checkboxes, sort stepper), or directly in `~/Library/Application Support/HyprMac/config.json`:
+Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9 or "—" for no pin, per-rule "Follow" / "Activate" / "Sticky" checkboxes, sort stepper), or directly in `~/Library/Application Support/HyprMacExperiments/config.json`:
 
 ```json
 "windowRules": [
