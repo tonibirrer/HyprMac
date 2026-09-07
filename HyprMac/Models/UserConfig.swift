@@ -297,7 +297,34 @@ class UserConfig: ObservableObject {
         "com.apple.systempreferences",
     ]
 
+    /// Pending coalesced write. Every `@Published` `didSet` calls `save()`;
+    /// a slider drag fires it per tick, and each write encodes and rewrites
+    /// both files synchronously on the main thread — with the file watcher
+    /// then reloading each write. Coalescing keeps the Settings UI fluid;
+    /// `flushPendingSave` runs the write before the process exits.
+    private var pendingSave: DispatchWorkItem?
+    private static let saveCoalesceSec: TimeInterval = 0.3
+
     func save() {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingSave = nil
+            self.writeNow()
+        }
+        pendingSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.saveCoalesceSec, execute: work)
+    }
+
+    /// Write any coalesced change immediately. Call before quitting.
+    func flushPendingSave() {
+        guard let work = pendingSave else { return }
+        work.cancel()
+        pendingSave = nil
+        writeNow()
+    }
+
+    private func writeNow() {
         store.writeSavedConfig(makeSavedConfig())
         store.writeSavedMonitorConfig(SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,

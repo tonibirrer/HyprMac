@@ -19,10 +19,20 @@ final class FullHeightTests: XCTestCase {
     override func setUpWithError() throws {
         displayManager = DisplayManager()
         engine = TilingEngine(displayManager: displayManager)
-        guard let main = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("no NSScreen available — test requires a display")
+        // the baseline these tests lean on — dwindle stacks the second and
+        // third window in the right half — only holds when half the usable
+        // width is shorter than the height (aspect below 2:1). an ultrawide
+        // main display splits into three columns on its own, which would
+        // mask the rule. prefer the main screen, else any qualifying one.
+        let dm = displayManager!
+        let qualifying = NSScreen.screens.filter { s in
+            let r = dm.cgRect(for: s)
+            return r.width >= r.height && r.width / 2 < r.height
         }
-        screen = main
+        guard let pick = qualifying.first(where: { $0 == NSScreen.main }) ?? qualifying.first else {
+            throw XCTSkip("no display with aspect between 1:1 and 2:1 — dwindle baseline would not stack")
+        }
+        screen = pick
     }
 
     private func setFullHeight(_ ids: Set<CGWindowID>) {
