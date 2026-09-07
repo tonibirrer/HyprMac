@@ -445,6 +445,12 @@ class WindowManager {
             case .windowMiniaturized, .windowDeminiaturized:
                 self.pollingScheduler.schedule(after: 0.2)
             case .focusedWindowChanged:
+                // the border must not wait for the poll: polls are held
+                // for 1.5 s after a workspace switch, and the poll's focus
+                // safety net leaves a border alone once it sits on any
+                // live window — so a Cmd-Tab right after a switch left the
+                // old window outlined until the mouse moved.
+                self.followSystemFocus(reason: "ax-focused-window-changed")
                 self.pollingScheduler.schedule(after: 0.15)
             }
         }
@@ -627,6 +633,7 @@ class WindowManager {
         config.$gapSize
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] newGap in
                 guard let self = self else { return }
                 self.tilingEngine.gapSize = newGap
@@ -639,6 +646,7 @@ class WindowManager {
             config.$outerPadding.dropFirst().removeDuplicates().map { _ in () },
             config.$outerPaddingSides.dropFirst().removeDuplicates().map { _ in () }
         )
+        .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
         .sink { [weak self] in
             guard let self = self else { return }
             self.tilingEngine.outerPadding = self.config.resolvedOuterPadding
@@ -648,6 +656,7 @@ class WindowManager {
         config.$maxSplitsPerMonitor
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] newSplits in
                 guard let self = self else { return }
                 self.tilingEngine.maxSplitsPerMonitor = newSplits
@@ -683,6 +692,7 @@ class WindowManager {
         config.$accordionOverlap
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] overlap in
                 guard let self = self else { return }
                 self.tilingEngine.accordionOverlap = overlap
@@ -699,18 +709,17 @@ class WindowManager {
         // retiles immediately instead of waiting for the next new window;
         // a sticky edit pulls the app onto the visible opted-in workspaces.
         // (workspace pins are still only evaluated at window discovery.)
-        // @Published emits in willSet — defer one runloop turn so the
+        // @Published emits in willSet — the debounce also guarantees the
         // sortPriority / isStickyWindow closures read the NEW rules.
         config.$windowRules
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.reconcileStickyWindows()
-                    self.animatedRetile()
-                    hyprLog(.debug, .lifecycle, "window rules updated — retiled visible workspaces")
-                }
+                guard let self else { return }
+                self.reconcileStickyWindows()
+                self.animatedRetile()
+                hyprLog(.debug, .lifecycle, "window rules updated — retiled visible workspaces")
             }.store(in: &configObservers)
 
         // opting a workspace in/out changes where sticky windows may live
@@ -718,6 +727,7 @@ class WindowManager {
         config.$stickyWorkspaces
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] workspaces in
                 guard let self else { return }
                 self.workspaceManager.stickyWorkspaces = workspaces
@@ -753,6 +763,7 @@ class WindowManager {
         config.$dimIntensity
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.refreshDimming()
             }.store(in: &configObservers)
@@ -772,6 +783,7 @@ class WindowManager {
         config.$windowCornerRadius
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.focusBorder.refreshCornerRadius()
@@ -804,6 +816,7 @@ class WindowManager {
         config.$scratchpadRegionInset
             .dropFirst()
             .removeDuplicates()
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
             .sink { [weak self] inset in
                 guard let self else { return }
                 self.scratchpad.tiledRegionInset = inset
@@ -1114,6 +1127,33 @@ class WindowManager {
             focusBorder.hideFloatingBorders()
         }
         refreshDimming(focusedID: window.windowID)
+    }
+
+    /// Move focus tracking and the border to whatever macOS reports as the
+    /// focused window, when that is a tracked window on a visible workspace.
+    ///
+    /// Called on AX focused-window changes and app activations so a
+    /// Cmd-Tab, Dock click or scripted activate moves the border at once —
+    /// without a mouse move (FFM) and without waiting for a discovery poll,
+    /// which is suppressed for 1.5 s after every workspace switch. Records
+    /// focus through `FocusStateController`, so accordion mode brings the
+    /// window to the front slot as well. HyprMac's own focus moves arrive
+    /// here too and are no-ops: the border already tracks that window.
+    private func followSystemFocus(reason: String) {
+        guard isRunning, !mouseButtonDown, !hyprHeld else { return }
+        guard let focused = accessibility.getFocusedWindow() else { return }
+        let id = focused.windowID
+        guard id != 0, focusBorder.trackedWindowID != id else { return }
+        // a parked (hidden-workspace) window is still a live, focusable AX
+        // window; following it would outline the hide corner or a rect on
+        // the wrong workspace. same for a tile behind the scratchpad scrim.
+        guard stateCache.knownWindowIDs.contains(id),
+              workspaceManager.isWindowVisible(id) else { return }
+        if scratchpad.isVisible && !scratchpad.contains(id) { return }
+        if let screen = displayManager.screen(for: focused), workspaceManager.isMonitorDisabled(screen) { return }
+        hyprLog(.debug, .focus, "follow system focus → \(id) '\(focused.title ?? "?")' (\(reason))")
+        focusController.recordFocus(id, reason: reason)
+        updateFocusBorder(for: stateCache.cachedWindows[id] ?? focused)
     }
 
     /// Show focus brackets around whichever window `ensureFocus` settled on.
@@ -2619,6 +2659,15 @@ class WindowManager {
         }
 
         pollingScheduler.schedule()
+
+        // Cmd-Tab / Dock click / programmatic activate to an app whose
+        // focused window did not change fires only this notification — no
+        // AX focused-window event — so this is the only chance to move the
+        // border. Short delay: the app's focused-window attribute is not
+        // always readable at the instant of activation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.followSystemFocus(reason: "app-activated")
+        }
 
         // re-raise floating windows after any app activation (e.g. user clicked a tiled window).
         // must always run — even when activation switch is suppressed — so floaters stay on top.

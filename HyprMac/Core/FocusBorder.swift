@@ -270,12 +270,18 @@ class FocusBorder {
     }
 
     /// Order out and forget the floating-border panel for `windowID`,
-    /// with a fade. No-op when the id is unknown.
-    func hideFloatingBorder(for windowID: CGWindowID) {
+    /// with a fade (or at once when `animated` is `false` — the floater is
+    /// leaving the screen and a fade would play over whatever arrives).
+    /// No-op when the id is unknown.
+    func hideFloatingBorder(for windowID: CGWindowID, animated: Bool = true) {
         mainThreadOnly()
         guard let border = floatingPanels.removeValue(forKey: windowID) else { return }
         floaterFrames.removeValue(forKey: windowID)
-        fadeOutAndOrderOut(border.panel, layer: border.glowView.layer, duration: fadeDurationSec)
+        if animated {
+            fadeOutAndOrderOut(border.panel, layer: border.glowView.layer, duration: fadeDurationSec)
+        } else {
+            border.panel.orderOut(nil)
+        }
     }
 
     /// Transition the focused-window panel from `active` (filled) to
@@ -302,7 +308,11 @@ class FocusBorder {
     /// reference keeps the old panel alive through the animation, while
     /// the next `show` builds a fresh panel rather than reusing the one
     /// that is mid-fade. Cancels any pending settle or shake work.
-    func hide() {
+    ///
+    /// - Parameter animated: `false` orders the panel out at once. Used
+    ///   when the bordered window is about to leave the screen (workspace
+    ///   switch) — a fade would play over the windows arriving underneath.
+    func hide(animated: Bool = true) {
         mainThreadOnly()
         settleWork?.cancel()
         shakeTimer?.cancel()
@@ -320,7 +330,11 @@ class FocusBorder {
         panel = nil
         glowView = nil
 
-        fadeOutAndOrderOut(p, layer: glowLayer, duration: fadeDurationSec)
+        if animated {
+            fadeOutAndOrderOut(p, layer: glowLayer, duration: fadeDurationSec)
+        } else {
+            p.orderOut(nil)
+        }
     }
 
     /// Flash a red border around `rect` and shake the window

@@ -125,6 +125,17 @@ final class WorkspaceOrchestrator {
             toShow.insert(wid)
         }
 
+        // the focused window is about to be parked: drop its border NOW,
+        // before the wallpaper swap, hide pass and retile (~0.5–1.5 s in
+        // total). Left in place it stays painted at the old rect on top of
+        // the windows arriving there. No fade — a fade would play over the
+        // incoming layout too. The border comes back on the new focus
+        // target after the retile.
+        focusBorder.hide(animated: false)
+        for wid in toHide where stateCache.floatingWindowIDs.contains(wid) {
+            focusBorder.hideFloatingBorder(for: wid, animated: false)
+        }
+
         // batch: hide old + restore floating new in one tight pass
         for wid in toHide {
             if let w = allWindows.first(where: { $0.windowID == wid }) ?? stateCache.cachedWindows[wid] {

@@ -115,6 +115,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // config writes are coalesced — persist the last edit before exit
+        UserConfig.shared.flushPendingSave()
         windowManager?.stop()
         // restore caps lock to normal when quitting
         KeyRemapper.restoreCapsLock()
