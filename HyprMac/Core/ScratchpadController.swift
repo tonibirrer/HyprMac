@@ -620,7 +620,9 @@ final class ScratchpadController {
     /// Find the backmost summoned member in the live level-0 z-order and
     /// order the scrim panels directly below it: members lit above the
     /// scrim, tiles dimmed below — regardless of who won the raise races.
-    private func settleScrimBelowMembers() {
+    /// Also called by `WindowManager.refreshDimming` whenever the scrim
+    /// panel had to be re-ordered front mid-session.
+    func settleScrimBelowMembers() {
         guard isVisible, !summonedIDs.isEmpty else { return }
         guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
                 as? [[String: Any]] else { return }

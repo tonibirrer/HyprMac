@@ -102,15 +102,21 @@ class DimmingOverlay {
     ///   rects are carved out of each tile's dim path so floaters render
     ///   bright above any dimmed tile they cover.
     /// - Parameter screens: enabled `NSScreen`s.
+    /// - Returns: `true` when at least one panel had to be (re)ordered to
+    ///   the front of its level — it was hidden or ordered out before this
+    ///   call. In scrim mode that puts the panel above the scratchpad
+    ///   members, so the caller must tuck it back under them.
+    @discardableResult
     func update(
         focusedID: CGWindowID,
         tiledRects: [CGWindowID: CGRect],
         floatingRects: [CGWindowID: CGRect],
         screens: [NSScreen]
-    ) {
+    ) -> Bool {
         mainThreadOnly()
-        guard enabled, focusedID != 0 else { hideAll(); return }
+        guard enabled, focusedID != 0 else { hideAll(); return false }
         visible = true
+        var reorderedFront = false
 
         // cache raw inputs so setDragOverride can re-stamp from them.
         lastFocusedID = focusedID
@@ -222,8 +228,10 @@ class DimmingOverlay {
             if !entry.panel.isVisible {
                 entry.panel.alphaValue = 1
                 entry.panel.orderFrontRegardless()
+                reorderedFront = true
             }
         }
+        return reorderedFront
     }
 
     /// Fade every layer to 0, then orderOut each panel.

@@ -103,7 +103,13 @@ class FocusBorder {
     /// `settleDelaySec`. Cancels any in-flight settle or shake before
     /// re-asserting — without this, a pending shake or settle would
     /// stomp the new frame moments after `show` returns.
-    func show(around rect: CGRect, windowID: CGWindowID) {
+    ///
+    /// - Parameter settled: paint the outline-only state directly and skip
+    ///   the active-tint → settle cycle. For re-showing a border that was
+    ///   hidden for mechanical reasons (a floater drag, a menu) rather than
+    ///   a focus change — replaying the tint there reads as the window
+    ///   "lighting up" on every click.
+    func show(around rect: CGRect, windowID: CGWindowID, settled: Bool = false) {
         mainThreadOnly()
         // idempotent re-show: already painted on this window at this frame
         // and the state machine has progressed past .hidden — nothing to do.
@@ -148,14 +154,17 @@ class FocusBorder {
             panel = p
         }
 
-        // active state: tint fill + border, centered on window edge
+        // active state: tint fill + border, centered on window edge.
+        // settled re-show: outline only, straight away.
         if let layer = glowView?.layer {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             layer.borderColor = accentCGColor
-            layer.borderWidth = Tuning.activeBorderWidth
+            layer.borderWidth = settled ? Tuning.settledBorderWidth : Tuning.activeBorderWidth
             layer.cornerRadius = windowRadius + expansion
-            layer.backgroundColor = accentCGColor.copy(alpha: Tuning.activeFillAlpha)
+            layer.backgroundColor = settled
+                ? CGColor.clear
+                : accentCGColor.copy(alpha: Tuning.activeFillAlpha)
             CATransaction.commit()
         }
 
@@ -168,15 +177,27 @@ class FocusBorder {
                 glow.alphaValue = 1.0
             }
         }
-        state = .active
         trackedWindowID = windowID
         trackedWindowFrame = rect
+
+        if settled {
+            state = .settled
+            return
+        }
+        state = .active
 
         // schedule transition to settled (outline only)
         let work = DispatchWorkItem { [weak self] in self?.settle() }
         settleWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Tuning.settleDelaySec, execute: work)
     }
+
+    /// `true` while the focused-window panel shows the active tint fill
+    /// (the phase between `show` and `settle`). Test introspection.
+    var isShowingActiveTint: Bool { state == .active }
+
+    /// `true` while the focused-window panel is on screen in either state.
+    var isShowingBorder: Bool { state != .hidden }
 
     /// Reposition the focused-window border to `rect` without changing
     /// state. Called on tile/resize/move so the border tracks the
