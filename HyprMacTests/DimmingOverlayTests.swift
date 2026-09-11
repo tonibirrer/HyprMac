@@ -325,3 +325,41 @@ final class DimmingOverlayTests: XCTestCase {
         }
     }
 }
+
+extension DimmingOverlayTests {
+    // update() reports whether it had to (re)order a panel to the front.
+    // the scratchpad scrim relies on this to know when it must be tucked
+    // back under the members again.
+    func testUpdateReportsReorderOnlyWhenPanelWasOrderedOut() {
+        let overlay = DimmingOverlay()
+        overlay.enabled = true
+        overlay.primaryScreenHeight = NSScreen.screens.first?.frame.height ?? 1080
+        let a: CGWindowID = 1, b: CGWindowID = 2
+        let tiles: [CGWindowID: CGRect] = [
+            a: CGRect(x: 100, y: 100, width: 200, height: 200),
+            b: CGRect(x: 400, y: 100, width: 200, height: 200),
+        ]
+        let screens = NSScreen.screens
+
+        XCTAssertTrue(overlay.update(focusedID: a, tiledRects: tiles, floatingRects: [:], screens: screens),
+                      "first show orders the panel front")
+        XCTAssertFalse(overlay.update(focusedID: b, tiledRects: tiles, floatingRects: [:], screens: screens),
+                       "a focus change on a visible panel must not reorder it")
+
+        overlay.hideAll()
+        // hideAll orders out after fadeDurationSec + 0.05 on the main queue;
+        // let that land before re-showing.
+        let exp = expectation(description: "orderOut landed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + overlay.fadeDurationSec + 0.15) { exp.fulfill() }
+        wait(for: [exp], timeout: 2)
+
+        XCTAssertTrue(overlay.update(focusedID: a, tiledRects: tiles, floatingRects: [:], screens: screens),
+                      "re-show after an ordered-out hide must report the reorder")
+    }
+
+    func testDisabledUpdateReportsNoReorder() {
+        let overlay = DimmingOverlay()
+        overlay.enabled = false
+        XCTAssertFalse(overlay.update(focusedID: 1, tiledRects: [:], floatingRects: [:], screens: NSScreen.screens))
+    }
+}

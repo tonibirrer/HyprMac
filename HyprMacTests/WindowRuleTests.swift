@@ -74,3 +74,34 @@ final class WindowRuleTests: XCTestCase {
         XCTAssertFalse(rules.isSticky(bundleID: nil))
     }
 }
+
+extension WindowRuleTests {
+    func testNoSyntheticClickDefaultsFalseAndRoundTrips() throws {
+        let json = #"{"bundleID": "com.citrix.receiver.icaviewer.mac", "workspace": 4}"#.data(using: .utf8)!
+        let rule = try JSONDecoder().decode(WindowRule.self, from: json)
+        XCTAssertFalse(rule.noSyntheticClick)
+
+        let original = [WindowRule(bundleID: "com.example.rdp", workspace: 0, noSyntheticClick: true)]
+        let decoded = try JSONDecoder().decode([WindowRule].self, from: JSONEncoder().encode(original))
+        XCTAssertEqual(decoded, original)
+        XCTAssertTrue(decoded[0].noSyntheticClick)
+    }
+
+    func testBlocksSyntheticClickHelperMatchesWithoutWorkspacePin() {
+        let rules = [
+            WindowRule(bundleID: "com.example.rdp", workspace: 0, noSyntheticClick: true),
+            WindowRule(bundleID: "com.mitchellh.ghostty", workspace: 2),
+        ]
+        XCTAssertTrue(rules.blocksSyntheticClick(bundleID: "com.example.rdp"))
+        XCTAssertFalse(rules.blocksSyntheticClick(bundleID: "com.mitchellh.ghostty"))
+        XCTAssertFalse(rules.blocksSyntheticClick(bundleID: "com.apple.finder"))
+        XCTAssertFalse(rules.blocksSyntheticClick(bundleID: nil))
+    }
+
+    func testBuiltInSyntheticClickBlockListCoversRemoteDesktopClients() {
+        let blocked = HyprWindow.syntheticClickBlockedBundleIDs
+        XCTAssertTrue(blocked.contains("com.citrix.receiver.icaviewer.mac"))
+        XCTAssertTrue(blocked.contains("com.microsoft.rdc.macos"))
+        XCTAssertFalse(blocked.contains("com.mitchellh.ghostty"))
+    }
+}

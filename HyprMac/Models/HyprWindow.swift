@@ -308,6 +308,12 @@ class HyprWindow: Equatable, Hashable {
         let app = NSRunningApplication(processIdentifier: ownerPID)
         let wasActive = app?.isActive ?? false
         if let app, !wasActive {
+            // AX's own activation path first: setting AXFrontmost on the
+            // application element asks the app to come forward without any
+            // input injection. Cheap, and on the apps where it works it
+            // makes the synthetic-click fallback unnecessary.
+            let appEl = AXUIElementCreateApplication(ownerPID)
+            AXUIElementSetAttributeValue(appEl, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
             app.activate(options: [.activateIgnoringOtherApps])
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak app] in
                 let nowActive = app?.isActive ?? false
@@ -343,9 +349,57 @@ class HyprWindow: Equatable, Hashable {
         hyprLog(.debug, .focus, "focusWithoutRaise(\(wid)) ax main=\(mainRC.rawValue) focused=\(focRC.rawValue) wasActive=\(wasActive) sl front=\(setFrontRC.rawValue) post1=\(post1RC.rawValue) post2=\(post2RC.rawValue)")
     }
 
+    /// Apps that must never receive a synthesized click: remote-desktop and
+    /// VM clients forward every mouse event to a remote session, where a
+    /// fake down/up (at a position the real cursor never visited, with the
+    /// system button state still "up") desynchronizes the remote's button
+    /// tracking into stuck presses. Merged with the per-app window-rule
+    /// flag `noSyntheticClick`.
+    static let syntheticClickBlockedBundleIDs: Set<String> = [
+        // Citrix Workspace / Viewer
+        "com.citrix.receiver.icaviewer.mac",
+        "com.citrix.receiver.nomas",
+        "com.citrix.XenAppViewer",
+        // Microsoft Remote Desktop / Windows App
+        "com.microsoft.rdc.macos",
+        "com.microsoft.rdc.mac",
+        // VMware Fusion / Horizon
+        "com.vmware.fusion",
+        "com.vmware.horizon",
+        "com.vmware.view",
+        // Parallels, VirtualBox, UTM
+        "com.parallels.desktop.console",
+        "org.virtualbox.app.VirtualBox",
+        "org.virtualbox.app.VirtualBoxVM",
+        "com.utmapp.UTM",
+        // VNC / screen sharing / remote support
+        "com.apple.ScreenSharing",
+        "com.realvnc.vncviewer",
+        "com.teamviewer.TeamViewer",
+        "com.anydesk.anydeskmac",
+        "com.p5sys.jump.mac.viewer",
+        "com.edovia.screens4",
+        "com.edovia.screens5",
+        "com.nomachine.nxplayer",
+        "com.moonlight-stream.Moonlight",
+    ]
+
+    /// `true` when this window's app is on the built-in block list above.
+    var blocksSyntheticClickByDefault: Bool {
+        guard let bundleID = NSRunningApplication(processIdentifier: ownerPID)?.bundleIdentifier else {
+            return false
+        }
+        return Self.syntheticClickBlockedBundleIDs.contains(bundleID)
+    }
+
     /// Force OS keyboard focus by delivering a synthesized leftMouseDown/Up
     /// directly to the owning process. Used when AX writes + SkyLight + activate()
     /// are all silently rejected by Tahoe's `.accessory`-app activation gate.
+    ///
+    /// Callers must treat this as a last resort — see
+    /// `WindowManager.focusForFFM`: it runs only after `focusWithoutRaise`
+    /// verifiably failed to bring the app forward, and never for apps on
+    /// `syntheticClickBlockedBundleIDs` or with the `noSyntheticClick` rule.
     ///
     /// `CGEventPostToPid` routes the event into the target process's queue without
     /// going through the global event tap, so the visible cursor does not move and
@@ -370,6 +424,10 @@ class HyprWindow: Equatable, Hashable {
             hyprLog(.notice, .focus, "focusViaSyntheticClick(\(windowID)) CGEvent create failed")
             return
         }
+        // a real click carries clickState 1; some apps drop button events
+        // with clickState 0 as malformed, others count them as extra presses.
+        down.setIntegerValueField(.mouseEventClickState, value: 1)
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
         // postToPid: deliver to the app's queue without touching the global cursor
         down.postToPid(ownerPID)
         up.postToPid(ownerPID)
