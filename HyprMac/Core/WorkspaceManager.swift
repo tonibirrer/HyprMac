@@ -37,6 +37,14 @@ class WorkspaceManager {
     /// reveal so floaters return to their last user-chosen position.
     private var savedFloatingFrames: [CGWindowID: CGRect] = [:]
 
+    /// Workspace → the window that last had focus while assigned to it.
+    /// Fed by `noteFocus`; read by the workspace switch so returning to a
+    /// workspace lands on the tile the user left, not the first tile in
+    /// enumeration order (in accordion mode that is the front slot, so a
+    /// Cmd-Tab away and back used to snap the stack to tile 1). Entries
+    /// drop when the window closes or moves to another workspace.
+    private var lastFocusedWindow: [Int: CGWindowID] = [:]
+
     /// Localized names of monitors the user has excluded from tiling.
     /// Disabled monitors host floating windows only.
     var disabledMonitors: Set<String> = []
@@ -227,6 +235,7 @@ class WorkspaceManager {
         let oldDesc: String
         if let old = windowWorkspaces[windowID] {
             workspaceWindowSets[old]?.remove(windowID)
+            if old != workspace { forgetFocus(windowID, leaving: old) }
             oldDesc = "ws\(old)"
         } else {
             oldDesc = "none"
@@ -257,6 +266,28 @@ class WorkspaceManager {
         workspaceWindowSets[workspace] ?? []
     }
 
+    /// Remember `windowID` as the last-focused window of its workspace.
+    /// No-op for unassigned windows (floaters without a workspace).
+    func noteFocus(_ windowID: CGWindowID) {
+        guard let ws = windowWorkspaces[windowID] else { return }
+        lastFocusedWindow[ws] = windowID
+    }
+
+    /// The window that last had focus on `workspace`, or `nil` when none
+    /// was recorded or it has since left the workspace.
+    func lastFocusedWindow(onWorkspace workspace: Int) -> CGWindowID? {
+        guard let wid = lastFocusedWindow[workspace],
+              windowWorkspaces[wid] == workspace else { return nil }
+        return wid
+    }
+
+    /// Drop `windowID` from the per-workspace focus memory when it stops
+    /// being `old`'s window. Called on every reassignment and removal.
+    private func forgetFocus(_ windowID: CGWindowID, leaving old: Int?) {
+        guard let old, lastFocusedWindow[old] == windowID else { return }
+        lastFocusedWindow.removeValue(forKey: old)
+    }
+
     /// Snapshot of the live window→workspace map.
     func allWindowWorkspaces() -> [CGWindowID: Int] {
         windowWorkspaces
@@ -269,6 +300,7 @@ class WorkspaceManager {
         let oldDesc: String
         if let old = windowWorkspaces[windowID] {
             workspaceWindowSets[old]?.remove(windowID)
+            if old != workspace { forgetFocus(windowID, leaving: old) }
             oldDesc = "ws\(old)"
         } else {
             oldDesc = "none"
@@ -285,6 +317,7 @@ class WorkspaceManager {
     func removeWindow(_ windowID: CGWindowID) {
         if let old = windowWorkspaces[windowID] {
             workspaceWindowSets[old]?.remove(windowID)
+            forgetFocus(windowID, leaving: old)
         }
         windowWorkspaces.removeValue(forKey: windowID)
         savedFloatingFrames.removeValue(forKey: windowID)

@@ -86,9 +86,13 @@ final class WorkspaceOrchestrator {
         let result = workspaceManager.switchWorkspace(number, cursorScreen: currentScreen)
 
         if result.alreadyVisible {
-            // workspace is showing on result.screen — just focus it
+            // workspace is showing on result.screen — just focus it. the
+            // window the user last had focused there wins over the first
+            // tiled window in enumeration order.
             let visibleWindows = allWindows.filter { result.toShow.contains($0.windowID) }
-            if let best = visibleWindows.first(where: { !stateCache.floatingWindowIDs.contains($0.windowID) })
+            let remembered = workspaceManager.lastFocusedWindow(onWorkspace: number)
+            if let best = visibleWindows.first(where: { $0.windowID == remembered })
+                ?? visibleWindows.first(where: { !stateCache.floatingWindowIDs.contains($0.windowID) })
                 ?? visibleWindows.first {
                 best.focus()
                 cursorManager.warpToCenter(of: best)
@@ -152,16 +156,21 @@ final class WorkspaceOrchestrator {
         // retile immediately — no delay between hide and show
         tileAllVisibleSpaces()
 
-        // focus best tiled window on the new workspace; if none, fall back to
-        // any floating window before giving up. only warp+hide if truly empty.
-        // the workspace's own windows win over carried sticky ones — the user
-        // switched here for this workspace's content, and the sticky app
-        // was already in front of them.
+        // focus the window the user last had focused on the new workspace
+        // (so a Cmd-Tab away and back — or Hypr+N — lands on the tile they
+        // left, which in accordion mode is also the front slot). Without a
+        // usable memory: best tiled window, then any floating window, and
+        // only warp+hide if truly empty. the workspace's own windows win
+        // over carried sticky ones — the user switched here for this
+        // workspace's content, and the sticky app was already in front of
+        // them.
         let newWorkspaceWindows = allWindows.filter { toShow.contains($0.windowID) }
         let own = newWorkspaceWindows.filter { !carried.contains($0.windowID) }
+        let remembered = workspaceManager.lastFocusedWindow(onWorkspace: number)
+        let recalled = own.first { $0.windowID == remembered }
         let tiled = own.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
             ?? newWorkspaceWindows.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
-        if let best = tiled ?? own.first ?? newWorkspaceWindows.first {
+        if let best = recalled ?? tiled ?? own.first ?? newWorkspaceWindows.first {
             best.focus()
             cursorManager.warpToCenter(of: best)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")

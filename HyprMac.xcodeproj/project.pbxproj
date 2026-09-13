@@ -22,6 +22,7 @@
 		188EAF405D36CBFCDAB54014 /* Keybind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E4E656D3CA021B130775CC3 /* Keybind.swift */; };
 		1B637997E721C7D6BF0FC307 /* DirectionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 301C7EDAAD234FC3DDCBAADC /* DirectionPicker.swift */; };
 		1CE8BFDB73C690ADABECD3C3 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23220FDBA7BCF857E8EBC0F0 /* MenuBarView.swift */; };
+		1D0A5FD9F438A97DA423516B /* WorkspaceFocusMemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C28DE4F23A528752A68237D7 /* WorkspaceFocusMemoryTests.swift */; };
 		1D5547D2D6368BB0D2355F0E /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61E1DEE768A398E963AAB1CA /* DesignSystem.swift */; };
 		1DEA79CA749DC72D381082D3 /* LayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9927DB9594D281BB5179CA3 /* LayoutEngine.swift */; };
 		1F9D6BD162F161D57BF6AE3B /* SupportDirectoryImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D7985CD063C3A77FD0C48EF /* SupportDirectoryImportTests.swift */; };
@@ -213,6 +214,7 @@
 		BB697B2619BEB7E2434E157E /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		BE062173D513A1A60A3E704D /* ConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigStore.swift; sourceTree = "<group>"; };
 		C0C8D3EAFB70C82B163D2DAA /* ForceInsertWindowFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForceInsertWindowFallbackTests.swift; sourceTree = "<group>"; };
+		C28DE4F23A528752A68237D7 /* WorkspaceFocusMemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFocusMemoryTests.swift; sourceTree = "<group>"; };
 		C4BF3E3B39107A11D98F0575 /* PollingScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollingScheduler.swift; sourceTree = "<group>"; };
 		C530FEE9D5C1B2B50C46C096 /* IPCServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPCServer.swift; sourceTree = "<group>"; };
 		C5ECA897D9C7F4DF25FFE758 /* DefaultKeybinds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultKeybinds.swift; sourceTree = "<group>"; };
@@ -478,6 +480,7 @@
 				857FCC6A226AFEECD7A199FC /* WindowDiscoveryServiceTests.swift */,
 				E9EF96B688DCAEC0C6EB7A10 /* WindowRuleTests.swift */,
 				901F153AA3906FE161498E58 /* WindowStateCacheTests.swift */,
+				C28DE4F23A528752A68237D7 /* WorkspaceFocusMemoryTests.swift */,
 			);
 			path = HyprMacTests;
 			sourceTree = "<group>";
@@ -747,6 +750,7 @@
 				00B50053F139D098B090709F /* WindowDiscoveryServiceTests.swift in Sources */,
 				E3C9EA041BCCF3D861E305F1 /* WindowRuleTests.swift in Sources */,
 				EA8FC0F77CB146BAD8B35CBE /* WindowStateCacheTests.swift in Sources */,
+				1D0A5FD9F438A97DA423516B /* WorkspaceFocusMemoryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
