@@ -81,6 +81,13 @@ struct WindowRulesPanel: View {
             .toggleStyle(.checkbox)
             .font(.hyprBody)
             .help("Always give this app a full-height column: new windows open beside it, never above or below, and no split above it can stack (like a master window in Hyprland's master layout)")
+            Toggle("No fake click", isOn: Binding(
+                get: { rule.noSyntheticClick },
+                set: { on in update(rule.bundleID) { $0.noSyntheticClick = on } }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.hyprBody)
+            .help("Never post a synthesized mouse click into this app to force activation under focus-follows-mouse. Turn on for remote desktops, VMs and games that forward mouse input — a fake click there causes stuck or phantom presses. Common clients (Citrix, Microsoft Remote Desktop, VMware, Parallels, VNC…) are blocked by default.")
             HStack(spacing: 2) {
                 Text("\(rule.sortPriority)")
                     .font(.hyprMonoXs)

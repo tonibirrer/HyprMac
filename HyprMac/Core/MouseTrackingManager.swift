@@ -47,7 +47,13 @@ class MouseTrackingManager {
     // and native right-click context menus (NSMenu). other code paths read this
     // to skip focus-stealing operations while a menu is open.
     var menuTracking = false
-    var dockIsActive = false
+    // true while a transient system-UI process is frontmost: the Dock (its
+    // popups), Control Center (menu-bar popovers), Notification Center,
+    // Spotlight, sketchybar. none of these post the HIToolbox menu-tracking
+    // notifications, yet hovering or refocusing under them dismisses their
+    // popovers exactly like a menu. set/cleared by WindowManager from app
+    // activation notifications, with a watchdog for the no-successor case.
+    var overlayActive = false
 
     private var lastHandleTime: CFAbsoluteTime = 0
     // last time menuTrackingBegan was called. used by the watchdog to clear
@@ -128,7 +134,7 @@ class MouseTrackingManager {
     ///
     /// Each guard exists for a specific reason: `isMouseButtonDown`
     /// skips drags (`DragManager` owns those), `menuTracking` and
-    /// `dockIsActive` skip transient OS UI that would race with focus
+    /// `overlayActive` skip transient OS UI that would race with focus
     /// changes, and `isMouseFocusSuppressed` honors the post-action quiet window
     /// owned by `SuppressionRegistry["mouse-focus"]`.
     private func isFFMEligible() -> Bool {
@@ -151,7 +157,7 @@ class MouseTrackingManager {
                 return false
             }
         }
-        if dockIsActive { hyprLog(.debug, .mouse, "ffm-bail: dockIsActive"); return false }
+        if overlayActive { hyprLog(.debug, .mouse, "ffm-bail: overlayActive"); return false }
         if isMouseFocusSuppressed() { hyprLog(.debug, .mouse, "ffm-bail: mouse-focus suppressed"); return false }
         return true
     }
@@ -186,7 +192,15 @@ class MouseTrackingManager {
         let floating = floatingWindowIDs()
         let managed = tiledPositions()
 
-        if let topmostID = topmostWindowID(at: cgPoint) {
+        let hit = topmostWindow(at: cgPoint)
+        if case .overlay = hit {
+            // the cursor is over a menu, popover, palette, the Dock or the
+            // menu bar — something above the normal window layer that is
+            // not ours. refocusing the tile underneath would dismiss it.
+            hyprLog(.debug, .mouse, "ffm-bail: cursor over overlay window")
+            return nil
+        }
+        if case .window(let topmostID) = hit {
             // cursor is over a visible floater — leave focus alone
             if floating.contains(topmostID), isWindowVisible(topmostID) {
                 return nil
@@ -293,50 +307,78 @@ class MouseTrackingManager {
         recordFocus(0, "refocus-under-cursor-clear")
     }
 
-    /// Short-TTL cache of the most recent topmost-window result.
+    /// Result of the CG hit-test under the cursor.
+    enum HitTest: Equatable {
+        /// A normal-layer window of another process.
+        case window(CGWindowID)
+        /// Something above the normal layer that is not ours covers the
+        /// point: a menu, popover, palette, the Dock, the menu bar.
+        case overlay
+        /// Nothing visible covers the point.
+        case none
+    }
+
+    /// Short-TTL cache of the most recent hit-test result.
     /// `CGWindowListCopyWindowInfo` is expensive enough to dominate the
     /// FFM hot path without this.
-    private var topmostCache: (windowID: CGWindowID, time: CFAbsoluteTime, point: CGPoint)?
+    private var topmostCache: (hit: HitTest, time: CFAbsoluteTime, point: CGPoint)?
+
+    /// A non-zero-layer window covering at least this share of its screen
+    /// is treated as a screen-wide overlay (dimmers, color filters,
+    /// screen-recording frames) and looked through, not as a popup that
+    /// blocks FFM. Popovers, menus and palettes are far smaller.
+    private static let screenWideOverlayFraction: CGFloat = 0.85
 
     /// Front-to-back CG hit-test for the real window under `point`.
     /// Skips this process's own windows (the focus border, dim panel,
-    /// settings/welcome) and any layer ≠ 0. Returns `nil` when no
-    /// normal-layer visible window covers the point.
-    private func topmostWindowID(at point: CGPoint) -> CGWindowID? {
+    /// settings/welcome) and screen-wide overlays. The first other
+    /// window that contains the point decides: layer 0 → `.window`,
+    /// anything else → `.overlay`. Looking *through* a popup to the tile
+    /// beneath it is exactly what dismissed menus and popovers under FFM.
+    func topmostWindow(at point: CGPoint) -> HitTest {
         let now = CFAbsoluteTimeGetCurrent()
         if let cache = topmostCache,
            now - cache.time < Tuning.topmostCacheTTL,
            abs(point.x - cache.point.x) < Tuning.topmostCacheSpatialTolerance,
            abs(point.y - cache.point.y) < Tuning.topmostCacheSpatialTolerance {
-            return cache.windowID == 0 ? nil : cache.windowID
+            return cache.hit
         }
 
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return nil
+            return .none
         }
+        let screenArea = screenAt(point).map { $0.frame.width * $0.frame.height } ?? .greatestFiniteMagnitude
 
-        // walk front-to-back, find the first window whose bounds contain the point
+        let hit = Self.classifyHit(at: point, windowList: windowList, selfPID: getpid(), screenArea: screenArea)
+        topmostCache = (hit: hit, time: now, point: point)
+        return hit
+    }
+
+    /// Pure classification over a CG window list (front-to-back), split
+    /// out so the rule is unit-testable without a live window server.
+    static func classifyHit(at point: CGPoint, windowList: [[String: Any]],
+                            selfPID: pid_t, screenArea: CGFloat) -> HitTest {
         for info in windowList {
-            if let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == getpid() {
+            if let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == selfPID {
                 continue
             }
-
             guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let x = bounds["X"], let y = bounds["Y"],
                   let w = bounds["Width"], let h = bounds["Height"] else { continue }
             let frame = CGRect(x: x, y: y, width: w, height: h)
             guard frame.contains(point) else { continue }
-            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
             let alpha = info[kCGWindowAlpha as String] as? CGFloat ?? 1.0
             guard alpha > 0.01 else { continue }
-
+            let layer = info[kCGWindowLayer as String] as? Int ?? 0
+            if layer != 0 {
+                // screen-wide tinted overlays are not popups — keep looking
+                if frame.width * frame.height >= screenArea * screenWideOverlayFraction { continue }
+                return .overlay
+            }
             let wid = (info[kCGWindowNumber as String] as? Int).map { CGWindowID($0) } ?? 0
-            topmostCache = (windowID: wid, time: now, point: point)
-            return wid == 0 ? nil : wid
+            return wid == 0 ? .none : .window(wid)
         }
-
-        topmostCache = (windowID: 0, time: now, point: point)
-        return nil
+        return .none
     }
 
     /// Called when a menu (app menu or right-click context menu) opens.

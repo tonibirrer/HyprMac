@@ -97,6 +97,10 @@ class WindowManager {
     // we hide rather than try to follow, because we'd need 60Hz AX polling per window
     // and that's prohibitively expensive.
     private var preDragFocusedID: CGWindowID = 0
+    // set once an AX read confirms the mouse-down floater actually moved
+    // under the current press (see floaterMovedSinceMouseDown).
+    private var floaterDragConfirmed = false
+    private var lastFloaterMoveProbe: TimeInterval = 0
 
     // armed when a drag starts on a visible floating window while dim is on
     // (normal mode). drives dimmingOverlay.setDragOverride so the bright carve
@@ -125,8 +129,9 @@ class WindowManager {
     // across workspace switches (which transiently hide the focus border).
     private var hyprHeld = false
 
-    // bumped each time the dock activates; the watchdog closure compares against this
-    // before clearing dockIsActive so re-activations cancel earlier pending clears.
+    // bumped each time an overlay process activates; the watchdog closure compares
+    // against this before clearing overlayActive so re-activations cancel earlier
+    // pending clears.
     private var dockActivationToken: UInt64 = 0
 
     // user-gesture breadcrumbs for the dock-affordance gate in appDidActivate.
@@ -327,7 +332,7 @@ class WindowManager {
         }
         floatingController.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
         floatingController.updatePositionCache = { [weak self] in self?.updatePositionCache() }
-        floatingController.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
+        floatingController.isTransientUIActive = { [weak self] in self?.isTransientUIActive ?? false }
         floatingController.isScratchpadVisible = { [weak self] in self?.scratchpad.isVisible ?? false }
         floatingController.adoptIntoScratchpad = { [weak self] w, frame in self?.scratchpad.adopt(w, preferredFrame: frame) }
 
@@ -367,9 +372,10 @@ class WindowManager {
         actionDispatcher.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         actionDispatcher.screenUnderCursor = { [weak self] in self?.screenUnderCursor() ?? NSScreen.main! }
         actionDispatcher.applyForgottenIDCleanup = { [weak self] id in self?.applyForgottenIDExternalCleanup(id) }
+        actionDispatcher.hideChromeForGoneWindow = { [weak self] id in self?.hideChromeForGoneWindow(id) }
         actionDispatcher.animatedRetile = { [weak self] windows in self?.animatedRetile(windows: windows) }
         actionDispatcher.refocusUnderCursor = { [weak self] in self?.mouseTracker.refocusUnderCursor() }
-        actionDispatcher.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
+        actionDispatcher.isTransientUIActive = { [weak self] in self?.isTransientUIActive ?? false }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
         // DragSwapHandler shares the dispatcher's swap-rejection flash so cross-monitor and
@@ -573,7 +579,7 @@ class WindowManager {
                          name: NSWorkspace.didHideApplicationNotification, object: nil)
         wsnc.addObserver(self, selector: #selector(appVisibilityChanged(_:)),
                          name: NSWorkspace.didUnhideApplicationNotification, object: nil)
-        // clear stuck dockIsActive if the dock app deactivates without another app taking front
+        // clear stuck overlayActive if the overlay app deactivates without another app taking front
         wsnc.addObserver(self, selector: #selector(appDidDeactivate(_:)),
                          name: NSWorkspace.didDeactivateApplicationNotification, object: nil)
 
@@ -928,6 +934,8 @@ class WindowManager {
             guard let self else { return }
             self.mouseButtonDown = true
             self.mouseDraggedSinceDown = false
+            self.floaterDragConfirmed = false
+            self.lastFloaterMoveProbe = 0
             self.lastLeftMouseDownTime = CFAbsoluteTimeGetCurrent()
             // the event carries the exact click location. sampling
             // NSEvent.mouseLocation inside the handler instead reads
@@ -962,19 +970,28 @@ class WindowManager {
         // when the user drags a floating window, its frame changes 60Hz but our
         // border only repositions on the discovery poll — so it lags behind ugly. hide
         // the border for the duration of the drag and restore it on mouseUp.
+        //
+        // "drag" here means the WINDOW moved, confirmed by an AX position
+        // read — not merely that leftMouseDragged fired. AppKit posts that
+        // event for a single pixel of jitter inside a click and for every
+        // content drag (text selection, scrollbar), and hiding the border on
+        // those replays the show tint on release: the window "lights up"
+        // on every click. the dim carve is handled by updateDimDrag's own
+        // override; the scrim in scratchpad mode is never carved, so
+        // neither needs hiding here.
         mouseDragMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDragged) { [weak self] _ in
             guard let self = self else { return }
             self.mouseDraggedSinceDown = true
-            if self.mouseDownFloatingWindowID != 0 {
-                self.focusBorder.hideFloatingBorder(for: self.mouseDownFloatingWindowID)
-            }
             self.updateDimDrag()
+            guard self.mouseDownFloatingWindowID != 0, self.floaterMovedSinceMouseDown() else { return }
+            let draggedID = self.mouseDownFloatingWindowID
+            self.focusBorder.hideFloatingBorder(for: draggedID)
             guard self.preDragFocusedID == 0 else { return }
-            guard let tid = self.focusBorder.trackedWindowID else { return }
-            // only hide for floating windows — tiled windows can't be free-dragged
-            guard self.stateCache.floatingWindowIDs.contains(tid) else { return }
-            self.preDragFocusedID = tid
-            self.focusBorder.hide(); self.dimmingOverlay.hideAll()
+            // only the border on the window being dragged lags — a border on
+            // any other window stays put.
+            guard self.focusBorder.trackedWindowID == draggedID else { return }
+            self.preDragFocusedID = draggedID
+            self.focusBorder.hide()
         }
         mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] _ in
             let shouldDetectDrag = self?.mouseDraggedSinceDown ?? false
@@ -998,12 +1015,14 @@ class WindowManager {
                 }
             }
             // restore the focus border on whatever floating window we hid it for,
-            // after a brief settle delay so we read its final position
+            // after a brief settle delay so we read its final position. the
+            // border comes back outline-only: focus never moved, so the
+            // active tint would just be a flash.
             if let id = self?.preDragFocusedID, id != 0 {
                 self?.preDragFocusedID = 0
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
                     guard let self = self, let w = self.stateCache.cachedWindows[id] else { return }
-                    self.updateFocusBorder(for: w)
+                    self.updateFocusBorder(for: w, settled: true)
                     self.refreshFloatingBorders()
                 }
             }
@@ -1015,6 +1034,25 @@ class WindowManager {
                 self?.mouseTracker.refocusUnderCursor()
             }
         }
+    }
+
+    /// `true` once an AX position read has seen the mouse-down floater move
+    /// away from its mouse-down frame under this press. Latches for the
+    /// rest of the press; probes at most every 50 ms until then so a long
+    /// content drag inside a stationary floater costs a handful of reads.
+    /// 3 px guard clears AX position noise.
+    private func floaterMovedSinceMouseDown() -> Bool {
+        if floaterDragConfirmed { return true }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastFloaterMoveProbe > 0.05 else { return false }
+        lastFloaterMoveProbe = now
+        guard let start = mouseDownFloatingFrame,
+              let w = stateCache.cachedWindows[mouseDownFloatingWindowID],
+              let pos = w.position else { return false }
+        if hypot(pos.x - start.origin.x, pos.y - start.origin.y) > 3 {
+            floaterDragConfirmed = true
+        }
+        return floaterDragConfirmed
     }
 
     /// Remove every NSEvent monitor installed by `startMouseTracking()` and
@@ -1042,20 +1080,52 @@ class WindowManager {
     /// app activation kicked off by the AX focus call doesn't bounce the
     /// user to a different workspace.
     ///
-    /// On Tahoe, AX writes + SkyLight + `NSRunningApplication.activate()` are all
-    /// silently rejected from a `.accessory` app's mouse-move handler context, so
-    /// `focusViaSyntheticClick` posts a leftMouseDown/Up directly into the target
-    /// process — the only reliable activator. AX/SkyLight calls remain so the
-    /// rest of the system (`AXFocused` queries, key-window state) sees the right
-    /// window even before the click lands.
+    /// On Tahoe, AX writes + SkyLight + `NSRunningApplication.activate()` are
+    /// sometimes silently rejected from a `.accessory` app's mouse-move handler
+    /// context. `focusViaSyntheticClick` (a leftMouseDown/Up posted into the
+    /// target process) is the fallback that reliably activates — but it is
+    /// real input as far as the app is concerned, so it runs only after the
+    /// AX/SkyLight path has verifiably failed to bring the app forward, and
+    /// never into apps that forward mouse events elsewhere (remote desktops,
+    /// VMs — see `HyprWindow.syntheticClickBlockedBundleIDs` and the
+    /// `noSyntheticClick` window rule).
     private func focusForFFM(_ window: HyprWindow) {
         // while the scratchpad is up, hovering the dimmed tiles behind it
         // must not steal focus — the layer is quasimodal
         if scratchpad.isVisible && !scratchpad.contains(window.windowID) { return }
         suppressions.suppress("activation-switch", for: 0.5)
         window.focusWithoutRaise()
-        window.focusViaSyntheticClick()
+        scheduleSyntheticClickFallback(for: window)
         updateFocusBorder(for: window)
+    }
+
+    /// How long the AX/SkyLight activation gets before the synthetic click
+    /// steps in. Activation lands within a few ms when it works at all;
+    /// the 10 ms probe in `focusWithoutRaise` already reports the drops.
+    private static let syntheticClickFallbackDelay: TimeInterval = 0.06
+
+    /// Post the synthetic click into `window`'s app only if, after
+    /// `syntheticClickFallbackDelay`, the app still is not frontmost, the
+    /// user's intent has not moved on to another window, and the app is
+    /// not excluded from input injection.
+    private func scheduleSyntheticClickFallback(for window: HyprWindow) {
+        let id = window.windowID
+        let pid = window.ownerPID
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.syntheticClickFallbackDelay) { [weak self] in
+            guard let self, self.isRunning else { return }
+            // intent moved on (another FFM target, a click, a workspace
+            // switch) — a click now would land in a window the user left.
+            guard self.focusController.lastFocusedID == id else { return }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier != pid else { return }
+            let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+            if window.blocksSyntheticClickByDefault
+                || self.config.windowRules.blocksSyntheticClick(bundleID: bundleID) {
+                hyprLog(.debug, .focus, "ffm: activation of \(bundleID ?? "?") did not land; synthetic click blocked for this app")
+                return
+            }
+            hyprLog(.notice, .focus, "ffm: activation of \(bundleID ?? "?") did not land after \(Int(Self.syntheticClickFallbackDelay * 1000))ms — falling back to synthetic click")
+            window.focusViaSyntheticClick()
+        }
     }
 
     /// Reposition the focus border around `window`, refresh the floating
@@ -1091,7 +1161,11 @@ class WindowManager {
         return false
     }
 
-    private func updateFocusBorder(for window: HyprWindow) {
+    /// - Parameter settled: re-show the border in its outline-only state
+    ///   without replaying the active tint. Use when the border is coming
+    ///   back after being hidden for a mechanical reason (drag, menu), not
+    ///   because focus moved.
+    private func updateFocusBorder(for window: HyprWindow, settled: Bool = false) {
         // suppress all chrome when a fullscreen window is in play — green
         // button, Cmd-Ctrl-F, browser HTML5 fullscreen, fullscreen video.
         // HyprMac panels are .canJoinAllSpaces so they'd otherwise draw on
@@ -1115,7 +1189,7 @@ class WindowManager {
                 ? config.resolvedFloatingBorderColor.cgColor
                 : workspaceAccent.cgColor
             WindowCornerRadius.prime(for: window)
-            focusBorder.show(around: frame, windowID: window.windowID)
+            focusBorder.show(around: frame, windowID: window.windowID, settled: settled)
             // cache-based on both paths — this runs on every FFM focus
             // change, and the floating branch used to re-enumerate the
             // whole desktop. floatingFrames reads live AX frames from the
@@ -1140,7 +1214,7 @@ class WindowManager {
     /// window to the front slot as well. HyprMac's own focus moves arrive
     /// here too and are no-ops: the border already tracks that window.
     private func followSystemFocus(reason: String) {
-        guard isRunning, !mouseButtonDown, !hyprHeld else { return }
+        guard isRunning, !mouseButtonDown, !hyprHeld, !isTransientUIActive else { return }
         guard let focused = accessibility.getFocusedWindow() else { return }
         let id = focused.windowID
         guard id != 0, focusBorder.trackedWindowID != id else { return }
@@ -1243,12 +1317,17 @@ class WindowManager {
             for (i, screen) in displayManager.screens.enumerated() {
                 screenCovers[CGWindowID(UInt32.max - 1 - UInt32(i))] = displayManager.cgRect(for: screen)
             }
-            dimmingOverlay.update(
+            let reordered = dimmingOverlay.update(
                 focusedID: CGWindowID(UInt32.max),
                 tiledRects: screenCovers,
                 floatingRects: [:],
                 screens: displayManager.screens
             )
+            // a scrim panel that had been ordered out (hideAll from any
+            // path) comes back on top of the .normal stack — above the
+            // members it is supposed to sit under. tuck it straight away
+            // instead of waiting for the next show()'s settle passes.
+            if reordered { scratchpad.settleScrimBelowMembers() }
             return
         }
         // not in scrim mode — back to pure black focus dim.
@@ -2263,6 +2342,20 @@ class WindowManager {
         WindowCornerRadius.forget(id)
     }
 
+    /// Visual half of a window leaving the screen without being forgotten
+    /// (Cmd-H, minimize, closed while the app lives on). The window keeps
+    /// its cache and workspace state so it can return, but any border or
+    /// dim still aimed at it would stay painted at the old rect — a hidden
+    /// window's AX frame does not change, so nothing else moves it.
+    private func hideChromeForGoneWindow(_ id: CGWindowID) {
+        if focusBorder.trackedWindowID == id {
+            hyprLog(.debug, .border, "border tracked \(id) left the screen — hiding")
+            focusBorder.hide()
+            dimmingOverlay.hideAll()
+        }
+        focusBorder.hideFloatingBorder(for: id)
+    }
+
     /// Forget every window owned by `pid`. Called on app termination —
     /// handles the case where an app dies while some of its windows are
     /// hidden or minimized; those ids would otherwise leak in cache state
@@ -2573,20 +2666,28 @@ class WindowManager {
             previousActivationBundleID = app.bundleIdentifier
         }
 
-        // suppress FFM while dock popups (downloads, stacks) are open
+        // suppress FFM and every focus-restoring reaction while a transient
+        // system-UI process is frontmost: Dock popups (downloads, stacks),
+        // Control Center popovers (Wi-Fi, battery — also when opened
+        // through a sketchybar alias), Notification Center, Spotlight.
+        // none of them are menus as far as HIToolbox is concerned, so the
+        // menuTracking flag never covers them; a focusWithoutRaise from the
+        // poll's focus invariant or a floater raise would pull the front
+        // process away and dismiss the popover.
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-            let isDock = (app.bundleIdentifier == "com.apple.dock")
-            mouseTracker.dockIsActive = isDock
-            if isDock {
-                // watchdog: if no app activates after the dock for 5s (user dismissed
+            let isOverlay = Self.isTransientOverlayApp(app)
+            mouseTracker.overlayActive = isOverlay
+            if isOverlay {
+                hyprLog(.debug, .mouse, "overlay app active: \(app.bundleIdentifier ?? app.localizedName ?? "?")")
+                // watchdog: if no app activates after the overlay for 5s (user dismissed
                 // the popup with Escape, e.g.), clear it so FFM doesn't stay dead.
                 let token = dockActivationToken &+ 1
                 dockActivationToken = token
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
                     guard let self = self, self.dockActivationToken == token,
-                          self.mouseTracker.dockIsActive else { return }
-                    hyprLog(.notice, .mouse, "dockIsActive watchdog — clearing after 5s with no other activation")
-                    self.mouseTracker.dockIsActive = false
+                          self.mouseTracker.overlayActive else { return }
+                    hyprLog(.notice, .mouse, "overlayActive watchdog — clearing after 5s with no other activation")
+                    self.mouseTracker.overlayActive = false
                 }
             }
         }
@@ -2705,16 +2806,42 @@ class WindowManager {
         hotkeyManager.consumeCommandGesture()
     }
 
-    /// Clear `dockIsActive` if the deactivating app is the dock. macOS
-    /// doesn't always fire `didActivate` for the next app (e.g. user
-    /// dismisses a dock popup with Escape), so the watchdog covers that
-    /// path; this is the fast cleanup when a sibling activation does fire.
+    /// Clear `overlayActive` if the deactivating app is one of the overlay
+    /// processes. macOS doesn't always fire `didActivate` for the next app
+    /// (e.g. user dismisses a dock popup with Escape), so the watchdog
+    /// covers that path; this is the fast cleanup when a sibling
+    /// activation does fire.
     @objc private func appDidDeactivate(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier == "com.apple.dock" else { return }
-        if mouseTracker.dockIsActive {
-            mouseTracker.dockIsActive = false
+              Self.isTransientOverlayApp(app) else { return }
+        if mouseTracker.overlayActive {
+            mouseTracker.overlayActive = false
         }
+    }
+
+    /// System-UI processes whose activation means a transient popover is
+    /// up rather than the user having switched apps.
+    private static let overlayBundleIDs: Set<String> = [
+        "com.apple.dock",
+        "com.apple.controlcenter",
+        "com.apple.notificationcenterui",
+        "com.apple.Spotlight",
+        "com.apple.SystemUIServer",
+    ]
+
+    /// `true` for the processes in `overlayBundleIDs`, plus bundle-less
+    /// status-bar replacements (sketchybar) matched by process name.
+    private static func isTransientOverlayApp(_ app: NSRunningApplication) -> Bool {
+        if let bid = app.bundleIdentifier { return overlayBundleIDs.contains(bid) }
+        return app.localizedName?.lowercased() == "sketchybar"
+    }
+
+    /// `true` while a menu is tracking or an overlay process is frontmost:
+    /// every path that would move the front process (focus invariant,
+    /// floater raise, system-focus follow, FFM) must hold off, or the
+    /// user's menu / popover is dismissed under them.
+    private var isTransientUIActive: Bool {
+        mouseTracker.menuTracking || mouseTracker.overlayActive
     }
 
     /// Active Space changed — most commonly because the user entered or
@@ -2737,9 +2864,9 @@ class WindowManager {
     @objc private func systemInterruption(_ notification: Notification) {
         hyprLog(.notice, .hotkey, "system interruption (\(notification.name.rawValue)) — resetting hotkey state")
         hotkeyManager.resetTrackingAfterTapInterruption()
-        // also clear stuck dock flag and menu-tracking flag — sleep dialogs
+        // also clear stuck overlay flag and menu-tracking flag — sleep dialogs
         // and screen lock can leave either stale.
-        mouseTracker.dockIsActive = false
+        mouseTracker.overlayActive = false
         if mouseTracker.menuTracking {
             mouseTracker.menuTrackingEnded()
         }

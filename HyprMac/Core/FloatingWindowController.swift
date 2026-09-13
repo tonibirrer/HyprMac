@@ -41,7 +41,9 @@ final class FloatingWindowController {
     var animatedRetile: ((@escaping () -> Void) -> Void)?
     var updateFocusBorder: ((HyprWindow) -> Void)?
     var updatePositionCache: (() -> Void)?
-    var isMenuTracking: () -> Bool = { false }
+    // true while a native menu tracks or an overlay process (Control
+    // Center, Dock…) is frontmost — raiseBehind must hold off then.
+    var isTransientUIActive: () -> Bool = { false }
     var isScratchpadVisible: () -> Bool = { false }
     // spill an evicted window into the scratchpad overflow buffer.
     var adoptIntoScratchpad: ((HyprWindow, CGRect?) -> Void)?
@@ -213,9 +215,10 @@ final class FloatingWindowController {
         // members raised above) and the post-raise focusWithoutRaise would
         // pull focus onto a background tiled window and dismiss the layer.
         guard !isScratchpadVisible() else { return }
-        // skip while a native menu is tracking — the post-raise focusWithoutRaise below
-        // synthesizes key-focus events that dismiss context menus.
-        guard !isMenuTracking() else { return }
+        // skip while a native menu is tracking or an overlay popover is up —
+        // the post-raise focusWithoutRaise below synthesizes key-focus
+        // events that dismiss them.
+        guard !isTransientUIActive() else { return }
         isRaising = true
         defer { isRaising = false }
 
@@ -227,6 +230,7 @@ final class FloatingWindowController {
 
         let previousFocusID = focusController.lastFocusedID
         let previousWindow = stateCache.cachedWindows[previousFocusID]
+        let frontmostBefore = NSWorkspace.shared.frontmostApplication?.processIdentifier
 
         suppressions.suppress("activation-switch", for: 0.5)
         suppressions.suppress("mouse-focus", for: 0.15)
@@ -236,11 +240,18 @@ final class FloatingWindowController {
             AXUIElementPerformAction(w.element, kAXRaiseAction as CFString)
         }
 
-        // immediately restore focus to the tiled window the user was interacting with.
-        // prevents the raise from stealing focus and triggering an FFM cascade.
+        // restore focus to the tiled window the user was interacting with —
+        // but only if the raise actually moved the front process. a bare
+        // AXRaise on a background app's window usually doesn't; then
+        // focusWithoutRaise would only push synthetic key-window events into
+        // an app that already has focus (every poll, with a floater parked
+        // behind it — remote-desktop clients react badly to that).
         if let prev = previousWindow, !stateCache.floatingWindowIDs.contains(prev.windowID) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
-                prev.focusWithoutRaise()
+                let frontmostNow = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                if frontmostNow != frontmostBefore || frontmostNow != prev.ownerPID {
+                    prev.focusWithoutRaise()
+                }
                 self?.updateFocusBorder?(prev)
             }
         }

@@ -52,11 +52,19 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
     /// master window is a full-height column and everything else stacks
     /// beside it. Default off.
     var fullHeight: Bool
+    /// Never post a synthesized mouse click into this app to force
+    /// activation (the focus-follows-mouse fallback on Tahoe). For apps
+    /// that forward mouse input elsewhere — remote desktops, VMs, games —
+    /// a fake down/up desynchronizes their button tracking. Well-known
+    /// clients are blocked by default (`HyprWindow.syntheticClickBlockedBundleIDs`);
+    /// this flag covers the rest. Default off.
+    var noSyntheticClick: Bool
 
     var id: String { bundleID }
 
     init(bundleID: String, workspace: Int, silent: Bool = false, sortPriority: Int = 0,
-         focusOnActivate: Bool = false, sticky: Bool = false, fullHeight: Bool = false) {
+         focusOnActivate: Bool = false, sticky: Bool = false, fullHeight: Bool = false,
+         noSyntheticClick: Bool = false) {
         self.bundleID = bundleID
         self.workspace = workspace
         self.silent = silent
@@ -64,6 +72,7 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
         self.focusOnActivate = focusOnActivate
         self.sticky = sticky
         self.fullHeight = fullHeight
+        self.noSyntheticClick = noSyntheticClick
     }
 
     // everything but the key fields decodes as optional so hand-edited
@@ -77,6 +86,7 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
         focusOnActivate = try c.decodeIfPresent(Bool.self, forKey: .focusOnActivate) ?? false
         sticky = try c.decodeIfPresent(Bool.self, forKey: .sticky) ?? false
         fullHeight = try c.decodeIfPresent(Bool.self, forKey: .fullHeight) ?? false
+        noSyntheticClick = try c.decodeIfPresent(Bool.self, forKey: .noSyntheticClick) ?? false
     }
 }
 
@@ -116,5 +126,12 @@ extension Array where Element == WindowRule {
     func isFullHeight(bundleID: String?) -> Bool {
         guard let bundleID else { return false }
         return first { $0.bundleID == bundleID }?.fullHeight ?? false
+    }
+
+    /// `true` when the first rule matching `bundleID` forbids the
+    /// synthetic-click activation fallback. A workspace pin is not required.
+    func blocksSyntheticClick(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return first { $0.bundleID == bundleID }?.noSyntheticClick ?? false
     }
 }

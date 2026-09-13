@@ -25,7 +25,7 @@ import Cocoa
 /// `currentFocusedWindow`, `updateFocusBorder`, `updatePositionCache`,
 /// `screenUnderCursor`, plus the apply-loop helpers
 /// `applyForgottenIDCleanup`, `animatedRetile`, `refocusUnderCursor`, and
-/// `isMenuTracking`.
+/// `isTransientUIActive`.
 ///
 /// Threading: main-thread only.
 final class ActionDispatcher {
@@ -52,9 +52,16 @@ final class ActionDispatcher {
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
     // additional closures used by applyChanges (Phase 4 step 3b)
     var applyForgottenIDCleanup: (CGWindowID) -> Void = { _ in }
+    /// Drop any border / dim chrome still pointing at a window that just
+    /// left the screen (Cmd-H, minimize, close-with-app-alive). Unlike
+    /// `applyForgottenIDCleanup` this keeps all cache state — the window
+    /// may come back — and only touches the visuals.
+    var hideChromeForGoneWindow: (CGWindowID) -> Void = { _ in }
     var animatedRetile: ([HyprWindow]) -> Void = { _ in }
     var refocusUnderCursor: () -> Void = {}
-    var isMenuTracking: () -> Bool = { false }
+    // true while a native menu tracks or an overlay process (Control
+    // Center, Dock…) is frontmost — the focus invariant must hold off then.
+    var isTransientUIActive: () -> Bool = { false }
     var toggleScratchpad: () -> Void = {}
     var moveToScratchpad: () -> Void = {}
 
@@ -137,6 +144,11 @@ final class ActionDispatcher {
         // independent of whether the follow-up retile actually runs.
         for id in changes.goneIDs {
             tilingEngine.removeWindowID(id)
+            // a Cmd-H'd / minimized window keeps its AX frame, so a border
+            // left on it stays painted at the old tile rect over an empty
+            // desktop. only fully-forgotten ids went through
+            // applyForgottenIDCleanup above; hidden ones need this.
+            hideChromeForGoneWindow(id)
         }
 
         // apply cross-screen drift reassignments. a ruled app that closed and
@@ -364,9 +376,9 @@ final class ActionDispatcher {
     /// when the focus border is already showing on a live window.
     private func ensureFocusInvariant() {
         guard config.showFocusBorder else { return }
-        // don't steal focus from a native menu that's currently tracking —
-        // SLPSPostEventRecordTo + panel reordering both dismiss menus
-        guard !isMenuTracking() else { return }
+        // don't steal focus from a native menu or an overlay popover —
+        // SLPSPostEventRecordTo + panel reordering both dismiss them
+        guard !isTransientUIActive() else { return }
         // border is already showing on a live window — nothing to do
         if let tid = focusBorder.trackedWindowID, stateCache.cachedWindows[tid] != nil {
             return
@@ -376,7 +388,16 @@ final class ActionDispatcher {
         let workspace = workspaceManager.workspaceForScreen(screen)
         let wsWindows = workspaceManager.windowIDs(onWorkspace: workspace)
             .subtracting(stateCache.hiddenWindowIDs)
-        guard !wsWindows.isEmpty else { return }
+        guard !wsWindows.isEmpty else {
+            // nothing left to outline on this workspace: a border still up
+            // here points at a window that is gone or hidden. drop it
+            // rather than leave an outline over the empty desktop.
+            if focusBorder.trackedWindowID != nil {
+                hyprLog(.debug, .border, "focus invariant: workspace \(workspace) empty — hiding stale border")
+                focusBorder.hide()
+            }
+            return
+        }
 
         // prefer whatever AX says is focused if it's on this workspace
         if let focused = accessibility.getFocusedWindow(),
@@ -385,13 +406,30 @@ final class ActionDispatcher {
             updateFocusBorder(focused)
             return
         }
+
+        // AX reports no tracked window as focused. two very different
+        // situations look like that: (a) focus is on a window we never
+        // manage — the desktop, an untracked app — and pulling it back to a
+        // tile is what the invariant is for; (b) the FRONTMOST app owns a
+        // tile on this workspace but its focused window is one we filter
+        // (a popup menu, sheet, tool panel — Zoom's "End meeting" popup).
+        // in (b) the user is mid-interaction; a focusWithoutRaise into that
+        // app posts key-window events that dismiss the popup. place the
+        // border only, never steal.
+        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let frontAppOwnsTile = wsWindows.contains { stateCache.windowOwners[$0] == frontPID }
+        let mayStealFocus = !frontAppOwnsTile
+        if !mayStealFocus {
+            hyprLog(.debug, .focus, "focus invariant: frontmost app owns a tile but its focused window is untracked (popup/sheet) — border only")
+        }
+
         // accordion mode: "any tiled window" is a random pick from the
         // stack and the focus-change hook would raise it — recover onto
         // the front window instead.
         if tilingEngine.isAccordionActive(on: screen),
            let front = tilingEngine.accordionFrontWindow(onWorkspace: workspace, screen: screen),
            wsWindows.contains(front.windowID) {
-            front.focusWithoutRaise()
+            if mayStealFocus { front.focusWithoutRaise() }
             focusController.recordFocus(front.windowID, reason: "ensureInvariant-accordion")
             updateFocusBorder(front)
             return
@@ -400,7 +438,7 @@ final class ActionDispatcher {
         // any tiled window on this workspace
         for (wid, _) in stateCache.tiledPositions where wsWindows.contains(wid) {
             if let w = stateCache.cachedWindows[wid] {
-                w.focusWithoutRaise()
+                if mayStealFocus { w.focusWithoutRaise() }
                 focusController.recordFocus(wid, reason: "ensureInvariant-tiled")
                 updateFocusBorder(w)
                 return
@@ -409,7 +447,7 @@ final class ActionDispatcher {
         // fall back to any visible window on this workspace (floating, etc.)
         for wid in wsWindows {
             if let w = stateCache.cachedWindows[wid] {
-                w.focusWithoutRaise()
+                if mayStealFocus { w.focusWithoutRaise() }
                 focusController.recordFocus(wid, reason: "ensureInvariant-fallback")
                 updateFocusBorder(w)
                 return
