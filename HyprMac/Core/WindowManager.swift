@@ -482,7 +482,12 @@ class WindowManager {
         // focus moves are layout changes on an accordion screen — the
         // stack re-shuffles around whichever window came to the front.
         focusController.onFocusChanged = { [weak self] id in
-            self?.accordionFocusDidChange(id)
+            guard let self else { return }
+            // per-workspace focus memory: a later switch back to this
+            // workspace returns to the window the user left, not to the
+            // first one in enumeration order.
+            self.workspaceManager.noteFocus(id)
+            self.accordionFocusDidChange(id)
         }
         tilingEngine.sortPriority = { [weak self] window in
             guard let self, !self.config.windowRules.isEmpty else { return 0 }
