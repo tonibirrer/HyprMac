@@ -29,6 +29,8 @@ enum Action: Equatable {
     case moveToScratchpad
     case toggleTiling
     case runCommand(label: String, command: String)
+    case saveLayout
+    case restoreLayout
 }
 ```
 
