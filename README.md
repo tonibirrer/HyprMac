@@ -17,8 +17,12 @@ HyprMac is in active development. Bug reports are welcome.
 - macOS 13 (Ventura) or later
 - Accessibility permission, in System Settings → Privacy & Security → Accessibility
 - For the default Caps Lock Hypr key: Caps Lock must stay set to **"⇪ Caps Lock"** in System
-  Settings → Keyboard → Keyboard Shortcuts → Modifier Keys, not "No Action". HyprMac remaps it
-  to F18 itself. Other Hypr keys, such as Tab, backtick, or F13–F20, do not use that pane.
+  Settings → Keyboard → Keyboard Shortcuts → Modifier Keys, not "No Action". The pane is per
+  keyboard, so check each one you use. HyprMac remaps Caps Lock to F18 itself.
+- The same holds if Control, Option, or Command is your Hypr key: leave it on its default
+  there. Tab, backtick, backslash, F13–F20, and Shift are not in that pane and need nothing.
+- macOS gives apps no way to read that setting, so HyprMac shows this as a reminder in
+  onboarding and in Settings → Keys, with an Open Keyboard Settings button.
 
 ## Install
 

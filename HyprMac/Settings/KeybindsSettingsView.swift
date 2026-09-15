@@ -237,13 +237,20 @@ struct KeybindsSettingsView: View {
 
     // MARK: hypr hero
 
+    // ⇪ and the other single-glyph badges get the full 30pt; "Tab"/"F13" need less
+    private var keycapFontSize: CGFloat {
+        config.hyprKey.badgeLabel.count > 2 ? 15 : 30
+    }
+
     private var hyprHeroPanel: some View {
         HStack(spacing: HyprSpacing.lg - 2) {
             // 52×52 keycap glyph with a brighter bottom bevel
-            Text("⇪")
-                .font(.system(size: 30, weight: .medium, design: .monospaced))
+            Text(config.hyprKey.badgeLabel)
+                .font(.system(size: keycapFontSize, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.hyprCyan)
-                .offset(y: -3)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .offset(y: config.hyprKey == .capsLock ? -3 : 0)
                 .frame(width: 52, height: 52)
                 .background(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -272,6 +279,25 @@ struct KeybindsSettingsView: View {
                 Text("Shortcuts call it HYPR. Workspace 10 uses the 0 key.")
                     .font(.hyprCaption)
                     .foregroundStyle(Color.hyprTextTertiary)
+
+                if let guidance = HyprKeySystemGuidance.forKey(config.hyprKey) {
+                    HStack(alignment: .firstTextBaseline, spacing: HyprSpacing.xs) {
+                        Text(guidance.title)
+                            .font(.hyprCaption)
+                            .foregroundStyle(Color.hyprTextSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(HyprKeySystemGuidance.openButtonTitle) {
+                            HyprKeySystemGuidance.openKeyboardSettings()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                    .padding(.top, 2)
+                    Text(guidance.detail)
+                        .font(.hyprCaption)
+                        .foregroundStyle(Color.hyprTextTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: HyprSpacing.sm)

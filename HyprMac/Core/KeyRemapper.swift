@@ -7,11 +7,14 @@ import Foundation
 
 /// Static helpers for applying and clearing the Caps Lock → F18 remap.
 ///
-/// Uses `hidutil property --set` under the hood. Also clears any
-/// system-level Caps Lock overrides set in System Settings →
-/// Keyboard → Modifier Keys, which would otherwise take priority over
-/// the remap and consume the keypress before it reached the IOKit
-/// driver layer.
+/// Uses `hidutil property --set` under the hood.
+///
+/// This only works while Caps Lock stays set to "⇪ Caps Lock" in System
+/// Settings → Keyboard → Keyboard Shortcuts… → Modifier Keys. That pane
+/// applies first, per keyboard, so "No Action" (or any other choice)
+/// swallows the key before our mapping or the event tap ever sees it.
+/// macOS exposes no supported way to read or change that setting, so
+/// HyprMac asks the user to check it — see `HyprKeySystemGuidance`.
 class KeyRemapper {
     private static let capsLockHID: UInt = 0x700000039
     private static let f18HID: UInt = 0x70000006D
@@ -27,10 +30,8 @@ class KeyRemapper {
     }
 
     static func remapCapsLockToF18() {
-        // first, clear any system-level Caps Lock overrides from Modifier Keys settings
-        // these take priority over hidutil and eat caps lock events
-        clearSystemModifierOverrides()
-
+        // assumes Modifier Keys still has Caps Lock on "⇪ Caps Lock";
+        // we can't read that, so the UI asks the user instead
         let mapping: [[String: UInt]] = [
             [
                 "HIDKeyboardModifierMappingSrc": capsLockHID,
@@ -39,26 +40,6 @@ class KeyRemapper {
         ]
         applyMapping(mapping)
         hyprLog(.debug, .lifecycle, "remapped Caps Lock → F18")
-    }
-
-    // remove Modifier Keys panel overrides for Caps Lock
-    // (System Settings → Keyboard → Modifier Keys → "No Action" blocks hidutil)
-    private static func clearSystemModifierOverrides() {
-        // find all per-keyboard modifier mappings
-        let globalDefaults = UserDefaults(suiteName: UserDefaults.globalDomain)
-        let keys = globalDefaults?.dictionaryRepresentation().keys.filter {
-            $0.hasPrefix("com.apple.keyboard.modifiermapping")
-        } ?? []
-
-        for key in keys {
-            // remove the key from current host global domain
-            let task = Process()
-            task.launchPath = "/usr/bin/defaults"
-            task.arguments = ["-currentHost", "delete", "-g", key]
-            try? task.run()
-            task.waitUntilExit()
-            hyprLog(.debug, .lifecycle, "cleared system modifier override: \(key)")
-        }
     }
 
     static func restoreCapsLock() {

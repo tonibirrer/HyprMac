@@ -128,6 +128,7 @@
 		7F5A0952C75959ECEED45DF3 /* BundleIDUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E30549B7EABECD4FCDBC0F /* BundleIDUtils.swift */; };
 		7FB049BFF3F0B8E61B5D9177 /* BundleIDPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E87A74C0EE799AA06F213CCF /* BundleIDPicker.swift */; };
 		7FB5DB945BA887353289ACB1 /* WorkspaceOrchestratorMoveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10CDCBC69C5DFDC3E907A02B /* WorkspaceOrchestratorMoveTests.swift */; };
+		8120EFFBB14B4D9F33EDE838 /* HyprKeySystemGuidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD2BC02F0136AD3E9487369D /* HyprKeySystemGuidance.swift */; };
 		81AF83F1517A037F29B3CA9F /* FrameSizingTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D8F5AAFA837B55AEB2831E8 /* FrameSizingTransaction.swift */; };
 		81B6D88FB529B805CC664324 /* StateDump.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F2DB0FB7A2441364DD7616 /* StateDump.swift */; };
 		8362AE4C2D8B788EA32CC107 /* TilingEngineTiledDragTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58A1ECEE0D6160C61FD6636C /* TilingEngineTiledDragTests.swift */; };
@@ -213,8 +214,10 @@
 		DDF87D62ED61F50A5F0681B9 /* PollingScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4BF3E3B39107A11D98F0575 /* PollingScheduler.swift */; };
 		DFA806AC7404D54A992E432F /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49CB059612127CA6F3E7766 /* SettingsComponents.swift */; };
 		DFB503500879F243DD9C3FC1 /* HyprWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA85C3347F1D7A782EA9EA39 /* HyprWindow.swift */; };
+		DFE89755AA5CF65CC6319D33 /* HyprKeySystemGuidanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DE1252424844EA3C4E1B709 /* HyprKeySystemGuidanceTests.swift */; };
 		E0EC87378AAEFCEB313B283E /* TilingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05FDF12C01F99F4A9DEAEB09 /* TilingEngine.swift */; };
 		E1B183F845EF460CEFC02DA0 /* FocusStateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB845A902D1A884872996805 /* FocusStateController.swift */; };
+		E498E92F2804F896B100E96D /* HyprKeySystemGuidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD2BC02F0136AD3E9487369D /* HyprKeySystemGuidance.swift */; };
 		E49C450CFEE3A7BC692AA590 /* KeyRecorderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F397ECC53628484AA2EBD5A2 /* KeyRecorderView.swift */; };
 		E5F10E452CCBF25881BFBF54 /* GeneralSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B218B64E7BBDC96399E8FAB /* GeneralSettingsView.swift */; };
 		E65B072458EE2BA9F7AB3308 /* DragSwapHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB2A500B78D0C9A7FAE6173 /* DragSwapHandler.swift */; };
@@ -310,6 +313,7 @@
 		4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchpadController.swift; sourceTree = "<group>"; };
 		4D8F5AAFA837B55AEB2831E8 /* FrameSizingTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSizingTransaction.swift; sourceTree = "<group>"; };
 		4DC1746711F81E185BA81143 /* Log.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Log.swift; sourceTree = "<group>"; };
+		4DE1252424844EA3C4E1B709 /* HyprKeySystemGuidanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyprKeySystemGuidanceTests.swift; sourceTree = "<group>"; };
 		4DE4B38D2D91458BAC30BCFB /* ProbeFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProbeFrame.swift; sourceTree = "<group>"; };
 		4EE53329CB188DC5E31735E1 /* PermissionsGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionsGate.swift; sourceTree = "<group>"; };
 		4F2117AD40136A8602F18F8B /* TiledDragTargetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDragTargetTests.swift; sourceTree = "<group>"; };
@@ -423,6 +427,7 @@
 		F95CD8FB8B25B86236401214 /* AppIcon.svg */ = {isa = PBXFileReference; path = AppIcon.svg; sourceTree = "<group>"; };
 		FA85C3347F1D7A782EA9EA39 /* HyprWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyprWindow.swift; sourceTree = "<group>"; };
 		FC4754A615E4871D79F5D066 /* WorkspacePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePicker.swift; sourceTree = "<group>"; };
+		FD2BC02F0136AD3E9487369D /* HyprKeySystemGuidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyprKeySystemGuidance.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -610,6 +615,7 @@
 				F356D39971D5A80B38494D15 /* DwindleLayout.swift */,
 				936B7CF6C89B974F27A4E2BC /* HoverResponseRate.swift */,
 				85E2687861DA70718C132100 /* HyprKey.swift */,
+				FD2BC02F0136AD3E9487369D /* HyprKeySystemGuidance.swift */,
 				FA85C3347F1D7A782EA9EA39 /* HyprWindow.swift */,
 				6E4E656D3CA021B130775CC3 /* Keybind.swift */,
 				1A029C0AE0E8E5DEE2416684 /* UserConfig.swift */,
@@ -654,6 +660,7 @@
 				56823428D522E6724F9CB840 /* FullscreenWorkspaceTransferTests.swift */,
 				43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */,
 				075CB706E42649E175CB784A /* HoverResponseRateTests.swift */,
+				4DE1252424844EA3C4E1B709 /* HyprKeySystemGuidanceTests.swift */,
 				31EF3D85D0E0F9BCD33F6455 /* HyprWindowAXReadTests.swift */,
 				D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */,
 				298318CA91C080E2C130A4DE /* LayoutEngineTests.swift */,
@@ -916,6 +923,7 @@
 				33D18D1F45F3CB1C3E2FDA03 /* HotkeyManager.swift in Sources */,
 				16D2236F6F74648ABA85664D /* HoverResponseRate.swift in Sources */,
 				3564F2FDA0E1E1BEA5FDFCA8 /* HyprKey.swift in Sources */,
+				E498E92F2804F896B100E96D /* HyprKeySystemGuidance.swift in Sources */,
 				E75F4991C42DA20A1A207121 /* HyprMacApp.swift in Sources */,
 				DFB503500879F243DD9C3FC1 /* HyprWindow.swift in Sources */,
 				28BD7C8DD76D02FBC83769F7 /* KeyBadgeViews.swift in Sources */,
@@ -1015,6 +1023,7 @@
 				981B76EFF94EFE641AF42778 /* HotkeyManager.swift in Sources */,
 				B3BCB4B56872B79D3B673912 /* HoverResponseRate.swift in Sources */,
 				ACC4B62771598043E0B69487 /* HyprKey.swift in Sources */,
+				8120EFFBB14B4D9F33EDE838 /* HyprKeySystemGuidance.swift in Sources */,
 				009796C274F82462C0393933 /* HyprMacApp.swift in Sources */,
 				A76080D3089550F74088990D /* HyprWindow.swift in Sources */,
 				7B2295B46D2B165BC529E9A9 /* KeyBadgeViews.swift in Sources */,
@@ -1098,6 +1107,7 @@
 				F9857D1EBAD4EB6F9113B6E1 /* FullscreenWorkspaceTransferTests.swift in Sources */,
 				C1CCA6C07D0B273CF3AB3D6C /* HandleDisplayChangeTests.swift in Sources */,
 				D1DF9408D40B20ADFE58C85D /* HoverResponseRateTests.swift in Sources */,
+				DFE89755AA5CF65CC6319D33 /* HyprKeySystemGuidanceTests.swift in Sources */,
 				E8EB88F6C13061D33ECC0B59 /* HyprWindowAXReadTests.swift in Sources */,
 				D380E4A1BDD2AD4281299E72 /* KeybindDecoderToleranceTests.swift in Sources */,
 				15AB8B9331E6A03CDD991F3C /* LayoutEngineTests.swift in Sources */,

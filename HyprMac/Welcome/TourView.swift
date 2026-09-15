@@ -284,6 +284,11 @@ private struct TourHeroPage: View {
 
             tryItPill
                 .padding(.top, 18)
+
+            if let guidance = HyprKeySystemGuidance.forKey(config.hyprKey) {
+                modifierKeysNote(guidance)
+                    .padding(.top, 16)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 48)
@@ -293,6 +298,33 @@ private struct TourHeroPage: View {
                 withAnimation(HyprMotion.snap) { tried = true }
             }
         }
+    }
+
+    // one-line reminder: macOS can hide the Hypr key before HyprMac sees it
+    private func modifierKeysNote(_ guidance: HyprKeySystemGuidance) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Color.hyprCyan)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(guidance.title)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.75))
+                // the path in words, in case the deep link only lands on the Keyboard pane
+                Text(HyprKeySystemGuidance.settingsPath)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.5))
+            }
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            Button(HyprKeySystemGuidance.openButtonTitle) {
+                HyprKeySystemGuidance.openKeyboardSettings()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .frame(maxWidth: 430)
     }
 
     // 150×58 rounded key with cyan border + 3pt bottom edge + soft glow

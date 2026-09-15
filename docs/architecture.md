@@ -324,10 +324,16 @@ The on-disk JSON wire format for keybinds is frozen — see
   required for AX queries and CGEventTap. AX permission gate runs
   in `AppDelegate.applicationDidFinishLaunching`; the user is
   prompted on first launch.
-- **Caps Lock set to "Caps Lock"** in System Settings → Keyboard →
-  Modifier Keys — `hidutil` needs the OS to pass the keypress through
-  before the IOKit remap fires. `KeyRemapper.clearSystemModifierOverrides`
-  clears competing OS-level remaps.
+- **Caps Lock set to "⇪ Caps Lock"** in System Settings → Keyboard →
+  Keyboard Shortcuts… → Modifier Keys — that pane applies in the HID
+  event system, before the `hidutil` user mapping and before any
+  CGEvent exists, so "No Action" (or any other choice) swallows the key
+  before `KeyRemapper` or the event tap sees it. It is per keyboard.
+  The same holds for Control, Option, and Command when one of them is
+  the Hypr key. macOS exposes no supported way to read or change this,
+  so HyprMac never claims it is verified: `HyprKeySystemGuidance`
+  supplies the copy and the deep link shown in the permissions gate,
+  the tour, and Settings → Keys.
 
 HyprMac runs without disabling SIP, but is not App Store compatible —
 it uses private SkyLight APIs (`_SLPSSetFrontProcessWithOptions`,
