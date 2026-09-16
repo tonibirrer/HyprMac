@@ -140,6 +140,13 @@ class WindowManager {
     // raising itself when a background job prints) and must not switch
     // workspaces out from under the user.
     private var lastLeftMouseDownTime: CFAbsoluteTime = 0
+
+    /// pid → the window of that app HyprMac last had focus intent on.
+    /// Consulted when the system activates an app (Cmd-Tab, Dock) onto a
+    /// different tile of the same accordion stack — see
+    /// `accordionActivationRestore`. Fed from the focus controller's
+    /// change hook; entries drop with the window or the app.
+    private var lastFocusedWindowByApp: [pid_t: CGWindowID] = [:]
     private var previousActivationBundleID: String?
     // 0.75s: a Cmd-Tab's activation lands well under 0.5s after the ⌘
     // release; the original 1.5s let programmatic activations ride a
@@ -487,6 +494,9 @@ class WindowManager {
             // workspace returns to the window the user left, not to the
             // first one in enumeration order.
             self.workspaceManager.noteFocus(id)
+            if let pid = self.stateCache.windowOwners[id] {
+                self.lastFocusedWindowByApp[pid] = id
+            }
             self.accordionFocusDidChange(id)
         }
         tilingEngine.sortPriority = { [weak self] window in
@@ -1230,9 +1240,50 @@ class WindowManager {
               workspaceManager.isWindowVisible(id) else { return }
         if scratchpad.isVisible && !scratchpad.contains(id) { return }
         if let screen = displayManager.screen(for: focused), workspaceManager.isMonitorDisabled(screen) { return }
+        if let restored = accordionActivationRestore(systemPick: focused) {
+            hyprLog(.notice, .focus, "follow system focus: app activated onto \(id) '\(focused.title ?? "?")' — restoring its last tile \(restored.windowID) '\(restored.title ?? "?")' (\(reason))")
+            restored.focusWithoutRaise()
+            focusController.recordFocus(restored.windowID, reason: "\(reason)-accordion-restore")
+            updateFocusBorder(for: restored)
+            return
+        }
         hyprLog(.debug, .focus, "follow system focus → \(id) '\(focused.title ?? "?")' (\(reason))")
         focusController.recordFocus(id, reason: reason)
         updateFocusBorder(for: stateCache.cachedWindows[id] ?? focused)
+    }
+
+    /// Accordion mode: the tile to re-focus when the system just switched
+    /// apps onto `systemPick`, or `nil` to accept the system's choice.
+    ///
+    /// The accordion raise order stacks an app's background tiles
+    /// far-to-near so the peek strip shows the adjacent one — which
+    /// leaves the app's *outermost* tile on top of its own windows. A
+    /// Cmd-Tab or Dock activation then makes that tile key, and the user
+    /// who left tile 3 comes back to tile 1. Only a system-made app
+    /// switch qualifies: HyprMac's own focus moves record their target
+    /// before the AX event arrives (so `lastFocusedID` already matches),
+    /// and a focus change inside the already-front app (Cmd-`, a click on
+    /// a peek strip — recorded by the mouse-down sync) keeps the pick.
+    private func accordionActivationRestore(systemPick focused: HyprWindow) -> HyprWindow? {
+        guard config.accordionMode else { return nil }
+        let pid = focused.ownerPID
+        let prevID = focusController.lastFocusedID
+        guard prevID != 0, prevID != focused.windowID,
+              stateCache.windowOwners[prevID] != pid else { return nil }
+        guard let remembered = lastFocusedWindowByApp[pid],
+              stateCache.knownWindowIDs.contains(remembered),
+              !stateCache.hiddenWindowIDs.contains(remembered),
+              workspaceManager.isWindowVisible(remembered),
+              !stateCache.floatingWindowIDs.contains(remembered),
+              !stateCache.floatingWindowIDs.contains(focused.windowID),
+              let window = stateCache.cachedWindows[remembered],
+              let screen = displayManager.screen(for: window),
+              isAccordionScreen(screen) else { return nil }
+        let workspace = workspaceManager.workspaceForScreen(screen)
+        let order = tilingEngine.accordionOrder(onWorkspace: workspace, screen: screen)
+        return AccordionLayout.activationRestoreTarget(order: order,
+                                                       systemPick: focused.windowID,
+                                                       remembered: remembered)
     }
 
     /// Show focus brackets around whichever window `ensureFocus` settled on.
@@ -2337,6 +2388,9 @@ class WindowManager {
         tilingEngine.forgetMinimumSize(windowID: id)
         workspaceManager.removeWindow(id)
         scratchpad.forget(id)
+        if let pid = lastFocusedWindowByApp.first(where: { $0.value == id })?.key {
+            lastFocusedWindowByApp.removeValue(forKey: pid)
+        }
         if focusController.lastFocusedID == id {
             focusController.recordFocus(0, reason: "forgetWindow")
         }
@@ -2367,6 +2421,7 @@ class WindowManager {
     /// forever because the gone-detection path skips windows already
     /// missing from `knownWindowIDs`.
     private func forgetApp(_ pid: pid_t) {
+        lastFocusedWindowByApp.removeValue(forKey: pid)
         let ids = discovery.forgetApp(pid)
         guard !ids.isEmpty else { return }
         for id in ids {

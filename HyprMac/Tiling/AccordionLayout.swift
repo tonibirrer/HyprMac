@@ -108,6 +108,25 @@ enum AccordionLayout {
         return order[focusedIndex(order: order, focusedID: focusedID)]
     }
 
+    /// The window to put focus on after the system activated an app and
+    /// made `systemPick` its key window.
+    ///
+    /// `raiseOrder` stacks each side far-to-near so the peek strips show
+    /// the adjacent neighbor. For an app with several tiles behind the
+    /// front window that leaves its *outermost* tile on top of its own
+    /// windows, and a Cmd-Tab / Dock activation lands there instead of on
+    /// the tile the user left. `remembered` is that tile (the app's last
+    /// focus intent); it wins when it and `systemPick` are both members
+    /// of `order` and differ. `nil` means keep the system's pick.
+    static func activationRestoreTarget(order: [HyprWindow],
+                                        systemPick: CGWindowID,
+                                        remembered: CGWindowID?) -> HyprWindow? {
+        guard let remembered, remembered != systemPick,
+              order.contains(where: { $0.windowID == systemPick }),
+              let target = order.first(where: { $0.windowID == remembered }) else { return nil }
+        return target
+    }
+
     private static func focusedIndex(order: [HyprWindow], focusedID: CGWindowID?) -> Int {
         guard let focusedID,
               let idx = order.firstIndex(where: { $0.windowID == focusedID }) else { return 0 }
