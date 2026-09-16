@@ -152,4 +152,34 @@ final class AccordionLayoutTests: XCTestCase {
         let single = [makeWindow(id: 7)]
         XCTAssertEqual(AccordionLayout.raiseOrder(single, focusedID: 7).map { $0.windowID }, [7])
     }
+
+    // MARK: - activation restore
+
+    func testActivationRestorePrefersRememberedTileOfSameStack() {
+        // zen(1) in front raises ghostty tiles 4,3,2 far-to-near, so 2 is
+        // ghostty's topmost window and Cmd-Tab lands there; the user left 4.
+        let order = [makeWindow(id: 1, pid: 10), makeWindow(id: 2, pid: 20),
+                     makeWindow(id: 3, pid: 20), makeWindow(id: 4, pid: 20)]
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1).map(\.windowID), [4, 3, 2, 1])
+        let target = AccordionLayout.activationRestoreTarget(order: order, systemPick: 2, remembered: 4)
+        XCTAssertEqual(target?.windowID, 4)
+    }
+
+    func testActivationRestoreKeepsSystemPickWhenItIsTheRememberedTile() {
+        let order = [makeWindow(id: 1), makeWindow(id: 2), makeWindow(id: 3)]
+        XCTAssertNil(AccordionLayout.activationRestoreTarget(order: order, systemPick: 3, remembered: 3))
+    }
+
+    func testActivationRestoreKeepsSystemPickWithoutMemory() {
+        let order = [makeWindow(id: 1), makeWindow(id: 2)]
+        XCTAssertNil(AccordionLayout.activationRestoreTarget(order: order, systemPick: 1, remembered: nil))
+    }
+
+    func testActivationRestoreIgnoresWindowsOutsideTheStack() {
+        // remembered tile moved to another workspace / closed: not in order
+        let order = [makeWindow(id: 1), makeWindow(id: 2)]
+        XCTAssertNil(AccordionLayout.activationRestoreTarget(order: order, systemPick: 1, remembered: 9))
+        // system picked a window that is not part of this stack (floater)
+        XCTAssertNil(AccordionLayout.activationRestoreTarget(order: order, systemPick: 9, remembered: 2))
+    }
 }
