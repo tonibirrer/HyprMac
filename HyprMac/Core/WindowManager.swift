@@ -2128,7 +2128,7 @@ class WindowManager {
             let widsOnWorkspace = workspaceManager.windowIDs(onWorkspace: workspace)
             let workspaceWindows = allWindows.filter { widsOnWorkspace.contains($0.windowID) }
             hyprLog(.debug, .lifecycle, "retile(linked): workspace=\(workspace), \(workspaceWindows.count) windows across \(linkedScreens.count) screens")
-            let results = tilingEngine.tileLinked(workspaceWindows, onWorkspace: workspace, screens: linkedScreens)
+            let results = runAdmission(workspaceWindows, onWorkspace: workspace, screen: linkedScreens[0])
             updatePositionCache(windows: allWindows)
             offerRecoveryEvidence()
             return results
@@ -2878,6 +2878,27 @@ class WindowManager {
             || (stateCache.cachedWindows[id]?.isFloating ?? false)
     }
 
+    /// One verified admission pass for `(workspace, screen)`, as the
+    /// recovery, the drift re-apply and the visible-space retile all run it.
+    ///
+    /// In linked mode the workspace spans every enabled screen, so the pass
+    /// re-cuts the whole strip through `tileLinked` and returns one result
+    /// per screen. Feeding the workspace's full window list to a single
+    /// screen — what upstream's recovery does, correctly, when a workspace
+    /// owns one screen — would cram the strip onto that screen and leave
+    /// the other one empty. Outside linked mode this is `admissionPass.run`.
+    @discardableResult
+    private func runAdmission(_ windows: [HyprWindow], onWorkspace workspace: Int,
+                              screen: NSScreen) -> [TilingEngine.AdmissionResult] {
+        let linkedScreens = workspaceManager.enabledScreensLeftToRight()
+        guard workspaceManager.linkedMonitors, linkedScreens.count > 1 else {
+            return [admissionPass.run(windows, onWorkspace: workspace, screen: screen)]
+        }
+        let results = tilingEngine.tileLinked(windows, onWorkspace: workspace, screens: linkedScreens)
+        for result in results { admissionRecovery.note(result) }
+        return results
+    }
+
     /// One ordinary verified layout pass for a key whose windows drifted.
     /// Nothing special: the same path a retile takes, down to the
     /// bookkeeping, so a refusal rolls back, marks the key, and hands
@@ -2890,7 +2911,7 @@ class WindowManager {
         }
         let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
         let windows = allWindows.filter { assigned.contains($0.windowID) }
-        admissionPass.run(windows, onWorkspace: workspace, screen: screen)
+        runAdmission(windows, onWorkspace: workspace, screen: screen)
         updatePositionCache(windows: allWindows)
     }
 
@@ -3629,6 +3650,19 @@ private extension WindowManager {
             }
             let assigned = self.workspaceManager.windowIDs(onWorkspace: workspace)
             let windows = allWindows.filter { assigned.contains($0.windowID) }
+            let linkedScreens = self.workspaceManager.enabledScreensLeftToRight()
+            if self.workspaceManager.linkedMonitors, linkedScreens.count > 1 {
+                // the strip is re-cut across every screen; the retry has no
+                // per-screen bypass to offer there, so this is an ordinary pass
+                let results = self.runAdmission(windows, onWorkspace: workspace, screen: screen)
+                self.updatePositionCache(windows: allWindows)
+                let published = results.reduce(into: Set<CGWindowID>()) { $0.formUnion($1.publishedIDs) }
+                let own = results.first { $0.screen == screen } ?? results.first
+                return AdmissionRecovery.AttemptResult(
+                    placed: published.intersection(bypass.keys),
+                    failure: own?.failure,
+                    admission: own)
+            }
             let result = self.tilingEngine.retryAdmission(
                 windows, onWorkspace: workspace, screen: screen,
                 bypassingMinimaBefore: bypass,
@@ -3658,11 +3692,10 @@ private extension WindowManager {
             let windows = allWindows.filter { assigned.contains($0.windowID) }
             // an ordinary pass, no bypass: the newcomer is floating now, so
             // this is the incumbents asking for their slots back.
-            let result = self.tilingEngine.tileWindows(windows, onWorkspace: workspace,
-                                                       screen: screen)
+            let results = self.runAdmission(windows, onWorkspace: workspace, screen: screen)
             self.updatePositionCache(windows: allWindows)
-            return Set(windows.filter { !$0.isFloating
-                                        && !result.publishedIDs.contains($0.windowID) }
+            let published = results.reduce(into: Set<CGWindowID>()) { $0.formUnion($1.publishedIDs) }
+            return Set(windows.filter { !$0.isFloating && !published.contains($0.windowID) }
                               .map(\.windowID))
         }
     }

@@ -1716,6 +1716,11 @@ class TilingEngine {
         let sizes = Self.linkedChunkSizes(count: strip.count, weights: weights, capacities: capacities)
         hyprLog(.debug, .tiling, "tileLinked: ws\(workspace) \(strip.count) windows → chunks \(sizes) across \(screens.count) screens")
 
+        // re-cutting the strip moves windows between screens, so a window's
+        // pre-write frame may sit on the neighbor. the whole linked area is
+        // a valid restoration target, or a refused pass could never roll
+        // such a window back.
+        let reach = screens.map { displayManager.cgRect(for: $0) }.reduce(CGRect.null) { $0.union($1) }
         var start = 0
         var results: [AdmissionResult] = []
         for (idx, screen) in screens.enumerated() {
@@ -1723,7 +1728,8 @@ class TilingEngine {
             let chunk = Array(strip[start..<end])
             start = end
             results.append(tileWindows(chunk, onWorkspace: workspace, screen: screen,
-                                       order: chunk.map { $0.windowID }))
+                                       order: chunk.map { $0.windowID },
+                                       alsoRestoringWithin: reach))
         }
         return results
     }
