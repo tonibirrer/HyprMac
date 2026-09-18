@@ -98,9 +98,15 @@ class UserConfig: ObservableObject {
     @Published var chromeFadeDurationSec: Double {
         didSet { if !isReloading { save() } }
     }
-    // corner curvature shared by focus borders, brackets, and dim cut-outs
-    @Published var windowCornerRadius: CGFloat {
+    // nil follows the OS-version-dependent default; a value is an explicit
+    // user override shared by focus borders, brackets, and dim cut-outs
+    @Published var windowCornerRadiusOverride: CGFloat? {
         didSet { if !isReloading { save() } }
+    }
+    var windowCornerRadius: CGFloat {
+        UserConfigDefaults.resolvedWindowCornerRadius(
+            override: windowCornerRadiusOverride,
+            forOSMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
     }
     // windows sent to the scratchpad tile into the layer by default;
     // ones that don't fit stay floating members either way
@@ -211,7 +217,7 @@ class UserConfig: ObservableObject {
             self.dimInactiveWindows = saved.dimInactiveWindows ?? UserConfigDefaults.dimInactiveWindows
             self.dimIntensity = saved.dimIntensity ?? UserConfigDefaults.dimIntensity
             self.chromeFadeDurationSec = saved.chromeFadeDurationSec ?? UserConfigDefaults.chromeFadeDurationSec
-            self.windowCornerRadius = saved.windowCornerRadius ?? UserConfigDefaults.windowCornerRadius
+            self.windowCornerRadiusOverride = saved.windowCornerRadius
             self.scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
             self.windowRules = saved.windowRules ?? []
@@ -235,7 +241,7 @@ class UserConfig: ObservableObject {
             self.dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
             self.dimIntensity = UserConfigDefaults.dimIntensity
             self.chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
-            self.windowCornerRadius = UserConfigDefaults.windowCornerRadius
+            self.windowCornerRadiusOverride = nil
             self.scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
             self.windowRules = []
@@ -356,7 +362,7 @@ class UserConfig: ObservableObject {
             dimIntensity: dimIntensity,
             mouseHoverPollHz: mouseHoverPollHz,
             chromeFadeDurationSec: chromeFadeDurationSec,
-            windowCornerRadius: windowCornerRadius,
+            windowCornerRadius: windowCornerRadiusOverride,
             scratchpadTileByDefault: scratchpadTileByDefault,
             scratchpadRegionInset: scratchpadRegionInset,
             windowRules: windowRules,
@@ -388,7 +394,7 @@ class UserConfig: ObservableObject {
         dimInactiveWindows = UserConfigDefaults.dimInactiveWindows
         dimIntensity = UserConfigDefaults.dimIntensity
         chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
-        windowCornerRadius = UserConfigDefaults.windowCornerRadius
+        windowCornerRadiusOverride = nil
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
         windowRules = []
@@ -428,7 +434,7 @@ class UserConfig: ObservableObject {
         dimInactiveWindows = saved.dimInactiveWindows ?? false
         dimIntensity = saved.dimIntensity ?? 0.2
         chromeFadeDurationSec = saved.chromeFadeDurationSec ?? UserConfigDefaults.chromeFadeDurationSec
-        windowCornerRadius = saved.windowCornerRadius ?? UserConfigDefaults.windowCornerRadius
+        windowCornerRadiusOverride = saved.windowCornerRadius
         scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
         windowRules = saved.windowRules ?? []
@@ -476,7 +482,7 @@ extension SavedConfig {
             dimIntensity: UserConfigDefaults.dimIntensity,
             mouseHoverPollHz: UserConfigDefaults.mouseHoverPollHz,
             chromeFadeDurationSec: UserConfigDefaults.chromeFadeDurationSec,
-            windowCornerRadius: UserConfigDefaults.windowCornerRadius,
+            windowCornerRadius: nil,
             scratchpadTileByDefault: UserConfigDefaults.scratchpadTileByDefault,
             scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset,
             windowRules: nil,

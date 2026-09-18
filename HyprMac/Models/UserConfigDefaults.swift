@@ -32,8 +32,13 @@ enum UserConfigDefaults {
     static func windowCornerRadius(forOSMajorVersion majorVersion: Int) -> CGFloat {
         majorVersion >= 26 ? 16 : 10
     }
-    static let windowCornerRadius: CGFloat = windowCornerRadius(
-        forOSMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    // A missing override remains adaptive across macOS upgrades.
+    static func resolvedWindowCornerRadius(
+        override: CGFloat?,
+        forOSMajorVersion majorVersion: Int
+    ) -> CGFloat {
+        override ?? windowCornerRadius(forOSMajorVersion: majorVersion)
+    }
     // windows sent to the scratchpad tile into the layer instead of
     // floating. off preserves the original floating-first behavior.
     static let scratchpadTileByDefault: Bool = false

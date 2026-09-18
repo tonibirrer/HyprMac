@@ -492,6 +492,7 @@ class TilingEngine {
             t.root.clearUserSetRatios()
             t.root.resetSplitRatios()
         }
+        t.root.applySavedRatios()
         applySortPriority(to: t)
         if let order { applyOrder(order, to: t) }
         // column locks follow the final leaf → window mapping (sort and
@@ -817,6 +818,8 @@ class TilingEngine {
         }
 
         t.root.resetSplitRatios()
+        t.root.applySavedRatios()
+
         let layouts = t.layout(in: rect, gap: gapSize, padding: outerPadding)
         let conflicts = applyLayout(layouts)
         if !conflicts.isEmpty {
