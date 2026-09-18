@@ -24,8 +24,7 @@ private let kCPSUserGenerated: UInt32 = 0x200
 /// One window managed by HyprMac, identified by its stable
 /// `CGWindowID` and backed by an `AXUIElement`.
 ///
-/// Owns the resize-move-resize pattern (`setFrame` /
-/// `setFrameWithReadback`), the focus operations (`focus`,
+/// Owns the resize-move-resize pattern (`setFrame`), the focus operations (`focus`,
 /// `focusWithoutRaise`), and the per-window `observedMinSize` cache
 /// `MinSizeMemory` reads and writes.
 ///
@@ -42,7 +41,7 @@ class HyprWindow: Equatable, Hashable {
 
     /// Most recent AX frame read by `getAllWindows`. Lets
     /// `updatePositionCache` skip redundant AX reads. Cleared by
-    /// `setFrame` / `setFrameWithReadback` so stale values are not
+    /// `setFrame` so stale values are not
     /// reused.
     var cachedFrame: CGRect?
 
@@ -51,6 +50,16 @@ class HyprWindow: Equatable, Hashable {
     /// expose one), then refined whenever readback witnesses an
     /// app's refusal to shrink past a tighter bound.
     var observedMinSize: CGSize?
+
+    /// What kind of evidence `observedMinSize` is. A window starts out with
+    /// a hint at best, so this stays `.seeded` until `MinSizeMemory` mirrors
+    /// a bound the app actually refused to shrink below.
+    var minSizeProvenance: MinSizeProvenance = .seeded
+
+    /// The owning app's bundle identifier, as discovery read it. Min-size
+    /// hints are keyed by app, so one Outlook window's floor can spare the
+    /// next Outlook window the same probe.
+    var bundleID: String?
 
     init(element: AXUIElement, windowID: CGWindowID, ownerPID: pid_t) {
         self.element = element
@@ -80,19 +89,28 @@ class HyprWindow: Equatable, Hashable {
     /// fallback) when AX exposes a usable value. No-op when neither
     /// source produces one — `MinSizeMemory` will learn from readback
     /// later.
+    ///
+    /// Both sources are hints, so both are marked `.seeded`: nothing here
+    /// has watched the app refuse anything.
     func seedMinimumSize(bundleIdentifier: String?) {
+        // the one place discovery hands us the app's identity
+        bundleID = bundleIdentifier
         if let axSize = axMinimumSize() {
             observedMinSize = axSize
+            minSizeProvenance = .seeded
             return
         }
 
         if let bundleIdentifier,
            let heuristic = Self.heuristicMinimumSizes[bundleIdentifier] {
             observedMinSize = heuristic
+            minSizeProvenance = .seeded
         }
     }
 
-    private func axMinimumSize() -> CGSize? {
+    /// `AXMinimumSize`/`AXMinSize` when the app exposes a usable one.
+    /// Most do not — `MinSizeMemory` learns the real floor from readback.
+    func axMinimumSize() -> CGSize? {
         for attribute in ["AXMinimumSize", "AXMinSize"] {
             var value: AnyObject?
             guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
@@ -132,13 +150,7 @@ class HyprWindow: Equatable, Hashable {
 
     var position: CGPoint? {
         get {
-            var value: AnyObject?
-            AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &value)
-            guard let value else { return nil }
-            var point = CGPoint.zero
-            // AXValue is a CF type — as? always succeeds, so cast directly after nil check
-            AXValueGetValue(value as! AXValue, .cgPoint, &point)
-            return point
+            readPosition().1
         }
         set {
             guard var point = newValue,
@@ -149,18 +161,49 @@ class HyprWindow: Equatable, Hashable {
 
     var size: CGSize? {
         get {
-            var value: AnyObject?
-            AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)
-            guard let value else { return nil }
-            var size = CGSize.zero
-            AXValueGetValue(value as! AXValue, .cgSize, &size)
-            return size
+            readSize().1
         }
         set {
             guard var size = newValue,
                   let val = AXValueCreate(.cgSize, &size) else { return }
             AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, val)
         }
+    }
+
+    func setMessagingTimeout(_ timeout: TimeInterval) -> AXError {
+        AXUIElementSetMessagingTimeout(element, Float(timeout))
+    }
+
+    func writePosition(_ point: CGPoint) -> AXError {
+        var point = point
+        guard let value = AXValueCreate(.cgPoint, &point) else { return .illegalArgument }
+        cachedFrame = nil
+        return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
+    }
+
+    func writeSize(_ size: CGSize) -> AXError {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return .illegalArgument }
+        cachedFrame = nil
+        return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value)
+    }
+
+    func readPosition() -> (AXError, CGPoint?) {
+        var value: AnyObject?
+        let error = AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &value)
+        return AXFrameValueDecoder.point(error: error, value: value)
+    }
+
+    func readSize() -> (AXError, CGSize?) {
+        var value: AnyObject?
+        let error = AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value)
+        return AXFrameValueDecoder.size(error: error, value: value)
+    }
+
+    func beginFrameWrite(timeout: TimeInterval,
+                         checkpoint: () -> FrameSizingFailure?) -> AXFrameWriteBatch.BeginResult {
+        AXFrameWriteBatch.accessibility.begin(ownerPID: ownerPID, timeout: timeout,
+                                              checkpoint: checkpoint)
     }
 
     /// Apply `rect` to the window using the resize-move-resize
@@ -213,25 +256,6 @@ class HyprWindow: Equatable, Hashable {
         if wasEnhanced {
             AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
         }
-    }
-
-    /// Apply `rect` and immediately read back the actual frame the
-    /// app accepted.
-    ///
-    /// Apps with hard minimums refuse to shrink past their floor; the
-    /// readback returns the actual size the OS settled on, which the
-    /// tiling engine compares against the requested size to decide
-    /// whether pass 2 is needed.
-    @discardableResult
-    func setFrameWithReadback(_ rect: CGRect) -> CGRect {
-        setFrame(rect)
-
-        // read back what actually happened
-        let actualSize = size ?? rect.size
-        let actualPos = position ?? rect.origin
-        let actual = CGRect(origin: actualPos, size: actualSize)
-        cachedFrame = actual
-        return actual
     }
 
     var center: CGPoint? {

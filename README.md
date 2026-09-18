@@ -5,7 +5,7 @@
 
 A keyboard-driven tiling window manager for macOS.
 
-Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 9 virtual workspaces, directional focus and window swapping, drag-to-swap, and focus-follows-mouse — all without touching System Integrity Protection.
+Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 9 virtual workspaces, directional focus and window swapping, pointer-edge target insertion, and focus-follows-mouse — all without touching System Integrity Protection.
 
 [![HyprMac demo](docs/screenshots/demo-thumb.png)](https://github.com/user-attachments/assets/1f6f12ff-8e89-49ab-8be9-f2996025763a)
 
@@ -27,7 +27,7 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 | 🗂 **9 Virtual Workspaces** | Managed in userspace — no macOS Spaces dependency, no SIP needed |
 | 🎯 **Directional Focus & Swap** | Move focus or swap windows left/right/up/down across monitors |
 | 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
-| 🔄 **Drag-to-Swap** | Drag any window onto another to exchange positions |
+| 🔄 **Drag Placement** | Drag to insert, or hold Hypr while dragging to swap positions |
 | 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
 | 📌 **Window Rules** *(fork)* | Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style |
 | 🧷 **Sticky Apps** *(fork)* | Hyprland's `pin`, extended to tiles: chosen apps follow you across the workspaces that opt in |
@@ -85,6 +85,8 @@ cp -r build/Build/Products/Debug/HyprMac.app /Applications/
 ## Keybinds
 
 All keybinds are configurable in Settings (menubar icon → Settings → Keybinds).
+Toggle Float uses **Hypr+T**, without Shift. On startup and config reload, an exact legacy Hypr+Shift+T Toggle Float binding moves to Hypr+T only if the new chord is free and there is a single, unambiguous Toggle Float binding. Customized bindings and occupied chords stay unchanged. The migrated value is written on the next normal settings save. A deliberately chosen binding identical to the old default cannot be distinguished from that default.
+
 The physical Hypr key is configurable in Settings → General. Options include Caps Lock, Tab, backtick, backslash, F13-F20, and left/right variants of Shift, Control, Option, and Command.
 
 ### Defaults
@@ -94,7 +96,7 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | `⇪ + ←/→/↑/↓` | Focus window in direction |
 | `⇪ + ⇧ + ←/→/↑/↓` | Swap window in direction |
 | `⇪ + J` | Toggle split direction |
-| `⇪ + ⇧ + T` | Toggle floating/tiling |
+| `⇪ + T` | Toggle floating/tiling |
 | `⇪ + F` | Cycle focus through floating windows |
 | `⇪ + 1–9` | Switch to workspace N |
 | `⇪ + ⇧ + 1–9` | Move window to workspace N |
@@ -111,7 +113,9 @@ The physical Hypr key is configurable in Settings → General. Options include C
 | Action | Effect |
 |--------|--------|
 | Hover over tiled window | Focus follows mouse (when enabled) |
-| Drag window onto another | Swap positions |
+| Drag a tiled window onto a target edge | Insert on that side, within the same workspace and monitor |
+| Hold Hypr while dragging a tiled window | Swap with the target, subject to verified sizing and Max Splits |
+| Hold Option when releasing a tiled drag | Swap with the target (compatibility shortcut) |
 
 ---
 
@@ -276,16 +280,18 @@ HotkeyManager (CGEventTap)
 Polling and discovery run in parallel:
 
 ```
-PollingScheduler (1 Hz timer + coalesced notification triggers)
+AX notifications + PollingScheduler (10-second fallback timer)
     └→ WindowDiscoveryService.computeChanges
         └→ ActionDispatcher.applyChanges
 ```
 
-Window-keyed state lives in `WindowStateCache`; focus state in `FocusStateController`; date-gated suppressions (`activation-switch`, `mouse-focus`, `cross-swap-in-flight`) in `SuppressionRegistry`. BSP trees live in `TilingEngine` (one per `(workspace, screen)` pair) with smart insert backtracking on constrained monitors and two-pass min-size resolution via `FrameReadbackPoller`.
+Window-keyed state lives in `WindowStateCache`; focus state in `FocusStateController`; date-gated suppressions (`activation-switch`, `mouse-focus`, `workspace-transition`) in `SuppressionRegistry`. BSP trees live in `TilingEngine` (one per `(workspace, screen)` pair). Sizing verifies complete actual frames, including the final adjusted pass. Tiled drags use an isolated candidate tree and commit only after verified acceptance; failed candidates restore and verify the pre-drag frames.
 
 Everything runs on the main thread. UI-touching classes (`FocusBorder`, `DimmingOverlay`, `KeybindOverlayController`, `CursorManager`, `MouseTrackingManager`) assert this in DEBUG via `mainThreadOnly()`.
 
 For deeper reading:
+
+- [`docs/settings-polish.md`](docs/settings-polish.md) — hover response, focus appearance, and live-update guarantees.
 
 - [`docs/architecture.md`](docs/architecture.md) — long-form architecture, ownership rules, threading.
 - [`docs/tiling-algorithm.md`](docs/tiling-algorithm.md) — BSP dwindle, smart insert, two-pass layout, min-size memory.

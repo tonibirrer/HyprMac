@@ -288,6 +288,13 @@ class WorkspaceManager {
         lastFocusedWindow.removeValue(forKey: old)
     }
 
+    /// Snapshot regular workspace membership for deterministic bulk operations.
+    func regularWorkspaceWindowIDs() -> [Int: Set<CGWindowID>] {
+        Dictionary(uniqueKeysWithValues: (1...workspaceCount).map {
+            ($0, workspaceWindowSets[$0] ?? [])
+        })
+    }
+
     /// Snapshot of the live window→workspace map.
     func allWindowWorkspaces() -> [CGWindowID: Int] {
         windowWorkspaces

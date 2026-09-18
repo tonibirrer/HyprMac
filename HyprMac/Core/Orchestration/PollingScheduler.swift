@@ -33,15 +33,15 @@ final class PollingScheduler {
 
     private let periodicInterval: TimeInterval
     private var timer: Timer?
+    private var isStarted = false
     private var pendingPoll = false
+    private var pendingDelay: TimeInterval?
+    private var scheduleGeneration: UInt64 = 0
     private let onPoll: () -> Void
 
     /// Optional suppression check. When the closure returns `true`, both
-    /// timer ticks and scheduled fires are dropped. Used to hold polling
-    /// off during cross-monitor drag-swap, where `crossSwapWindows` runs
-    /// two back-to-back retile passes (≈ 720 ms of synchronous readback)
-    /// and a poll firing mid-flight would race the in-progress mutation.
-    /// Default returns `false`, so existing call sites are unaffected.
+    /// timer ticks and scheduled fires are dropped. Default returns `false`,
+    /// so existing call sites are unaffected.
     var isSuppressed: () -> Bool = { false }
 
     /// `periodicInterval` defaults to the 10s reconcile net; tests inject a
@@ -56,10 +56,14 @@ final class PollingScheduler {
     /// run one initial discovery pass synchronously so the first timer
     /// tick cannot race startup tiling. Idempotent.
     func start() {
-        guard timer == nil else { return }
+        guard !isStarted else { return }
+        isStarted = true
         timer = Timer.scheduledTimer(withTimeInterval: periodicInterval, repeats: true) { [weak self] _ in
             guard let self = self, !self.isSuppressed() else { return }
             self.onPoll()
+        }
+        if pendingPoll, let delay = pendingDelay {
+            armFire(after: delay, generation: scheduleGeneration)
         }
     }
 
@@ -67,13 +71,19 @@ final class PollingScheduler {
     func stop() {
         timer?.invalidate()
         timer = nil
+        isStarted = false
         pendingPoll = false
+        pendingDelay = nil
+        scheduleGeneration &+= 1
     }
 
     /// Schedule a single coalesced poll `delay` seconds from now.
     ///
     /// If a poll is already pending, the new request is dropped — the
     /// pending one fires first and captures whatever changed. A fire that
+    /// is requested before `start()` remains pending until startup finishes.
+    /// This keeps launch notifications from racing the initial snapshot.
+    /// A fire that
     /// lands inside a suppression window is deferred (retried at 0.3s),
     /// not dropped: with event-driven triggers there is no 1 Hz timer
     /// behind us to catch a lost event, so dropping a suppressed poll
@@ -83,18 +93,25 @@ final class PollingScheduler {
     func schedule(after delay: TimeInterval = 0.2) {
         guard !pendingPoll else { return }
         pendingPoll = true
-        armFire(after: delay)
+        pendingDelay = delay
+        scheduleGeneration &+= 1
+        if isStarted {
+            armFire(after: delay, generation: scheduleGeneration)
+        }
     }
 
-    private func armFire(after delay: TimeInterval) {
+    private func armFire(after delay: TimeInterval, generation: UInt64) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self = self, self.pendingPoll else { return }
+            guard let self = self,
+                  self.pendingPoll,
+                  self.scheduleGeneration == generation else { return }
             // suppression re-checked at every fire attempt — defer, don't drop.
             guard !self.isSuppressed() else {
-                self.armFire(after: 0.3)
+                self.armFire(after: 0.3, generation: generation)
                 return
             }
             self.pendingPoll = false
+            self.pendingDelay = nil
             self.onPoll()
         }
     }

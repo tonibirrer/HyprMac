@@ -20,7 +20,11 @@ class DisplayManager {
     /// Cached to avoid `NSScreen.screens.first` on every call.
     private(set) var primaryScreenHeight: CGFloat = 0
 
-    init() {
+    private let screenSource: () -> [NSScreen]
+    private var fingerprintUsableBounds: [String: CGRect] = [:]
+
+    init(screenSource: @escaping () -> [NSScreen] = { NSScreen.screens }) {
+        self.screenSource = screenSource
         refresh()
         NotificationCenter.default.addObserver(
             self, selector: #selector(refresh),
@@ -32,7 +36,7 @@ class DisplayManager {
     /// height. Called automatically on screen parameter changes; safe
     /// to invoke manually.
     @objc func refresh() {
-        screens = NSScreen.screens
+        screens = screenSource()
         primaryScreenHeight = screens.first?.frame.height ?? 0
         hyprLog(.debug, .lifecycle, "displays: \(screens.count)")
         for (i, screen) in screens.enumerated() {
@@ -41,6 +45,34 @@ class DisplayManager {
             let cg = cgRect(for: screen)
             hyprLog(.debug, .lifecycle, "  display \(i): frame=\(frame) visible=\(visible) cg=\(cg)")
         }
+    }
+
+    /// Read the provider at each comparison, independent of observer order.
+    func refreshedFingerprint() -> String {
+        refresh()
+        var nextBounds: [String: CGRect] = [:]
+        let fingerprint = screens.map { screen in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            let key = "\(id?.uint32Value ?? 0):\(screen.localizedName)@\(screen.frame)"
+            let visible = screen.visibleFrame
+            let prior = fingerprintUsableBounds[key]
+            let slack = TilingConfig.rectComparisonSlackPx
+            // size as well as edges: opposite edges each moving one point
+            // inward stays inside the per-edge slack but is a two-point
+            // change in usable area, which layouts must see.
+            let unchanged = prior.map {
+                abs($0.minX - visible.minX) <= slack && abs($0.minY - visible.minY) <= slack
+                    && abs($0.maxX - visible.maxX) <= slack && abs($0.maxY - visible.maxY) <= slack
+                    && abs($0.width - visible.width) <= slack
+                    && abs($0.height - visible.height) <= slack
+            } ?? false
+            // keep the anchor so successive one-point shifts cannot accumulate.
+            let stable = unchanged ? prior! : visible
+            nextBounds[key] = stable
+            return "\(key)/\(stable)"
+        }.joined(separator: "|")
+        fingerprintUsableBounds = nextBounds
+        return fingerprint
     }
 
     /// Convert `screen.visibleFrame` (NS, bottom-left origin) to CG

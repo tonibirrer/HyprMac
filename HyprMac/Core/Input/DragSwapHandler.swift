@@ -1,209 +1,447 @@
-// Applies the result of `DragManager.detect` to the tiling engine and
-// workspace state: tree mutation, cross-monitor workspace reassignment,
-// animation, position-cache refresh. The classification heuristics live
-// in `DragManager`; this handler runs the side effects.
+// Coordinates verified tiled-drag capture, deferred release, cache updates,
+// and completion reporting.
 
 import Cocoa
 
-/// Side effects for drag classifications.
-///
-/// Public surface is a single `handleMouseUp` entry called from the
-/// global mouseUp monitor. After a 0.1 s settle (empirical: gives macOS
-/// time to commit the final dragged frame before AX queries it), the
-/// handler asks `DragManager` to classify and applies the result —
-/// resize, same-monitor swap, cross-monitor swap, drag-to-empty-desktop,
-/// or snap-back.
-///
-/// Cross-monitor swap registers `cross-swap-in-flight` on
-/// `SuppressionRegistry` for ~0.8 s. `PollingScheduler` honors that key,
-/// so neither the 1 Hz timer nor notification-driven schedules fire
-/// during `crossSwapWindows`'s two synchronous retile passes — without
-/// this, polls land mid-mutation and produce inconsistent visible state.
-///
-/// Threading: main-thread only.
-final class DragSwapHandler {
+struct MouseDragLifecycleState {
+    var buttonDown = false
+    var sawDragEvent = false
+    var preDragFocusedID: CGWindowID = 0
+    var swapRequested = false
 
-    private let stateCache: WindowStateCache
-    private let dragManager: DragManager
-    private let accessibility: AccessibilityManager
-    private let displayManager: DisplayManager
-    private let workspaceManager: WorkspaceManager
-    private let tilingEngine: TilingEngine
-    private let config: UserConfig
-    private let suppressions: SuppressionRegistry
-
-    // closure handles for WM-side helpers
-    var updatePositionCache: (([HyprWindow]?) -> Void)?
-    var rejectSwap: ((HyprWindow, String) -> Void)?
-    var tileAllVisibleSpaces: (([HyprWindow]?) -> Void)?
-    var isScratchpadVisible: () -> Bool = { false }
-
-    /// Empirical bound on the wall-clock cost of
-    /// `TilingEngine.crossSwapWindows`: two back-to-back retile passes,
-    /// each containing up to ~360 ms of `Thread.sleep` readback. 0.8 s
-    /// gives headroom for slow apps and post-swap settling.
-    private static let crossSwapSuppressionSec: TimeInterval = 0.8
-
-    /// `SuppressionRegistry` key honored by `PollingScheduler`. Holds
-    /// timer and notification polls off for the duration of a
-    /// cross-monitor drag-swap.
-    private static let crossSwapKey = "cross-swap-in-flight"
-
-    init(stateCache: WindowStateCache,
-         dragManager: DragManager,
-         accessibility: AccessibilityManager,
-         displayManager: DisplayManager,
-         workspaceManager: WorkspaceManager,
-         tilingEngine: TilingEngine,
-         config: UserConfig,
-         suppressions: SuppressionRegistry) {
-        self.stateCache = stateCache
-        self.dragManager = dragManager
-        self.accessibility = accessibility
-        self.displayManager = displayManager
-        self.workspaceManager = workspaceManager
-        self.tilingEngine = tilingEngine
-        self.config = config
-        self.suppressions = suppressions
+    mutating func beginPress(hyprHeld: Bool) {
+        buttonDown = true
+        sawDragEvent = false
+        swapRequested = hyprHeld
     }
 
-    /// Entry point invoked by `WindowManager`'s mouseUp monitor.
-    /// Schedules a 0.1 s settle then runs detect-and-apply on the main
-    /// thread.
-    func handleMouseUp(startFrames: [CGWindowID: CGRect]) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.applyDragResult(startFrames: startFrames)
-        }
+    mutating func observeDrag(hyprHeld: Bool) {
+        sawDragEvent = true
+        swapRequested = swapRequested || hyprHeld
     }
 
-    // MARK: - private
+    mutating func noteHyprKeyDown() {
+        guard buttonDown else { return }
+        swapRequested = true
+    }
 
-    /// Classify the drag and dispatch to the matching effect.
-    ///
-    /// Skipped when the focused window is floating — floating windows nudging
-    /// adjacent tiles otherwise produce false snap-back retiles that disrupt
-    /// the layout.
-    private func applyDragResult(startFrames: [CGWindowID: CGRect]) {
-        // no drag semantics inside the scratchpad layer. a tiled member drag
-        // would otherwise classify as a resize/swap against the ACTIVE 1-9 tree
-        // (workspaceForScreen resolves to the visible workspace, not ws 0) and
-        // corrupt the wrong tree. v1: the window stays where dragged until the
-        // next layer retile.
-        if isScratchpadVisible() { return }
+    func releaseRequestsSwap(hyprHeld: Bool, optionDown: Bool) -> Bool {
+        swapRequested || hyprHeld || optionDown
+    }
 
-        // skip drag detection if the user was dragging a floating window —
-        // floating windows can nudge tiled windows slightly, causing false
-        // snapBack retiles that disrupt the layout.
-        if let focused = accessibility.getFocusedWindow(),
-           stateCache.floatingWindowIDs.contains(focused.windowID) {
-            return
+    mutating func finishPress() {
+        buttonDown = false
+        sawDragEvent = false
+        swapRequested = false
+    }
+
+    mutating func resetForStop() {
+        finishPress()
+        preDragFocusedID = 0
+    }
+}
+
+struct TiledDragRelease: Equatable {
+    let pointer: CGPoint
+    let swapRequested: Bool
+    let sawDragEvent: Bool
+
+    init(pointer: CGPoint, swapRequested: Bool, sawDragEvent: Bool) {
+        self.pointer = pointer
+        self.swapRequested = swapRequested
+        self.sawDragEvent = sawDragEvent
+    }
+
+    init(pointer: CGPoint, optionDown: Bool, sawDragEvent: Bool) {
+        self.init(pointer: pointer, swapRequested: optionDown, sawDragEvent: sawDragEvent)
+    }
+}
+
+struct TiledDragPressResolver {
+    static func resolve(pointer: CGPoint,
+                        tiledFrames: [CGWindowID: CGRect],
+                        occluderFrames: [CGWindowID: CGRect]) -> CGWindowID? {
+        func contains(_ frame: CGRect) -> Bool {
+            pointer.x >= frame.minX && pointer.x <= frame.maxX
+                && pointer.y >= frame.minY && pointer.y <= frame.maxY
         }
+        guard !occluderFrames.values.contains(where: contains) else { return nil }
+        let matches = tiledFrames.compactMap { id, frame in contains(frame) ? id : nil }
+        return matches.count == 1 ? matches[0] : nil
+    }
+}
 
-        let allWindows = accessibility.getAllWindows()
+extension TiledDragTargetResolver {
+    static func resolve(pointer: CGPoint, snapshot: TiledDragSnapshot) -> TiledDragTarget? {
+        resolve(pointer: pointer, draggedID: snapshot.draggedID,
+                intendedSlots: snapshot.originalFrames)
+    }
+}
 
-        dragManager.floatingWindowIDs = stateCache.floatingWindowIDs
-        dragManager.tiledPositions = stateCache.tiledPositions
+/// What a finished drag says about each member's cached geometry.
+///
+/// One decision per window, shared by every cache that holds drag
+/// geometry, so `tiledPositions` and `cachedFrame` cannot disagree.
+enum TiledDragCacheAction: Equatable {
+    /// a verified current readback — take this frame
+    case refresh(CGRect)
+    /// possibly written, or the dragged window after a native drag, and
+    /// nothing verified where it ended up
+    case invalidate
+    /// provably untouched and still current
+    case preserve
+}
 
-        let result = dragManager.detect(
-            allWindows: allWindows,
-            cachedWindows: stateCache.cachedWindows,
-            startFrames: startFrames,
-            screenAt: { [weak self] pt in self?.displayManager.screen(at: pt) },
-            workspaceForScreen: { [weak self] s in self?.workspaceManager.workspaceForScreen(s) ?? 1 }
-        )
-
-        switch result {
-        case .resize(let r):
-            hyprLog(.debug, .drag, "manual resize detected: '\(r.window.title ?? "?")'")
-            tilingEngine.applyResize(r.window, newFrame: r.newFrame, onWorkspace: r.workspace, screen: r.screen)
-            updatePositionCache?(allWindows)
-
-        case .swap(let s):
-            applySwap(s, allWindows: allWindows)
-
-        case .dragToEmpty(let d):
-            hyprLog(.debug, .drag, "cross-monitor move to empty desktop")
-            let r = displayManager.cgRect(for: d.targetScreen)
-            d.dragged.setFrame(CGRect(
-                x: r.midX - r.width / 4,
-                y: r.midY - r.height / 4,
-                width: r.width / 2,
-                height: r.height / 2
-            ))
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                self?.tileAllVisibleSpaces?(nil)
+struct TiledDragCachePolicy {
+    /// - Parameters:
+    ///   - draggedID: always uncertain after a native drag. macOS moved it,
+    ///     not us, so an unverified outcome says nothing about where it is.
+    ///   - affectedIDs: the drag's members.
+    static func actions(for outcome: TiledDragDropOutcome,
+                        draggedID: CGWindowID,
+                        affectedIDs: Set<CGWindowID>) -> [CGWindowID: TiledDragCacheAction] {
+        var actions: [CGWindowID: TiledDragCacheAction] = [:]
+        switch outcome {
+        case let .committed(_, actualFrames, _), let .rejectedRestored(_, actualFrames):
+            // both verdicts are verified: the candidate landed, or every
+            // original was written back and read back within a point
+            for id in affectedIDs {
+                actions[id] = actualFrames[id].map { .refresh($0) } ?? .invalidate
             }
-
-        case .snapBack:
-            hyprLog(.debug, .drag, "drag snap-back")
-            tileAllVisibleSpaces?(allWindows)
-
-        case .none:
+        case let .degraded(_, _, _, progress):
+            guard let progress else {
+                // no provenance, so nothing is provably untouched
+                for id in affectedIDs { actions[id] = .invalidate }
+                return actions
+            }
+            // a restoration writes every captured original, including
+            // windows the candidate never reached, so clearing only the
+            // dragged id would leave the rest of the members lying
+            let written = progress.possiblyWritten
+            for id in affectedIDs {
+                actions[id] = (written.contains(id) || id == draggedID) ? .invalidate : .preserve
+            }
+        case .superseded, .ignored:
             break
         }
+        return actions
+    }
+}
+
+struct TiledDragCacheUpdate {
+    static func applying(_ outcome: TiledDragDropOutcome,
+                         draggedID: CGWindowID,
+                         affectedIDs: Set<CGWindowID>,
+                         to existing: [CGWindowID: CGRect]) -> [CGWindowID: CGRect] {
+        var updated = existing
+        for (id, action) in TiledDragCachePolicy.actions(for: outcome, draggedID: draggedID,
+                                                         affectedIDs: affectedIDs) {
+            switch action {
+            case let .refresh(frame): updated[id] = frame
+            case .invalidate: updated.removeValue(forKey: id)
+            case .preserve: break
+            }
+        }
+        return updated
+    }
+}
+
+struct TiledDragCompletion {
+    let snapshot: TiledDragSnapshot
+    let outcome: TiledDragDropOutcome
+}
+
+enum TiledDragFeedback: Equatable {
+    case rejected
+    case degraded
+}
+
+struct TiledDragFeedbackPolicy {
+    static func feedback(for outcome: TiledDragDropOutcome) -> TiledDragFeedback? {
+        switch outcome {
+        case .rejectedRestored:
+            return .rejected
+        case .degraded:
+            return .degraded
+        case .committed, .ignored, .superseded:
+            return nil
+        }
+    }
+}
+
+struct TiledDragFeedbackKey: Equatable {
+    let workspace: Int
+    let displayID: CGDirectDisplayID
+}
+
+enum TiledDragFeedbackReconciliation {
+    case accepted(key: TiledDragFeedbackKey, generation: UInt64,
+                  publishedIDs: Set<CGWindowID>, expectedIDs: Set<CGWindowID>)
+    case failed(key: TiledDragFeedbackKey, generation: UInt64,
+                requiredIDs: Set<CGWindowID>, recoveryPending: Bool)
+    case terminalFailure(key: TiledDragFeedbackKey)
+    case noResult
+}
+
+enum TiledDragDeferredFeedbackAction: Equatable {
+    case showDegraded(key: TiledDragFeedbackKey, generation: UInt64)
+    case cancelDegraded(key: TiledDragFeedbackKey)
+}
+
+struct TiledDragFeedbackReconciler {
+    private struct Pending {
+        let key: TiledDragFeedbackKey
+        var generation: UInt64
+        var affectedIDs: Set<CGWindowID>
+        var shownGeneration: UInt64?
     }
 
-    /// Apply a drag-classified swap.
-    ///
-    /// Cross-monitor: register `cross-swap-in-flight`, reassign both
-    /// windows to the matching workspaces, then call
-    /// `crossSwapWindows`. Same-monitor: check `canSwapWindows` first
-    /// (rejection beeps + flashes via `rejectSwap`), then either animate
-    /// from old to new rects via `prepareSwapLayout` /
-    /// `applyComputedLayout` or fall through to the synchronous
-    /// `swapWindows`.
-    private func applySwap(_ s: DragManager.DragSwapResult, allWindows: [HyprWindow]) {
-        if s.crossMonitor {
-            hyprLog(.debug, .drag, "cross-monitor swap: '\(s.dragged.title ?? "?")' ↔ '\(s.target.title ?? "?")'")
-            guard tilingEngine.canCrossSwapWindows(s.dragged, s.target) else {
-                rejectSwap?(s.dragged, "cross-monitor swap would violate min-size constraints")
-                updatePositionCache?(allWindows)
-                return
-            }
+    private var pending: Pending?
+    var hasPendingFeedback: Bool { pending != nil }
+    func isPending(for key: TiledDragFeedbackKey) -> Bool { pending?.key == key }
+    var pendingKey: TiledDragFeedbackKey? { pending?.key }
+    var shownGeneration: UInt64? { pending?.shownGeneration }
 
-            // hold polling off for the duration of the swap. crossSwapWindows runs
-            // two synchronous retile passes back-to-back; without this guard, the
-            // 1Hz timer or NSWorkspace notifications can fire mid-swap and observe
-            // the windows in an inconsistent state.
-            suppressions.suppress(Self.crossSwapKey, for: Self.crossSwapSuppressionSec)
-            var srcWs: Int?
-            var tgtWs: Int?
-            if let srcScreen = s.sourceScreen, let tgtScreen = s.targetScreen {
-                srcWs = workspaceManager.workspaceForScreen(srcScreen)
-                tgtWs = workspaceManager.workspaceForScreen(tgtScreen)
-                if let srcWs, let tgtWs {
-                    workspaceManager.moveWindow(s.dragged.windowID, toWorkspace: tgtWs)
-                    workspaceManager.moveWindow(s.target.windowID, toWorkspace: srcWs)
-                }
+    mutating func beginDegraded(key: TiledDragFeedbackKey, generation: UInt64,
+                                affectedIDs: Set<CGWindowID>) -> [TiledDragDeferredFeedbackAction] {
+        if let pending, pending.key == key, generation <= pending.generation {
+            return []
+        }
+        let actions: [TiledDragDeferredFeedbackAction]
+        if let pending, pending.key != key, pending.shownGeneration == nil {
+            actions = [.showDegraded(key: pending.key, generation: pending.generation)]
+        } else {
+            actions = []
+        }
+        pending = Pending(key: key, generation: generation,
+                          affectedIDs: affectedIDs, shownGeneration: nil)
+        return actions
+    }
+
+    mutating func reconcile(_ event: TiledDragFeedbackReconciliation)
+        -> [TiledDragDeferredFeedbackAction] {
+        guard let pending else { return [] }
+        let key: TiledDragFeedbackKey
+        let generation: UInt64
+        switch event {
+        case let .accepted(eventKey, eventGeneration, _, _),
+             let .failed(eventKey, eventGeneration, _, _):
+            key = eventKey
+            generation = eventGeneration
+        case let .terminalFailure(eventKey):
+            guard eventKey == pending.key else { return [] }
+            return showOnce()
+        case .noResult:
+            return showOnce()
+        }
+        guard key == pending.key, generation > pending.generation else { return [] }
+
+        switch event {
+        case let .accepted(_, _, publishedIDs, expectedIDs):
+            if publishedIDs == expectedIDs,
+               publishedIDs.isSuperset(of: pending.affectedIDs) {
+                self.pending = nil
+                return [.cancelDegraded(key: pending.key)]
             }
-            let ok = tilingEngine.crossSwapWindows(s.dragged, s.target)
-            if !ok {
-                if let srcWs, let tgtWs {
-                    workspaceManager.moveWindow(s.dragged.windowID, toWorkspace: srcWs)
-                    workspaceManager.moveWindow(s.target.windowID, toWorkspace: tgtWs)
-                }
-                rejectSwap?(s.dragged, "cross-monitor swap overflows min-size constraints (post-readback)")
-                tileAllVisibleSpaces?(allWindows)
-                return
+            self.pending?.generation = generation
+            return showOnce()
+        case let .failed(_, _, requiredIDs, recoveryPending):
+            self.pending?.affectedIDs.formUnion(requiredIDs)
+            guard !recoveryPending else {
+                self.pending?.generation = generation
+                return []
             }
-            updatePositionCache?(allWindows)
+            self.pending?.generation = generation
+            return showOnce()
+        case .terminalFailure, .noResult:
+            return []
+        }
+    }
+
+    mutating func reconcileNewest(_ events: [TiledDragFeedbackReconciliation],
+                                  activeRetry: Bool) -> [TiledDragDeferredFeedbackAction] {
+        guard let pending else { return [] }
+        let matching = events.compactMap { event -> (UInt64, TiledDragFeedbackReconciliation)? in
+            switch event {
+            case let .accepted(key, generation, _, _), let .failed(key, generation, _, _):
+                return key == pending.key ? (generation, event) : nil
+            case .terminalFailure, .noResult:
+                return nil
+            }
+        }
+        if let newest = matching.max(by: { $0.0 < $1.0 })?.1 {
+            return reconcile(newest)
+        }
+        return activeRetry ? [] : reconcile(.noResult)
+    }
+
+    mutating func cancel() {
+        pending = nil
+    }
+
+    mutating func feedbackFinished(generation: UInt64) {
+        if pending?.shownGeneration == generation { pending = nil }
+    }
+
+    private mutating func showOnce() -> [TiledDragDeferredFeedbackAction] {
+        guard let pending, pending.shownGeneration == nil else { return [] }
+        self.pending?.shownGeneration = pending.generation
+        return [.showDegraded(key: pending.key, generation: pending.generation)]
+    }
+}
+
+final class TiledDragSessionCoordinator {
+    typealias Capture = (CGPoint) -> TiledDragCaptureResult
+    typealias Apply = (TiledDragSnapshot, TiledDragMode?) -> TiledDragDropOutcome
+    typealias ResolveTarget = (CGPoint, TiledDragSnapshot) -> TiledDragTarget?
+    typealias Schedule = (TimeInterval, @escaping () -> Void) -> Void
+    typealias Report = (TiledDragCompletion) -> Void
+    typealias CaptureFailureReport = (TiledDragCaptureResult) -> Void
+
+    private(set) var isFinishingDrag = false
+    private let capture: Capture
+    private let apply: Apply
+    private let resolveTarget: ResolveTarget
+    private let schedule: Schedule
+    private let report: Report
+    private let captureFailureReport: CaptureFailureReport
+    private var pressEpoch: UInt64 = 0
+    private var snapshot: TiledDragSnapshot?
+    private var captureFailure: TiledDragCaptureResult?
+
+    init(capture: @escaping Capture,
+         apply: @escaping Apply,
+         resolveTarget: @escaping ResolveTarget,
+         schedule: @escaping Schedule,
+         report: @escaping Report,
+         captureFailureReport: @escaping CaptureFailureReport = { _ in }) {
+        self.capture = capture
+        self.apply = apply
+        self.resolveTarget = resolveTarget
+        self.schedule = schedule
+        self.report = report
+        self.captureFailureReport = captureFailureReport
+    }
+
+    func mouseDown(at pointer: CGPoint) {
+        pressEpoch &+= 1
+        let epoch = pressEpoch
+        isFinishingDrag = false
+        snapshot = nil
+        captureFailure = nil
+        let result = capture(pointer)
+        guard pressEpoch == epoch else { return }
+        if case let .captured(captured) = result {
+            snapshot = captured
+            captureFailure = nil
+        } else {
+            snapshot = nil
+            if case .unknown = result {
+                captureFailure = result
+            } else {
+                captureFailure = nil
+            }
+        }
+    }
+
+    func mouseUp(_ release: TiledDragRelease) {
+        guard release.sawDragEvent else {
+            pressEpoch &+= 1
+            self.snapshot = nil
+            captureFailure = nil
+            isFinishingDrag = false
             return
         }
-
-        guard let screen = s.sourceScreen else { return }
-        let workspace = workspaceManager.workspaceForScreen(screen)
-        hyprLog(.debug, .drag, "drag swap: '\(s.dragged.title ?? "?")' ↔ '\(s.target.title ?? "?")'")
-
-        guard tilingEngine.canSwapWindows(s.dragged, s.target, onWorkspace: workspace, screen: screen) else {
-            rejectSwap?(s.dragged, "drag swap would violate min-size constraints")
-            updatePositionCache?(allWindows)
+        guard let snapshot else {
+            pressEpoch &+= 1
+            let epoch = pressEpoch
+            if let captureFailure { captureFailureReport(captureFailure) }
+            guard pressEpoch == epoch else { return }
+            self.captureFailure = nil
+            isFinishingDrag = false
             return
         }
-
-        let ok = tilingEngine.swapWindows(s.dragged, s.target, onWorkspace: workspace, screen: screen)
-        if !ok {
-            rejectSwap?(s.dragged, "drag swap overflows min-size constraints (post-readback)")
+        let epoch = pressEpoch
+        isFinishingDrag = true
+        schedule(0.1) { [weak self] in
+            guard let self, self.pressEpoch == epoch else { return }
+            let mode: TiledDragMode?
+            if let target = self.resolveTarget(release.pointer, snapshot) {
+                mode = release.swapRequested
+                    ? .swap(targetID: target.windowID)
+                    : .insert(targetID: target.windowID, edge: target.edge)
+            } else {
+                mode = nil
+            }
+            let outcome = self.apply(snapshot, mode)
+            guard self.pressEpoch == epoch else { return }
+            self.report(TiledDragCompletion(snapshot: snapshot, outcome: outcome))
+            guard self.pressEpoch == epoch else { return }
+            self.snapshot = nil
+            self.captureFailure = nil
+            self.isFinishingDrag = false
         }
-        updatePositionCache?(allWindows)
+    }
+
+    func cancel() {
+        pressEpoch &+= 1
+        snapshot = nil
+        captureFailure = nil
+        isFinishingDrag = false
+    }
+}
+
+final class TiledDragHandler {
+    typealias Capture = (CGPoint, @escaping ([CGWindowID: CGRect]) -> Void) -> TiledDragCaptureResult
+    typealias CacheRead = () -> [CGWindowID: CGRect]
+    typealias CacheWrite = ([CGWindowID: CGRect]) -> Void
+    typealias Completion = (TiledDragCompletion) -> Void
+
+    private let coordinator: TiledDragSessionCoordinator
+    var isFinishingDrag: Bool { coordinator.isFinishingDrag }
+
+    init(capture: @escaping Capture,
+         drop: @escaping TiledDragSessionCoordinator.Apply,
+         resolveTarget: @escaping TiledDragSessionCoordinator.ResolveTarget,
+         schedule: @escaping TiledDragSessionCoordinator.Schedule,
+         capturedFrames: @escaping ([CGWindowID: CGRect]) -> Void,
+         readCache: @escaping CacheRead,
+         writeCache: @escaping CacheWrite,
+         completion: @escaping Completion,
+         captureFailure: @escaping TiledDragSessionCoordinator.CaptureFailureReport) {
+        coordinator = TiledDragSessionCoordinator(
+            capture: { point in capture(point, capturedFrames) },
+            apply: drop,
+            resolveTarget: resolveTarget,
+            schedule: schedule,
+            report: { result in
+                if case .ignored = result.outcome { return }
+                if case .superseded = result.outcome {
+                    completion(result)
+                    return
+                }
+                let updated = TiledDragCacheUpdate.applying(
+                    result.outcome,
+                    draggedID: result.snapshot.draggedID,
+                    affectedIDs: result.snapshot.context.memberIDs,
+                    to: readCache()
+                )
+                writeCache(updated)
+                completion(result)
+            },
+            captureFailureReport: captureFailure
+        )
+    }
+
+    func handleMouseDown(at pointer: CGPoint) {
+        coordinator.mouseDown(at: pointer)
+    }
+
+    func handleMouseUp(_ release: TiledDragRelease) {
+        coordinator.mouseUp(release)
+    }
+
+    func cancel() {
+        coordinator.cancel()
     }
 }

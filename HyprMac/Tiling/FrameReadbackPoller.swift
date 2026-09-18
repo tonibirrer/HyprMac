@@ -1,206 +1,232 @@
-// Pass-2 layout settle and conflict detection. After the engine writes
-// target frames, AX returns asynchronously; this type drives the
-// readback loop that resolves the gap.
-
 import Cocoa
 
-/// Pass-2 settle / conflict detector for the tiling engine's two-pass
-/// layout.
-///
-/// Algorithm:
-/// 1. Sleep `readbackPollInterval`, snapshot AX frames.
-/// 2. While any reading still differs from the target by more than
-///    tolerance and `readbackMaxWait` has not elapsed, sleep again and
-///    re-read. Undershoots get re-applied via a fresh `setFrame` (the
-///    cross-screen-race case). Oversize readings need
-///    `readbackStableSamples` consecutive matching reads after a
-///    `readbackMinConflictSettle` floor before they count as a real
-///    min-size conflict — transient sizes do not inflate ratios.
-/// 3. Classify final readings into conflicts (settled oversize),
-///    accepted (within tolerance), and observations (per-axis oversize
-///    flags fed into `MinSizeMemory`).
-///
-/// Pure with respect to tiling state — `TilingEngine` owns the
-/// min-size memory and applies the result after the call returns.
 struct FrameReadbackPoller {
-
     struct Conflict {
         let window: HyprWindow
         let allocated: CGRect
         let actual: CGSize
     }
 
-    // an observed oversize reading. engine uses this to update its
-    // recordObservedMinimumSize memory.
+    /// One window's evidence that it refused to shrink. Only produced when
+    /// every guard in `learningRefusal` is satisfied, so a consumer may
+    /// treat it as a constraint the app actually imposed.
     struct Observation {
         let window: HyprWindow
+        let target: CGSize
         let actual: CGSize
         let widthConflict: Bool
         let heightConflict: Bool
     }
 
-    struct Result {
-        let conflicts: [Conflict]
-        let observations: [Observation]
-        // windows whose actual size came back smaller-or-equal to the request —
-        // engine uses these to potentially relax a previously-recorded min-size
-        // bound (lowerMinimumSizeIfAccepted).
-        let accepted: [(HyprWindow, CGSize)]
+    /// Why a window's apparent oversize teaches nothing. Each case is a
+    /// reason the readback cannot be read as "this app refused to be that
+    /// small", whatever the numbers say.
+    enum LearningRefusal: String {
+        /// a rollback to the original frames is not a tiling target
+        case restorationPhase
+        /// accepted geometry, or an attempt that gave up before a verdict
+        case notRejected
+        /// a write, cleanup or read error, or any other failure that is not
+        /// a geometric refusal: the frames say nothing about size
+        case ioFailure
+        /// not all three setters returned success for this window
+        case writesIncomplete
+        /// a target went unread, or nothing settled
+        case readbackIncomplete
+        /// the window is not where it was told to go, so its size is stale
+        case originMismatch
     }
 
-    /// Apply target frames and poll until the AX readbacks settle or
-    /// `TilingConfig.readbackMaxWait` elapses. Returns classified outcomes for
-    /// the engine to reconcile against its min-size memory.
-    func applyLayout(_ layouts: [(HyprWindow, CGRect)]) -> Result {
+    struct Result {
+        let verdict: FrameSizingAttempt.Verdict
+        let actualFrames: [CGWindowID: CGRect]
+        let conflicts: [Conflict]
+        let observations: [Observation]
+        let accepted: [(HyprWindow, CGSize)]
+        var progress = FrameSizingAttempt.Progress()
+        /// restored originals that overlap each other. restoration only,
+        /// and a diagnostic rather than a failure — see
+        /// `FrameSizingConfiguration.correspondenceOnly`.
+        var overlaps: [FrameSizingOverlap] = []
+    }
+
+    private let configuration: FrameSizingConfiguration
+    private let generation: () -> UInt64
+    private let ioFactory: ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO
+
+    init(configuration: FrameSizingConfiguration = FrameSizingConfiguration(),
+         generation: @escaping () -> UInt64 = { 0 },
+         ioFactory: @escaping ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO = FrameSizingIO.accessibility) {
+        self.configuration = configuration
+        self.generation = generation
+        self.ioFactory = ioFactory
+    }
+
+    func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                     gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
+        applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                    generation: requestedGeneration, configuration: configuration,
+                    phase: .candidate)
+    }
+
+    func applyRestoration(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                          gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
+        var strictConfiguration = configuration
+        strictConfiguration.sizeOvershootTolerance = strictConfiguration.sizeTolerance
+        strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
+        strictConfiguration.aggregateSafetySlack = strictConfiguration.sizeTolerance
+        strictConfiguration.correspondenceOnly = true
+        return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                           generation: requestedGeneration, configuration: strictConfiguration,
+                           phase: .restoration)
+    }
+
+    private func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                             gap: CGFloat, generation requestedGeneration: UInt64,
+                             configuration: FrameSizingConfiguration,
+                             phase: FrameSizingPhase) -> Result {
+        let ids = layouts.map { $0.0.windowID }
+        let unstarted = FrameSizingAttempt.Progress(phase: phase, generation: requestedGeneration,
+                                                    targetIDs: ids)
+        guard generation() == requestedGeneration else {
+            return Result(verdict: .unknown(.superseded), actualFrames: [:],
+                          conflicts: [], observations: [], accepted: [], progress: unstarted)
+        }
         guard !layouts.isEmpty else {
-            return Result(conflicts: [], observations: [], accepted: [])
+            return Result(verdict: .accepted, actualFrames: [:], conflicts: [],
+                          observations: [], accepted: [], progress: unstarted)
         }
-
-        // diagnostic: previous frames let us log how much a window actually moved.
-        var prev: [CGWindowID: CGRect] = [:]
-        for (w, _) in layouts {
-            if let cached = w.cachedFrame { prev[w.windowID] = cached }
+        if let duplicate = ids.first(where: { id in ids.filter { $0 == id }.count > 1 }) {
+            return Result(verdict: .rejected(.duplicateWindowID(duplicate)),
+                          actualFrames: [:], conflicts: [],
+                          observations: [], accepted: [], progress: unstarted)
         }
-
-        for (window, frame) in layouts {
-            window.setFrame(frame)
+        let windows = Dictionary(uniqueKeysWithValues: layouts.map { ($0.0.windowID, $0.0) })
+        if generation() == requestedGeneration {
+            for (window, _) in layouts { window.cachedFrame = nil }
         }
+        let attempt = FrameSizingAttempt(
+            io: ioFactory(windows, generation),
+            configuration: configuration
+        )
+        let raw = attempt.apply(
+            targets: layouts.map { .init(windowID: $0.0.windowID, frame: $0.1) },
+            usableFrame: usableFrame, gap: gap, generation: requestedGeneration,
+            phase: phase
+        )
+        return classify(raw, layouts: layouts, configuration: configuration)
+    }
 
-        struct Reading {
-            let window: HyprWindow
-            let frame: CGRect
-            var actual: CGRect
-            var stableSamples: Int
-            var elapsed: TimeInterval
-            var axFailed: Bool
+    func captureFrames(_ windows: [HyprWindow], generation requestedGeneration: UInt64) -> FrameSizingAttempt.Result {
+        var seen = Set<CGWindowID>()
+        for window in windows where !seen.insert(window.windowID).inserted {
+            return FrameSizingAttempt.Result(verdict: .unknown(.duplicateWindowID(window.windowID)),
+                                             actualFrames: [:])
         }
+        let windowMap = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, $0) })
+        return FrameSizingAttempt(io: ioFactory(windowMap, generation), configuration: configuration)
+            .captureFrames(windowIDs: windows.map(\.windowID), generation: requestedGeneration)
+    }
 
-        // axFailed: a failed SIZE read substitutes the target verbatim,
-        // which reads back as a perfect on-target resize. callers must not
-        // treat those as observed sizes (lowerIfAccepted would corrupt
-        // min-size memory below the app's true floor). a failed position
-        // read alone doesn't invalidate a genuinely observed size — only
-        // sizes feed min-size memory.
-        func read(_ window: HyprWindow, target: CGRect) -> (frame: CGRect, axFailed: Bool) {
-            let actualSize = window.size
-            let actualPos = window.position
-            return (CGRect(origin: actualPos ?? target.origin, size: actualSize ?? target.size),
-                    actualSize == nil)
-        }
+    @discardableResult
+    func applyFinal(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                    gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
+        applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                    generation: requestedGeneration, configuration: configuration,
+                    phase: .adjusted)
+    }
 
-        func exceeds(_ actual: CGRect, _ target: CGRect) -> Bool {
-            actual.width > target.width + TilingConfig.frameToleranceXPx
-                || actual.height > target.height + TilingConfig.frameToleranceXPx
-        }
-
-        func undershoots(_ actual: CGRect, _ target: CGRect) -> Bool {
-            actual.width < target.width - TilingConfig.frameToleranceXPx
-                || actual.height < target.height - TilingConfig.frameToleranceXPx
-        }
-
-        let interval = TilingConfig.readbackPollInterval
-        let maxWait = TilingConfig.readbackMaxWait
-        let minConflictSettle = TilingConfig.readbackMinConflictSettle
-        let stableTolerance = TilingConfig.readbackStableTolerancePx
-        var elapsed: TimeInterval = 0
-        var readings: [Reading] = []
-
-        Thread.sleep(forTimeInterval: interval)
-        elapsed += interval
-        for (window, frame) in layouts {
-            let first = read(window, target: frame)
-            readings.append(Reading(window: window, frame: frame,
-                                    actual: first.frame,
-                                    stableSamples: 0,
-                                    elapsed: elapsed,
-                                    axFailed: first.axFailed))
-        }
-
-        // accepted layouts exit fast. over-target readings must settle for two
-        // consecutive samples after a longer floor before they can adjust ratios.
-        // under-target readings are usually a cross-screen clamp/race; reapply
-        // until the destination screen accepts the requested size.
-        while readings.contains(where: { exceeds($0.actual, $0.frame) || undershoots($0.actual, $0.frame) }) && elapsed < maxWait {
-            Thread.sleep(forTimeInterval: interval)
-            elapsed += interval
-
-            var anyUnsettledConflict = false
-            var anyUndersizedFrame = false
-            for i in readings.indices {
-                let (next, axFailed) = read(readings[i].window, target: readings[i].frame)
-                let stable = abs(next.width - readings[i].actual.width) <= stableTolerance
-                    && abs(next.height - readings[i].actual.height) <= stableTolerance
-                readings[i].actual = next
-                readings[i].elapsed = elapsed
-                readings[i].stableSamples = stable ? readings[i].stableSamples + 1 : 0
-                readings[i].axFailed = axFailed
-
-                if undershoots(next, readings[i].frame) {
-                    readings[i].window.setFrame(readings[i].frame)
-                    anyUndersizedFrame = true
-                    continue
-                }
-
-                if exceeds(next, readings[i].frame),
-                   elapsed < minConflictSettle || readings[i].stableSamples < TilingConfig.readbackStableSamples {
-                    anyUnsettledConflict = true
-                }
-            }
-
-            if !anyUnsettledConflict && !anyUndersizedFrame { break }
-        }
-
+    private func classify(_ raw: FrameSizingAttempt.Result,
+                          layouts: [(HyprWindow, CGRect)],
+                          configuration: FrameSizingConfiguration) -> Result {
         var conflicts: [Conflict] = []
         var observations: [Observation] = []
         var accepted: [(HyprWindow, CGSize)] = []
-
-        for r in readings {
-            let widthConflict = r.actual.width > r.frame.width + TilingConfig.frameToleranceXPx
-            let heightConflict = r.actual.height > r.frame.height + TilingConfig.frameToleranceXPx
-            let widthUndershot = r.actual.width < r.frame.width - TilingConfig.frameToleranceXPx
-            let heightUndershot = r.actual.height < r.frame.height - TilingConfig.frameToleranceXPx
-
-            if widthConflict || heightConflict {
-                let settled = r.elapsed >= minConflictSettle && r.stableSamples >= TilingConfig.readbackStableSamples
-                if !settled {
-                    hyprLog(.debug, .lifecycle, "unsettled readback ignored: '\(r.window.title ?? "?")' wanted \(Int(r.frame.width))x\(Int(r.frame.height)), saw \(Int(r.actual.width))x\(Int(r.actual.height)) after \(Int(r.elapsed * 1000))ms")
-                    r.window.cachedFrame = r.frame
-                    continue
+        let phase = raw.progress.phase
+        for (window, target) in layouts {
+            guard let actual = raw.actualFrames[window.windowID] else { continue }
+            if case .unknown = raw.verdict { continue }
+            window.cachedFrame = actual
+            // a rollback writes the frames the windows already had, so
+            // nothing it reads back is evidence about a tiling target
+            if phase == .restoration { continue }
+            // cell rounding is not a min-size floor, so it must not teach
+            // one. the boundary is the candidate overshoot tolerance
+            // whatever configuration this pass ran under.
+            let widthConflict = actual.width > target.width + self.configuration.sizeOvershootTolerance
+            let heightConflict = actual.height > target.height + self.configuration.sizeOvershootTolerance
+            if widthConflict || heightConflict, case .rejected = raw.verdict {
+                let refusal = Self.learningRefusal(windowID: window.windowID,
+                                                   target: target, actual: actual,
+                                                   verdict: raw.verdict, progress: raw.progress,
+                                                   positionTolerance: configuration.positionTolerance)
+                if refusal == nil {
+                    conflicts.append(Conflict(window: window, allocated: target, actual: actual.size))
+                    observations.append(Observation(window: window, target: target.size,
+                                                    actual: actual.size,
+                                                    widthConflict: widthConflict,
+                                                    heightConflict: heightConflict))
                 }
-
-                hyprLog(.debug, .lifecycle, "min-size conflict: '\(r.window.title ?? "?")' wanted \(Int(r.frame.width))x\(Int(r.frame.height)), got \(Int(r.actual.width))x\(Int(r.actual.height))")
-                conflicts.append(Conflict(window: r.window, allocated: r.frame, actual: r.actual.size))
-                observations.append(Observation(window: r.window, actual: r.actual.size,
-                                                widthConflict: widthConflict, heightConflict: heightConflict))
-            } else if widthUndershot || heightUndershot {
-                hyprLog(.debug, .lifecycle, "undersized readback: '\(r.window.title ?? "?")' wanted \(Int(r.frame.width))x\(Int(r.frame.height)), saw \(Int(r.actual.width))x\(Int(r.actual.height)) after \(Int(r.elapsed * 1000))ms")
-                r.window.setFrame(r.frame)
-                r.window.cachedFrame = r.frame
-                continue
-            } else if r.axFailed {
-                // fallback reading equals the target by construction — not an
-                // observed size, so it must not relax min-size memory.
-                hyprLog(.debug, .lifecycle, "AX read failed for '\(r.window.title ?? "?")' — excluding from accepted set")
-            } else {
-                accepted.append((r.window, r.actual.size))
-            }
-            r.window.cachedFrame = r.actual
-
-            if let previous = prev[r.window.windowID], widthConflict || heightConflict {
-                let deltaW = abs(r.actual.width - previous.width)
-                let deltaH = abs(r.actual.height - previous.height)
-                hyprLog(.debug, .lifecycle, "readback settled in \(Int(r.elapsed * 1000))ms for '\(r.window.title ?? "?")' (delta \(Int(deltaW))x\(Int(deltaH)))")
+                hyprLog(.debug, .tiling, "min evidence: wid=\(window.windowID) "
+                        + "phase=\(phase.rawValue) "
+                        + "target=\(Self.size(target.size)) actual=\(Self.size(actual.size)) "
+                        + "axis=\(Self.axis(width: widthConflict, height: heightConflict)) "
+                        + "written=\(raw.progress.possiblyWritten.contains(window.windowID)) "
+                        + "complete=\(raw.progress.writesCompleted.contains(window.windowID)) "
+                        + "stable=\(raw.progress.readbackStable) "
+                        + "learn=\(refusal == nil) refused=\(refusal?.rawValue ?? "none") "
+                        + "source=readback")
+            } else if raw.verdict == .accepted {
+                accepted.append((window, actual.size))
             }
         }
-
-        return Result(conflicts: conflicts, observations: observations, accepted: accepted)
+        return Result(verdict: raw.verdict, actualFrames: raw.actualFrames,
+                      conflicts: conflicts, observations: observations,
+                      accepted: accepted, progress: raw.progress, overlaps: raw.overlaps)
     }
 
-    /// Apply the final pass-2 layout once ratios are settled. Plain setFrame —
-    /// no readback needed since the layout has already been validated.
-    func applyFinal(_ layouts: [(HyprWindow, CGRect)]) {
-        for (window, frame) in layouts {
-            window.setFrame(frame)
+    /// Whether this window's oversize may teach a minimum, and if not, why
+    /// not. Nil means the evidence is good: this window's three setters all
+    /// returned success, every target read back and settled, the window is
+    /// at the origin it was given, and the attempt ended in a geometric
+    /// refusal rather than an I/O error.
+    ///
+    /// The verdict is judged per window. An aggregate rejection names one
+    /// id, but another window in the same pass can still have refused its
+    /// own size, and a window whose own evidence fails a guard is skipped
+    /// without silencing the rest.
+    static func learningRefusal(windowID: CGWindowID, target: CGRect, actual: CGRect,
+                                verdict: FrameSizingAttempt.Verdict,
+                                progress: FrameSizingAttempt.Progress,
+                                positionTolerance: CGFloat) -> LearningRefusal? {
+        if progress.phase == .restoration { return .restorationPhase }
+        guard case let .rejected(failure) = verdict else { return .notRejected }
+        switch failure {
+        case .noFittingSlot, .writeFailed, .readFailed, .cleanupFailed, .windowUnavailable,
+             .duplicateWindowID, .invalidFrame, .superseded, .deadlineExceeded,
+             .attemptsExhausted:
+            return .ioFailure
+        case .geometryMismatch, .outsideUsableFrame, .overlap, .gapViolation:
+            break
+        }
+        guard progress.writesCompleted.contains(windowID) else { return .writesIncomplete }
+        guard progress.readbackComplete, progress.readbackStable else { return .readbackIncomplete }
+        guard abs(actual.minX - target.minX) <= positionTolerance,
+              abs(actual.minY - target.minY) <= positionTolerance else { return .originMismatch }
+        return nil
+    }
+
+    static func axis(width: Bool, height: Bool) -> String {
+        switch (width, height) {
+        case (true, true): return "width+height"
+        case (true, false): return "width"
+        case (false, true): return "height"
+        case (false, false): return "none"
         }
     }
+
+    private static func size(_ size: CGSize) -> String {
+        String(format: "%gx%g", Double(size.width), Double(size.height))
+    }
+
 }

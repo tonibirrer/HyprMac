@@ -18,7 +18,8 @@ final class FullHeightTests: XCTestCase {
 
     override func setUpWithError() throws {
         displayManager = DisplayManager()
-        engine = TilingEngine(displayManager: displayManager)
+        engine = TilingEngine(displayManager: displayManager,
+                              frameSizingIOFactory: acceptingFrameSizingIOFactory())
         // the baseline these tests lean on — dwindle stacks the second and
         // third window in the right half — only holds when half the usable
         // width is shorter than the height (aspect below 2:1). an ultrawide

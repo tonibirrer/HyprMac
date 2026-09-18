@@ -86,6 +86,15 @@ enum TilingConfig {
     // px wiggle that still counts as the same reading during settle detection.
     static let readbackStableTolerancePx: CGFloat = 2
 
+    // MARK: - pointer input
+
+    // pointer travel between mouse-down and mouse-up below which a press is
+    // a click, not a drag. a .leftMouseDragged event fires on 1pt of hand
+    // jitter during an ordinary click; without this floor every such click
+    // ran a full tiled-drag transaction and flashed red when the busy app's
+    // frame read timed out.
+    static let dragThresholdPx: CGFloat = 8
+
     // MARK: - geometric tolerances
 
     // 1px slack on rect comparisons in pairFits (sub-pixel rounding).
@@ -97,7 +106,7 @@ enum TilingConfig {
 /// Sides are in CG (top-left-origin) coordinates — `top` is the menu-bar
 /// edge of the screen, which is also where a status bar like sketchybar
 /// reserves space.
-struct OuterPadding: Equatable {
+struct OuterPadding: Equatable, ExpressibleByIntegerLiteral, ExpressibleByFloatLiteral {
     var top: CGFloat
     var left: CGFloat
     var bottom: CGFloat
@@ -113,6 +122,21 @@ struct OuterPadding: Equatable {
     init(uniform: CGFloat) {
         self.init(top: uniform, left: uniform, bottom: uniform, right: uniform)
     }
+
+    /// Scalar spelling: `padding: 8` reads as uniform padding. Keeps the
+    /// upstream call sites and tests that pass one number compiling.
+    init(integerLiteral value: Int) { self.init(uniform: CGFloat(value)) }
+    init(floatLiteral value: Double) { self.init(uniform: CGFloat(value)) }
+
+    /// Grow every side by `delta` (negative shrinks).
+    static func + (lhs: OuterPadding, delta: CGFloat) -> OuterPadding {
+        OuterPadding(top: lhs.top + delta, left: lhs.left + delta,
+                     bottom: lhs.bottom + delta, right: lhs.right + delta)
+    }
+
+    /// Largest single-side value — the scalar stand-in where one number is
+    /// needed (previews, log lines).
+    var maxSide: CGFloat { max(max(top, left), max(bottom, right)) }
 
     /// `rect` shrunk by this padding (clamped to zero size).
     func inset(_ rect: CGRect) -> CGRect {

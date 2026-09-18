@@ -1,6 +1,6 @@
 // Focus-follows-mouse plus menu-bar-tracking suppression and
-// refocus-under-cursor recovery. Throttled to ~60 Hz with a short-TTL
-// topmost-window cache so the global mouseMoved handler stays cheap.
+// refocus-under-cursor recovery. Throttled at the configured hover rate
+// with a short-TTL topmost-window cache so the global mouseMoved handler stays cheap.
 
 import Cocoa
 
@@ -10,7 +10,7 @@ import Cocoa
 /// path is built around early exits. The eligibility check
 /// (`isFFMEligible`) gates on the FFM toggle, mouse button state, menu
 /// tracking, dock activation, animation in flight, and the
-/// `mouse-focus` suppression key. After eligibility, a 60 Hz throttle
+/// `mouse-focus` suppression key. After eligibility, a configurable throttle
 /// caps resolve work, and a topmost-window cache (TTL +
 /// spatial-tolerance) avoids redundant `CGWindowListCopyWindowInfo`
 /// queries when the cursor jitters.
@@ -22,13 +22,9 @@ import Cocoa
 /// Threading: main-thread only.
 class MouseTrackingManager {
 
-    /// Tunables. Empirical: throttle measured on M1 Air with ~30
-    /// visible windows; raising past ~24 ms produces visible focus lag
-    /// during fast cursor sweeps, lowering below ~16 ms wastes work on
-    /// no-op resolves between display frames.
+    /// Tunables for the fallback throttle and topmost-window cache.
     private enum Tuning {
-        // 120Hz cap on FFM resolve work. raising = slower focus, lowering =
-        // wasted CG window-list queries between display frames.
+        // used until WindowManager injects the saved hover response rate
         static let throttleInterval: CFAbsoluteTime = 0.008
         // dedupe burst of NSMouseMoved events on a single frame; short
         // enough that windows reshuffling under a stationary cursor still
@@ -69,6 +65,9 @@ class MouseTrackingManager {
     var isFocusFollowsMouseEnabled: () -> Bool = { false }
     var isMouseButtonDown: () -> Bool = { false }
     var primaryScreenHeight: () -> CGFloat = { 0 }
+    var mouseLocationNS: () -> CGPoint = { NSEvent.mouseLocation }
+    var now: () -> CFAbsoluteTime = { CFAbsoluteTimeGetCurrent() }
+    var resolveTopmostWindowID: ((CGPoint) -> CGWindowID?)?
     var screenAt: (CGPoint) -> NSScreen? = { _ in nil }
     var floatingWindowIDs: () -> Set<CGWindowID> = { [] }
     var isWindowVisible: (CGWindowID) -> Bool = { _ in false }
@@ -89,7 +88,8 @@ class MouseTrackingManager {
     // true while the scratchpad layer is up — FFM must not reach through the
     // scrim to hover-focus a background tile (would dismiss the quasimodal layer)
     var isScratchpadVisible: () -> Bool = { false }
-    // user-configurable throttle override; falls back to Tuning.throttleInterval
+    // minimum spacing between eligible checks. skipped events are not replayed.
+    // WindowManager derives this from the user-configured response rate.
     var hoverThrottleInterval: () -> CFAbsoluteTime = { Tuning.throttleInterval }
     // routed to FocusStateController by WindowManager (canonical "last focused" id)
     var lastFocusedID: () -> CGWindowID = { 0 }
@@ -112,11 +112,11 @@ class MouseTrackingManager {
         // even when we end up bailing on the dead-zone check below — that
         // matches the prior behavior, where any pass through the eligibility
         // gate consumes the throttle window.
-        let now = CFAbsoluteTimeGetCurrent()
-        if now - lastHandleTime < hoverThrottleInterval() { return }
-        lastHandleTime = now
+        let currentTime = now()
+        if currentTime - lastHandleTime < hoverThrottleInterval() { return }
+        lastHandleTime = currentTime
 
-        let mouseNS = NSEvent.mouseLocation
+        let mouseNS = mouseLocationNS()
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
 
@@ -148,7 +148,7 @@ class MouseTrackingManager {
             // Tahoe, leaving menuTracking latched and FFM dead until the next
             // menu cycle. force-clear after the max age so a dropped notification
             // doesn't permanently kill hover focus.
-            let age = CFAbsoluteTimeGetCurrent() - menuTrackingStart
+            let age = now() - menuTrackingStart
             if age > Self.menuTrackingMaxAge {
                 hyprLog(.notice, .mouse, "menuTracking stuck for \(String(format: "%.1f", age))s — force-clearing")
                 menuTracking = false
@@ -183,16 +183,18 @@ class MouseTrackingManager {
     /// Resolve which window should receive focus for `cgPoint`, or `nil`
     /// when no change is appropriate.
     ///
-    /// Returns `nil` for the common no-change cases: cursor over a
-    /// floater (leave focus alone), cursor over the already-focused
-    /// tile, cursor over an unmanaged normal-layer overlay (popover,
+    /// Returns `nil` for the common no-change cases: cursor over the already-focused
+    /// window, cursor over an unmanaged normal-layer overlay (popover,
     /// autocomplete panel), or no managed window at all.
     private func determineFocusTarget(at cgPoint: CGPoint) -> FocusTarget? {
         // snapshot closures once per move event
         let floating = floatingWindowIDs()
         let managed = tiledPositions()
 
-        let hit = topmostWindow(at: cgPoint)
+        // test hook: an injected resolver answers with a plain window id
+        let hit: HitTest = resolveTopmostWindowID
+            .map { $0(cgPoint).map(HitTest.window) ?? .none }
+            ?? topmostWindow(at: cgPoint)
         if case .overlay = hit {
             // the cursor is over a menu, popover, palette, the Dock or the
             // menu bar — something above the normal window layer that is
@@ -203,7 +205,8 @@ class MouseTrackingManager {
         if case .window(let topmostID) = hit {
             // cursor is over a visible floater — leave focus alone
             if floating.contains(topmostID), isWindowVisible(topmostID) {
-                return nil
+                guard topmostID != lastFocusedID(), let target = cachedWindow(topmostID) else { return nil }
+                return FocusTarget(windowID: topmostID, window: target, reason: "ffm-topmost-floating")
             }
 
             if managed[topmostID] != nil {
@@ -260,7 +263,7 @@ class MouseTrackingManager {
     /// the next pass.
     func refocusUnderCursor() {
         mainThreadOnly()
-        let mouseNS = NSEvent.mouseLocation
+        let mouseNS = mouseLocationNS()
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
 
@@ -336,7 +339,7 @@ class MouseTrackingManager {
     /// anything else → `.overlay`. Looking *through* a popup to the tile
     /// beneath it is exactly what dismissed menus and popovers under FFM.
     func topmostWindow(at point: CGPoint) -> HitTest {
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = self.now()
         if let cache = topmostCache,
            now - cache.time < Tuning.topmostCacheTTL,
            abs(point.x - cache.point.x) < Tuning.topmostCacheSpatialTolerance,
@@ -390,7 +393,7 @@ class MouseTrackingManager {
     func menuTrackingBegan() {
         mainThreadOnly()
         menuTracking = true
-        menuTrackingStart = CFAbsoluteTimeGetCurrent()
+        menuTrackingStart = now()
     }
 
     /// Called when the menu closes. Refreshes the focus border on the

@@ -4,6 +4,26 @@
 
 import Cocoa
 
+struct FocusBorderFeedbackLifecycle {
+    private(set) var isActive = false
+
+    var permitsPersistentShow: Bool { !isActive }
+
+    func persistentTrackedID(_ renderedWindowID: CGWindowID?) -> CGWindowID? {
+        isActive ? nil : renderedWindowID
+    }
+
+    mutating func begin() { isActive = true }
+
+    mutating func finish() -> Bool {
+        guard isActive else { return false }
+        isActive = false
+        return true
+    }
+
+    mutating func cancel() { isActive = false }
+}
+
 /// Visual focus indicator: a tinted outline around the focused window
 /// and a thinner outline around each visible floating window.
 ///
@@ -18,8 +38,8 @@ import Cocoa
 /// Floating-window panels are keyed by `CGWindowID` and managed
 /// independently via `updateFloatingBorders` / `hideFloatingBorders`.
 ///
-/// Lifecycle invariants: every public mutation cancels in-flight work
-/// (`settleWork`, `shakeTimer`) before reassigning; `hide` nils the
+/// Lifecycle invariants: explicit teardown cancels in-flight work;
+/// persistent `show` calls defer to bounded error feedback; `hide` nils the
 /// focused panel and its glow view synchronously so the next `show`
 /// builds a fresh panel rather than reusing one that is mid-fade;
 /// `deinit` guarantees cleanup of every owned panel and timer.
@@ -27,7 +47,19 @@ import Cocoa
 /// Threading: main-thread only. Public methods assert via
 /// `mainThreadOnly()`.
 class FocusBorder {
-    private(set) var trackedWindowID: CGWindowID?
+    private var renderedWindowID: CGWindowID?
+    var trackedWindowID: CGWindowID? {
+        errorFeedback.persistentTrackedID(renderedWindowID)
+    }
+
+    /// Global persistent-chrome policy pushed from `UserConfig.showFocusBorder`.
+    /// One-shot rejection feedback remains available when chrome is disabled.
+    var isEnabled = true {
+        didSet {
+            guard !isEnabled else { return }
+            disableImmediately()
+        }
+    }
 
     private var panel: NSPanel?
     private var glowView: NSView?
@@ -37,6 +69,19 @@ class FocusBorder {
     private var state: State = .hidden
     // pill shown centered in the error panel explaining a rejection.
     private var messageBanner: NSView?
+    private var infoPanels: [NSPanel] = []
+    private let observedPanels = NSHashTable<NSPanel>.weakObjects()
+    private var renderGeneration = 0
+    private var restoreShakenWindow: (() -> Void)?
+    var onShakeRestore: () -> Void = {}
+    var onErrorFeedbackFinished: () -> Void = {}
+    var onErrorFeedbackFinishedToken: (Int) -> Void = { _ in }
+    private var errorFeedback = FocusBorderFeedbackLifecycle()
+    private var errorFeedbackWindowID: CGWindowID?
+    var isErrorFeedbackActive: Bool { errorFeedback.isActive }
+
+    var visibleOwnedPanelCount: Int { observedPanels.allObjects.filter(\.isVisible).count }
+    static func errorFeedbackCanRender(isEnabled _: Bool) -> Bool { true }
 
     // remembered CG frames — used by applyOcclusion to translate occluder
     // CG rects into glow-local NS coords. kept in sync with panel positions.
@@ -67,7 +112,8 @@ class FocusBorder {
         static let floatingHideAnimationDurationSec: TimeInterval = 0.28
         static let shakeStepDurationSec: TimeInterval = 0.04
         static let shakeOffsets: [CGFloat] = [10, -10, 7, -7, 3, -3, 0]
-        static let shakeFadeDelaySec: TimeInterval = 0.15
+        // hold the message after the shake stops
+        static let errorMessageHoldSec: TimeInterval = 1.15
         static let activeBorderWidth: CGFloat = 2
         static let settledBorderWidth: CGFloat = 1.5
         static let floatingBorderWidth: CGFloat = 1.5
@@ -92,11 +138,33 @@ class FocusBorder {
     /// `config.chromeFadeDurationSec`.
     var fadeDurationSec: TimeInterval = Tuning.showAnimationDurationSec
 
+    /// Repaint existing persistent chrome without changing geometry or
+    /// restarting its animations. Active rejection feedback keeps its red.
+    func refreshAppearance(focusColor: CGColor, floatingColor: CGColor) {
+        mainThreadOnly()
+        guard !errorFeedback.isActive else { return }
+        let focusedColor = renderedWindowID.map { floaterFrames[$0] != nil } == true
+            ? floatingColor : focusColor
+        accentCGColor = focusedColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let layer = glowView?.layer {
+            layer.borderColor = focusedColor
+            layer.backgroundColor = state == .active
+                ? focusedColor.copy(alpha: Tuning.activeFillAlpha)
+                : CGColor.clear
+        }
+        for (_, border) in floatingPanels {
+            border.glowView.layer?.borderColor = floatingColor
+        }
+        CATransaction.commit()
+    }
+
     deinit {
         // tests and future ownership swaps may drop a FocusBorder mid-life;
         // ensure we don't leak NSPanels or live timers in those cases.
         settleWork?.cancel()
-        shakeTimer?.cancel()
+        cancelActiveShake()
         panel?.orderOut(nil)
         for (_, border) in floatingPanels { border.panel.orderOut(nil) }
     }
@@ -116,24 +184,28 @@ class FocusBorder {
     ///   "lighting up" on every click.
     func show(around rect: CGRect, windowID: CGWindowID, settled: Bool = false) {
         mainThreadOnly()
+        guard isEnabled else { return }
+        // Focus can change while a rejected drag is still reporting its
+        // result. Keep the one-shot red panel intact; the owner re-resolves
+        // current focus when the bounded feedback interval finishes.
+        guard errorFeedback.permitsPersistentShow else { return }
         // idempotent re-show: already painted on this window at this frame
         // and the state machine has progressed past .hidden — nothing to do.
         // without this, every redundant updateFocusBorder call (post-click
         // refocus, raiseBehind, app-activated polls) would re-fire the
         // active-tint → settle cycle and the user sees the window "light up
         // again" on each click.
-        if state != .hidden, trackedWindowID == windowID,
+        if state != .hidden, renderedWindowID == windowID,
            let f = trackedWindowFrame,
            abs(f.minX - rect.minX) < 1, abs(f.minY - rect.minY) < 1,
            abs(f.width - rect.width) < 1, abs(f.height - rect.height) < 1 {
             return
         }
-        // cancel any in-flight transition (settle, shake) before re-asserting.
-        // without this, a pending shake or settle can mutate the panel after
-        // show() returns and undo the new frame/state.
+        renderGeneration += 1
+        // cancel any in-flight transition before re-asserting. Active error
+        // feedback returned above and keeps ownership of the panel.
         settleWork?.cancel()
-        shakeTimer?.cancel()
-        shakeTimer = nil
+        cancelActiveShake()
         // drop a leftover error pill if show() reuses a panel mid-flash
         removeMessageBanner()
 
@@ -142,7 +214,7 @@ class FocusBorder {
         // Same-window repositioning (tile resize/move) keeps snap so the
         // border tracks live geometry without animation lag.
         let isFreshAppearance = (panel == nil) || (state == .hidden)
-        let isWindowSwitch = (trackedWindowID != nil) && (trackedWindowID != windowID)
+        let isWindowSwitch = (renderedWindowID != nil) && (renderedWindowID != windowID)
         let shouldFadeIn = isFreshAppearance || isWindowSwitch
 
         let expansion = Tuning.activeBorderWidth / 2
@@ -183,7 +255,8 @@ class FocusBorder {
                 glow.alphaValue = 1.0
             }
         }
-        trackedWindowID = windowID
+        state = .active
+        renderedWindowID = windowID
         trackedWindowFrame = rect
 
         if settled {
@@ -223,7 +296,7 @@ class FocusBorder {
         mainThreadOnly()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if let windowID = trackedWindowID, let layer = glowView?.layer {
+        if let windowID = errorFeedbackWindowID ?? renderedWindowID, let layer = glowView?.layer {
             layer.cornerRadius = WindowCornerRadius.resolve(for: windowID)
                 + focusedCornerRadiusExpansion
         }
@@ -246,6 +319,7 @@ class FocusBorder {
     /// floating-window set.
     func updateFloatingBorders(_ frames: [CGWindowID: CGRect], color: CGColor) {
         mainThreadOnly()
+        guard isEnabled else { return }
         let visibleIDs = Set(frames.keys)
         let staleIDs = floatingPanels.keys.filter { !visibleIDs.contains($0) }
         for windowID in staleIDs { hideFloatingBorder(for: windowID) }
@@ -346,10 +420,14 @@ class FocusBorder {
     ///   switch) — a fade would play over the windows arriving underneath.
     func hide(animated: Bool = true) {
         mainThreadOnly()
+        if errorFeedback.isActive {
+            hyprLog(.notice, .border, "error feedback cancel: wid=\(errorFeedbackWindowID ?? 0)")
+        }
         settleWork?.cancel()
-        shakeTimer?.cancel()
-        shakeTimer = nil
-        trackedWindowID = nil
+        cancelActiveShake()
+        errorFeedback.cancel()
+        errorFeedbackWindowID = nil
+        renderedWindowID = nil
         trackedWindowFrame = nil
         focusedCornerRadiusExpansion = Tuning.activeBorderWidth / 2
         removeMessageBanner()
@@ -370,20 +448,41 @@ class FocusBorder {
         }
     }
 
-    /// Flash a red border around `rect` and shake the window
+    /// Hide persistent focus chrome without interrupting one-shot rejection
+    /// feedback. Used by ordinary focus refreshes when persistent borders are
+    /// disabled or no managed window is under the cursor.
+    func hidePersistentBorder() {
+        mainThreadOnly()
+        guard errorFeedback.permitsPersistentShow else { return }
+        hide()
+    }
+
+    func beginErrorFeedback(windowID: CGWindowID) {
+        errorFeedback.begin()
+        errorFeedbackWindowID = windowID
+        hyprLog(.notice, .border, "error feedback begin: wid=\(windowID)")
+    }
+
+    /// Flash a red border around `rect` and shake the overlay
     /// horizontally to signal a rejected operation (e.g. swap that
     /// would violate min-size constraints, move to a full workspace).
     /// The border auto-hides after the shake completes.
     ///
-    /// - Parameter window: when supplied, the actual window oscillates
-    ///   along with the overlay panel; without it, only the overlay
-    ///   shakes.
+    /// - Parameter window: retained for source compatibility. Error feedback
+    ///   never moves the actual window because verified geometry must remain
+    ///   unchanged after a rejection or restoration.
     /// - Parameter message: short reason shown as a pill centered in the
     ///   flashed window — e.g. "Not enough room to swap".
-    func flashError(around rect: CGRect, windowID: CGWindowID, window: HyprWindow? = nil, message: String? = nil) {
+    @discardableResult
+    func flashError(around rect: CGRect, windowID: CGWindowID, window _: HyprWindow? = nil,
+                    message: String? = nil) -> Int? {
+        guard Self.errorFeedbackCanRender(isEnabled: isEnabled) else { return nil }
         mainThreadOnly()
+        renderGeneration += 1
+        let generation = renderGeneration
         settleWork?.cancel()
-        shakeTimer?.cancel()
+        cancelActiveShake()
+        beginErrorFeedback(windowID: windowID)
 
         let expansion = Tuning.errorBorderWidth / 2
         focusedCornerRadiusExpansion = expansion
@@ -413,7 +512,7 @@ class FocusBorder {
         p.alphaValue = 1.0
         p.orderFront(nil)
         state = .active
-        trackedWindowID = windowID
+        renderedWindowID = windowID
         trackedWindowFrame = rect
 
         // reason pill, centered over the flashed window
@@ -429,9 +528,10 @@ class FocusBorder {
             messageBanner = banner
         }
 
-        // shake: oscillate both the overlay panel and the actual window
+        // shake only the overlay; moving the AX window would invalidate the
+        // verified frame that the rejected transaction just restored.
         let panelBaseX = nsRect.origin.x
-        let windowBaseX = rect.origin.x
+        restoreShakenWindow = { [weak self] in self?.onShakeRestore() }
         let offsets = Tuning.shakeOffsets
         let stepDuration = Tuning.shakeStepDurationSec
         var step = 0
@@ -447,20 +547,31 @@ class FocusBorder {
                 var frame = p.frame
                 frame.origin.x = panelBaseX + offset
                 p.setFrame(frame, display: false)
-                window?.position = CGPoint(x: windowBaseX + offset, y: rect.origin.y)
                 step += 1
             } else {
-                self.shakeTimer?.cancel()
-                self.shakeTimer = nil
-                // restore window to exact original position
-                window?.position = CGPoint(x: windowBaseX, y: rect.origin.y)
-                // fade out after shake
-                DispatchQueue.main.asyncAfter(deadline: .now() + Tuning.shakeFadeDelaySec) { [weak self] in
-                    self?.hide()
+                self.cancelActiveShake()
+                // leave the message still before fading out
+                DispatchQueue.main.asyncAfter(deadline: .now() + Tuning.errorMessageHoldSec) { [weak self] in
+                    guard let self, self.renderGeneration == generation else { return }
+                    guard self.errorFeedback.finish() else { return }
+                    let finishedID = self.errorFeedbackWindowID ?? 0
+                    self.errorFeedbackWindowID = nil
+                    hyprLog(.notice, .border, "error feedback end: wid=\(finishedID)")
+                    self.hide()
+                    self.onErrorFeedbackFinishedToken(generation)
+                    self.onErrorFeedbackFinished()
                 }
             }
         }
         timer.resume()
+        return generation
+    }
+
+    @discardableResult
+    func cancelErrorFeedback(token: Int) -> Bool {
+        guard errorFeedback.isActive, renderGeneration == token else { return false }
+        hide()
+        return true
     }
 
     // MARK: - occlusion masking
@@ -604,6 +715,8 @@ class FocusBorder {
     /// at `rect` (CG coords). Independent of the border state machine —
     /// safe to fire while the border tracks another window. No shake.
     func flashInfo(message: String, around rect: CGRect, windowID: CGWindowID = 0) {
+        mainThreadOnly()
+        guard isEnabled else { return }
         let frame = panelRect(for: rect, expansion: 0)
         let panel = makeBasePanel(frame: frame)
         panel.isReleasedWhenClosed = false
@@ -619,10 +732,13 @@ class FocusBorder {
                                     y: (frame.height - pill.frame.height) / 2))
         content.addSubview(pill)
         panel.contentView?.addSubview(content)
+        infoPanels.append(panel)
         panel.orderFrontRegardless()
         fadeViewAlpha(content, from: 0, to: 1, duration: 0.12)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self, weak panel] in
+            guard let self, let panel else { return }
             fadeOutAndOrderOut(panel, layer: nil, duration: 0.3)
+            infoPanels.removeAll { $0 === panel }
         }
     }
 
@@ -669,7 +785,40 @@ class FocusBorder {
         // animations on our content. With `.none`, our CABasicAnimation
         // on the glow layer's opacity is what the user actually sees.
         p.animationBehavior = .none
+        observedPanels.add(p)
         return p
+    }
+
+    private func disableImmediately() {
+        mainThreadOnly()
+        renderGeneration += 1
+        settleWork?.cancel()
+        settleWork = nil
+        cancelActiveShake()
+        errorFeedback.cancel()
+        errorFeedbackWindowID = nil
+        for owned in observedPanels.allObjects {
+            owned.contentView?.subviews.forEach { $0.layer?.removeAllAnimations() }
+            owned.orderOut(nil)
+        }
+        panel = nil
+        glowView = nil
+        floatingPanels.removeAll()
+        floaterFrames.removeAll()
+        infoPanels.removeAll()
+        renderedWindowID = nil
+        trackedWindowFrame = nil
+        state = .hidden
+        focusedCornerRadiusExpansion = Tuning.activeBorderWidth / 2
+        removeMessageBanner()
+    }
+
+    private func cancelActiveShake() {
+        shakeTimer?.cancel()
+        shakeTimer = nil
+        let restore = restoreShakenWindow
+        restoreShakenWindow = nil
+        restore?()
     }
 
     private func positionGlowView(in panel: NSPanel) {

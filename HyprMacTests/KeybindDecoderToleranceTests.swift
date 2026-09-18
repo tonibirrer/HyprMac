@@ -54,7 +54,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
     }
 
     func testToggleFloatingWireFormatDecodes() throws {
-        let json = #"{"action":{"toggleFloating":{}},"keyCode":17,"modifiers":3}"#
+        let json = #"{"action":{"toggleFloating":{}},"keyCode":17,"modifiers":1}"#
         let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
         XCTAssertEqual(kb.action, .toggleFloating)
     }
@@ -134,7 +134,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         let json = """
         [
             {"action":{"focusDirection":{"_0":"down"}},"keyCode":125,"modifiers":1},
-            {"action":{"toggleFloating":{}},"keyCode":17,"modifiers":3},
+            {"action":{"toggleFloating":{}},"keyCode":17,"modifiers":1},
             {"action":{"cycleWorkspace":{"_0":-1}},"keyCode":48,"modifiers":3},
             {"action":{"launchApp":{"bundleID":"com.apple.Terminal"}},"keyCode":36,"modifiers":1}
         ]
@@ -175,7 +175,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
     }
 
     func testEncoderProducesEmptyObjectForUnitCases() throws {
-        let kb = Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .toggleFloating)
+        let kb = Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)
         let s = String(data: try JSONEncoder().encode(kb), encoding: .utf8)!
         XCTAssertTrue(s.contains(#""toggleFloating":{}"#),
                       "expected toggleFloating:{} in encoded JSON: \(s)")
@@ -328,7 +328,10 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             showMenuBarIndicator: nil,
             maxSplitsPerMonitor: nil, disabledMonitors: nil,
             showFocusBorder: nil, focusBorderColorHex: nil,
-            floatingBorderColorHex: nil, dimInactiveWindows: nil, dimIntensity: nil,
+            floatingBorderColorHex: nil, focusBracketStyle: nil, focusBracketColorHex: nil,
+            focusBracketRadius: nil,
+            focusBracketThickness: nil,
+            dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
             scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
@@ -357,6 +360,9 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             maxSplitsPerMonitor: ["Display A": 4], disabledMonitors: ["Display B"],
             showFocusBorder: true,
             focusBorderColorHex: "007AFF", floatingBorderColorHex: "FF9500",
+            focusBracketStyle: .rounded, focusBracketColorHex: "FFFFFF",
+            focusBracketRadius: 14,
+            focusBracketThickness: 3,
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: 30, chromeFadeDurationSec: 0.15,
             windowCornerRadius: 13,
@@ -370,6 +376,8 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             "focusFollowsMouse", "hyprKey", "excludedBundleIDs", "showMenuBarIndicator",
             "maxSplitsPerMonitor", "disabledMonitors",
             "showFocusBorder", "focusBorderColorHex", "floatingBorderColorHex",
+            "focusBracketStyle", "focusBracketColorHex",
+            "focusBracketRadius", "focusBracketThickness",
             "dimInactiveWindows", "dimIntensity", "mouseHoverPollHz",
             "chromeFadeDurationSec", "windowCornerRadius",
             "scratchpadTileByDefault", "scratchpadRegionInset",
@@ -382,7 +390,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         let saved = SavedConfig(
             version: nil,
             keybinds: [Keybind(keyCode: 18, modifiers: .hypr, action: .switchWorkspace(1)),
-                       Keybind(keyCode: 17, modifiers: [.hypr, .shift], action: .toggleFloating)],
+                       Keybind(keyCode: 17, modifiers: .hypr, action: .toggleFloating)],
             gapSize: 8, outerPadding: 8, enabled: true,
             focusFollowsMouse: true, hyprKey: .capsLock,
             excludedBundleIDs: ["com.apple.FaceTime"],
@@ -390,6 +398,9 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             maxSplitsPerMonitor: nil, disabledMonitors: nil,
             showFocusBorder: true,
             focusBorderColorHex: "007AFF", floatingBorderColorHex: nil,
+            focusBracketStyle: .rounded, focusBracketColorHex: nil,
+            focusBracketRadius: nil,
+            focusBracketThickness: nil,
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: 30, chromeFadeDurationSec: 0.15,
             windowCornerRadius: 13,

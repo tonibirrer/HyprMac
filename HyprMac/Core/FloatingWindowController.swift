@@ -5,6 +5,19 @@
 
 import Cocoa
 
+struct FloatToTileRejectionMessage {
+    static func text(for failure: TilingEngine.ForceInsertFailure) -> String {
+        switch failure {
+        case .noFittingSlot:
+            return "No room to tile this window"
+        case .layoutRejected(.geometryMismatch):
+            return "This window did not accept the tile size"
+        case .layoutRejected:
+            return "Could not apply the tiled layout"
+        }
+    }
+}
+
 /// Owner of floating-window behavior.
 ///
 /// Public surface: `toggle` flips a window between tiled and floating;
@@ -13,9 +26,8 @@ import Cocoa
 /// is the single predicate used by snapshot and discovery to decide
 /// whether a freshly-seen window enters tiling.
 ///
-/// What does not live here: the `onAutoFloat` callback wiring on
-/// `TilingEngine` (stays in `WindowManager` init), workspace assignment
-/// for new floaters (`WindowDiscoveryService`), and per-window focus
+/// What does not live here: workspace assignment for new floaters
+/// (`WindowDiscoveryService`), and per-window focus
 /// border refresh (the focus border itself plus `WindowManager`'s
 /// `updateFocusBorder`).
 ///
@@ -45,8 +57,21 @@ final class FloatingWindowController {
     // Center, Dock…) is frontmost — raiseBehind must hold off then.
     var isTransientUIActive: () -> Bool = { false }
     var isScratchpadVisible: () -> Bool = { false }
-    // spill an evicted window into the scratchpad overflow buffer.
-    var adoptIntoScratchpad: ((HyprWindow, CGRect?) -> Void)?
+    var windowListForZOrder: () -> [[String: Any]]? = {
+        CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]]
+    }
+    var performRaise: (HyprWindow) -> AXError = {
+        AXUIElementPerformAction($0.element, kAXRaiseAction as CFString)
+    }
+    var scheduleAfter: (TimeInterval, @escaping () -> Void) -> Void = { delay, body in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: body)
+    }
+    var restoreFocusWithoutRaise: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
+    var windowFrameForZOrder: (HyprWindow) -> CGRect? = { $0.frame }
+    // red flash on a float→tile the tree or the screen refused.
+    var rejectFloatToTile: ((HyprWindow, TilingEngine.ForceInsertFailure) -> Void)?
 
     // same-stack-frame reentrancy guard for raiseBehind. paired with defer.
     // moved here from WindowManager (per §5.5 — not a SuppressionRegistry key).
@@ -81,8 +106,7 @@ final class FloatingWindowController {
     /// Tiled → floating: the window leaves the BSP tree and pops back to
     /// its `originalFrame` (when on-screen) or to a screen-centered
     /// fallback. Floating → tiled: the window enters the BSP tree at the
-    /// best-fit slot; if the tree is full, an existing tile is evicted
-    /// to floating to make room.
+    /// best-fit slot; if the tree is full, the window stays floating.
     ///
     /// On disabled monitors the call is a no-op — everything floats
     /// there by definition. The actual retile is wrapped in
@@ -105,15 +129,14 @@ final class FloatingWindowController {
                 stateCache.floatingWindowIDs.remove(window.windowID)
                 window.isFloating = false
 
-                if let evicted = tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen) {
-                    // evicted tile spills into the scratchpad overflow buffer.
-                    let screenRect = displayManager.cgRect(for: screen)
-                    let original = stateCache.originalFrames[evicted.windowID]
-                    let preferred = original.flatMap { $0.isSubstantiallyVisible(on: screenRect) ? $0 : nil }
-                    adoptIntoScratchpad?(evicted, preferred)
-                    hyprLog(.debug, .floating, "tiling '\(window.title ?? "?")' — bumped '\(evicted.title ?? "?")' to scratchpad")
-                } else {
+                switch forceInsert(window, workspace: workspace, screen: screen) {
+                case .inserted, .alreadyPresent:
                     hyprLog(.debug, .floating, "tiling window '\(window.title ?? "?")'")
+                case let .failed(reason):
+                    // the tree never took it, so it is still a floater. put
+                    // both flags back the way they were and say so.
+                    floatInPlace(window, reason: "float→tile refused: \(reason)")
+                    rejectFloatToTile?(window, reason)
                 }
             }
         } else {
@@ -142,6 +165,40 @@ final class FloatingWindowController {
                 }
             }
         }
+    }
+
+    /// The float→tile insertion, with one explicit revalidation behind it.
+    ///
+    /// When the tree refuses the window and the fit check says learned bounds
+    /// are the only thing in the way, the user's toggle buys exactly one more
+    /// attempt with those bounds set aside. Structure still decides: a tree
+    /// that is out of depth, or a slot too small whatever the memory says,
+    /// refuses both times. There is no second bypass and nothing is rearmed —
+    /// the next toggle is a new request.
+    ///
+    private func forceInsert(_ window: HyprWindow, workspace: Int,
+                             screen: NSScreen) -> TilingEngine.ForceInsertResult {
+        let first = tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen)
+        guard case .failed(.noFittingSlot) = first else { return first }
+        guard case .revalidatable = tilingEngine.admissionOutlook(window, onWorkspace: workspace,
+                                                                 screen: screen) else { return first }
+        hyprLog(.notice, .floating, "float→tile revalidation: \(window.windowID) ws\(workspace)")
+        return tilingEngine.forceInsertWindow(window, toWorkspace: workspace, on: screen,
+                                              bypassingLearnedMinima: true)
+    }
+
+    /// Leave `window` floating exactly where it is.
+    ///
+    /// Both flags move together — the controller's set and the window's own
+    /// — because half a float is what makes a window tiled to one subsystem
+    /// and floating to the next. No frame is written: the window is already
+    /// somewhere the user can see, and that is the whole point of the
+    /// fallback. Focus is left alone.
+    func floatInPlace(_ window: HyprWindow, reason: String) {
+        stateCache.floatingWindowIDs.insert(window.windowID)
+        window.isFloating = true
+        stateCache.cachedWindows[window.windowID] = window
+        hyprLog(.notice, .floating, "float in place: \(window.windowID) (\(reason))")
     }
 
     /// Cycle focus through visible floating windows in id order, raising
@@ -222,22 +279,34 @@ final class FloatingWindowController {
         isRaising = true
         defer { isRaising = false }
 
-        let toRaise = floatingWindowsBehindTiled(
+        let behind = floatingWindowsBehindTiled(
             floatingWindowIDs: stateCache.floatingWindowIDs,
             tiledPositions: stateCache.tiledPositions
         )
-        guard !toRaise.isEmpty else { return }
-
         let previousFocusID = focusController.lastFocusedID
+        let previousFocusGeneration = focusController.generation
         let previousWindow = stateCache.cachedWindows[previousFocusID]
         let frontmostBefore = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let focusedTiledPID = previousWindow.flatMap {
+            stateCache.floatingWindowIDs.contains($0.windowID) ? nil : $0.ownerPID
+        }
+        // safari can reorder a floating sibling when focus returns to its tile
+        let toRaise = behind.filter { wid in
+            guard let focusedTiledPID else { return true }
+            return stateCache.cachedWindows[wid]?.ownerPID != focusedTiledPID
+        }
+        guard !toRaise.isEmpty else { return }
 
         suppressions.suppress("activation-switch", for: 0.5)
         suppressions.suppress("mouse-focus", for: 0.15)
 
+        hyprLog(.notice, .floating, "raise behind: wids=\(toRaise.sorted()) focus=\(previousFocusID)")
         for wid in toRaise {
             guard let w = stateCache.cachedWindows[wid] else { continue }
-            AXUIElementPerformAction(w.element, kAXRaiseAction as CFString)
+            let rc = performRaise(w)
+            if rc != .success {
+                hyprLog(.notice, .floating, "raise behind failed: wid=\(wid) rc=\(rc.rawValue)")
+            }
         }
 
         // restore focus to the tiled window the user was interacting with —
@@ -247,12 +316,22 @@ final class FloatingWindowController {
         // an app that already has focus (every poll, with a floater parked
         // behind it — remote-desktop clients react badly to that).
         if let prev = previousWindow, !stateCache.floatingWindowIDs.contains(prev.windowID) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { [weak self] in
+            scheduleAfter(0.02) { [weak self] in
+                guard let self,
+                      self.focusController.lastFocusedID == previousFocusID,
+                      self.focusController.generation == previousFocusGeneration,
+                      self.stateCache.knownWindowIDs.contains(previousFocusID),
+                      !self.stateCache.hiddenWindowIDs.contains(previousFocusID),
+                      self.workspaceManager.workspaceFor(previousFocusID) != nil,
+                      self.workspaceManager.isWindowVisible(previousFocusID),
+                      !self.stateCache.floatingWindowIDs.contains(previousFocusID),
+                      !self.isTransientUIActive(), !self.isScratchpadVisible() else { return }
                 let frontmostNow = NSWorkspace.shared.frontmostApplication?.processIdentifier
                 if frontmostNow != frontmostBefore || frontmostNow != prev.ownerPID {
-                    prev.focusWithoutRaise()
+                    hyprLog(.notice, .floating, "raise behind restore: wid=\(previousFocusID)")
+                    self.restoreFocusWithoutRaise(prev)
                 }
-                self?.updateFocusBorder?(prev)
+                self.updateFocusBorder?(prev)
             }
         }
     }
@@ -286,9 +365,7 @@ final class FloatingWindowController {
         let visibleFloaters = floatingWindowIDs.filter { workspaceManager.isWindowVisible($0) }
         guard !visibleFloaters.isEmpty else { return [] }
 
-        guard let infoList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else {
+        guard let infoList = windowListForZOrder() else {
             return Array(visibleFloaters)
         }
 
@@ -315,7 +392,7 @@ final class FloatingWindowController {
         var needsRaise: [CGWindowID] = []
         for wid in visibleFloaters {
             guard let fz = zIndex[wid],
-                  let w = stateCache.cachedWindows[wid], let frame = w.frame else { continue }
+                  let w = stateCache.cachedWindows[wid], let frame = windowFrameForZOrder(w) else { continue }
             let screen = displayManager.screen(at: CGPoint(x: frame.midX, y: frame.midY))
             let sid = screen.map { workspaceManager.screenID(for: $0) } ?? -1
             if let tz = frontTiledZ[sid], fz > tz {

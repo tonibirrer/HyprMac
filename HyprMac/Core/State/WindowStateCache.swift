@@ -1,5 +1,5 @@
 // Single source of truth for window-keyed lifecycle and classification state.
-// Holds the seven dicts that orchestration code reads on every focus, drag,
+// Holds the dicts that orchestration code reads on every focus, drag,
 // tile, and discovery cycle.
 
 import Cocoa
@@ -17,6 +17,7 @@ import Cocoa
 /// - `originalFrames` — pre-tile frames captured for float-toggle restore
 /// - `windowOwners` — `wid → pid`, used to distinguish closed-vs-hidden
 /// - `hiddenWindowIDs` — windows whose AX element is gone but pid is alive
+/// - `reservedHiddenWindowIDs` — hidden windows that still hold a tile slot
 /// - `tiledPositions` — expected tiled frames (drag detection, FFM)
 /// - `cachedWindows` — last poll's `HyprWindow` snapshots
 ///
@@ -55,10 +56,17 @@ final class WindowStateCache {
     /// the window disappears, mark hidden and keep state; if dead, forget.
     var windowOwners: [CGWindowID: pid_t] = [:]
 
-    /// Windows excluded from tiling. User-toggled via `Hypr+Shift+T` or
+    /// Windows excluded from tiling. User-toggled via `Hypr+T` or
     /// auto-floated by depth, min-size, or excluded-app rules. BSP
     /// membership is computed; floating membership is the negation.
     var floatingWindowIDs: Set<CGWindowID> = []
+
+    /// Subset of `hiddenWindowIDs` that can return on their own
+    /// (minimized, app hidden via Cmd-H, still listed by the app because
+    /// it sits on another Space or in full-screen, or AX unreadable when
+    /// they vanished). These keep their workspace slot reserved;
+    /// verified-closed windows do not.
+    var reservedHiddenWindowIDs: Set<CGWindowID> = []
 
     /// Every window ID seen since launch. Populated by discovery, pruned
     /// by `forget`. Hidden windows stay in the set so they do not
@@ -72,6 +80,7 @@ final class WindowStateCache {
         cachedWindows.removeValue(forKey: id)
         tiledPositions.removeValue(forKey: id)
         hiddenWindowIDs.remove(id)
+        reservedHiddenWindowIDs.remove(id)
         originalFrames.removeValue(forKey: id)
         windowOwners.removeValue(forKey: id)
         floatingWindowIDs.remove(id)
