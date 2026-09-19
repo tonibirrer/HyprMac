@@ -39,30 +39,82 @@ struct LayoutEngine {
         }
     }
 
+    /// The individual checks behind `pairFits`, so a refusal can name the one
+    /// that said no without keeping a second copy of the arithmetic.
+    struct PairFit: Equatable {
+        /// both minima plus the gap fit along the split axis.
+        let sumOk: Bool
+        /// each minimum fits across the split axis.
+        let aCross: Bool
+        let bCross: Bool
+        /// neither minimum needs more than `maxRatio` of the split axis.
+        let aInd: Bool
+        let bInd: Bool
+        let direction: SplitDirection
+
+        var fits: Bool { sumOk && aCross && bCross && aInd && bInd }
+
+        /// The axis the pair failed on, in `FrameReadbackPoller.axis`
+        /// spelling. `none` when it fits.
+        var refusedAxis: String {
+            let split = !sumOk || !aInd || !bInd
+            let cross = !aCross || !bCross
+            switch direction {
+            case .horizontal: return FrameReadbackPoller.axis(width: split, height: cross)
+            case .vertical: return FrameReadbackPoller.axis(width: cross, height: split)
+            }
+        }
+    }
+
     /// Can two leaves with these min-sizes fit as siblings under `parentRect`
     /// when split along `dir`? Caller is responsible for picking direction.
     /// Uses `TilingConfig.maxRatio` as the per-child upper bound on the split
     /// axis, plus 1px slack to absorb sub-pixel rounding.
     func pairFits(_ aMin: CGSize, _ bMin: CGSize,
                   in parentRect: CGRect, dir: SplitDirection) -> Bool {
+        pairFit(aMin, bMin, in: parentRect, dir: dir).fits
+    }
+
+    /// `pairFits` with its working shown.
+    func pairFit(_ aMin: CGSize, _ bMin: CGSize,
+                 in parentRect: CGRect, dir: SplitDirection) -> PairFit {
         let slack = TilingConfig.rectComparisonSlackPx
         let indCap = TilingConfig.maxRatio
         switch dir {
         case .horizontal:
-            let sumOk = aMin.width + bMin.width + gapSize <= parentRect.width + slack
-            let aCross = aMin.height <= parentRect.height + slack
-            let bCross = bMin.height <= parentRect.height + slack
-            let aInd = aMin.width <= parentRect.width * indCap + slack
-            let bInd = bMin.width <= parentRect.width * indCap + slack
-            return sumOk && aCross && bCross && aInd && bInd
+            return PairFit(
+                sumOk: aMin.width + bMin.width + gapSize <= parentRect.width + slack,
+                aCross: aMin.height <= parentRect.height + slack,
+                bCross: bMin.height <= parentRect.height + slack,
+                aInd: aMin.width <= parentRect.width * indCap + slack,
+                bInd: bMin.width <= parentRect.width * indCap + slack,
+                direction: dir)
         case .vertical:
-            let sumOk = aMin.height + bMin.height + gapSize <= parentRect.height + slack
-            let aCross = aMin.width <= parentRect.width + slack
-            let bCross = bMin.width <= parentRect.width + slack
-            let aInd = aMin.height <= parentRect.height * indCap + slack
-            let bInd = bMin.height <= parentRect.height * indCap + slack
-            return sumOk && aCross && bCross && aInd && bInd
+            return PairFit(
+                sumOk: aMin.height + bMin.height + gapSize <= parentRect.height + slack,
+                aCross: aMin.width <= parentRect.width + slack,
+                bCross: bMin.width <= parentRect.width + slack,
+                aInd: aMin.height <= parentRect.height * indCap + slack,
+                bInd: bMin.height <= parentRect.height * indCap + slack,
+                direction: dir)
         }
+    }
+
+    /// One leaf's reason for not taking the incoming window, as the search
+    /// tried it. Geometry only — where a minimum came from is the tiling
+    /// engine's to say, because only it holds the provenance.
+    struct SlotRefusal: Equatable {
+        /// the leaf's current occupant. nil for an empty leaf.
+        let tenantID: CGWindowID?
+        /// the leaf rect the pair would have shared.
+        let slot: CGSize
+        let direction: SplitDirection
+        /// the leaf is already as deep as the screen allows, so this is not a
+        /// size question at all.
+        let depthExhausted: Bool
+        let axis: String
+        let incomingMinimum: CGSize
+        let tenantMinimum: CGSize
     }
 
     /// Find a leaf in `tree` where splitting will accommodate `window` plus
@@ -71,11 +123,32 @@ struct LayoutEngine {
     /// minimum (so we don't drop a window just because slots are tight).
     /// `minimumSize` returns the recorded min-size for any window — pass
     /// `.zero` when unknown.
+    ///
+    /// `noting` is called once per leaf that refused, on the second pass
+    /// only: pass 0's `minSlotDimension` skip is a preference, not a refusal,
+    /// and pass 1 revisits every leaf it skipped. Reporting changes nothing
+    /// about which leaf is chosen.
     func fittingLeaf(for window: HyprWindow?,
                      in tree: BSPTree,
                      maxDepth: Int,
                      rect: CGRect,
-                     minimumSize: (HyprWindow?) -> CGSize) -> BSPNode? {
+                     minimumSize: (HyprWindow?) -> CGSize,
+                     noting: ((SlotRefusal) -> Void)? = nil) -> BSPNode? {
+        fittingPlacement(for: window, in: tree, maxDepth: maxDepth, rect: rect,
+                         minimumSize: minimumSize, noting: noting)?.leaf
+    }
+
+    /// Find both the leaf and the split direction that makes the pair fit.
+    /// A leaf with an explicit override keeps that direction. Otherwise the
+    /// aspect-ratio direction is preferred, with the other axis as a bounded
+    /// fallback when window constraints reject the preferred split.
+    private func fittingPlacement(for window: HyprWindow?,
+                                  in tree: BSPTree,
+                                  maxDepth: Int,
+                                  rect: CGRect,
+                                  minimumSize: (HyprWindow?) -> CGSize,
+                                  noting: ((SlotRefusal) -> Void)? = nil)
+        -> (leaf: BSPNode, direction: SplitDirection, columnRule: Bool)? {
         var leaves = tree.root.allLeavesRightToLeft()
         // a full-height newcomer prefers a slot that is already a column
         // (no top/bottom split above it), shallowest first — landing in a
@@ -94,20 +167,57 @@ struct LayoutEngine {
         }
         for pass in 0...1 {
             for leaf in leaves {
-                guard leaf.depth < maxDepth else { continue }
-                guard let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) else { continue }
-                let dir = tree.splitDirection(forLeaf: leaf, rect: leafRect)
-
-                if pass == 0 {
-                    let (a, b) = splitRects(leafRect, dir: dir)
-                    let childMin = min(min(a.width, a.height), min(b.width, b.height))
-                    if childMin < minSlotDimension { continue }
+                guard leaf.depth < maxDepth else {
+                    if pass == 1, let noting {
+                        let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) ?? .zero
+                        noting(SlotRefusal(tenantID: leaf.window?.windowID,
+                                           slot: leafRect.size,
+                                           direction: leaf.direction(for: leafRect),
+                                           depthExhausted: true,
+                                           axis: "depth",
+                                           incomingMinimum: minimumSize(window),
+                                           tenantMinimum: minimumSize(leaf.window)))
+                    }
+                    continue
                 }
-
+                guard let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) else { continue }
                 let existingMin = minimumSize(leaf.window)
                 let incomingMin = minimumSize(window)
-                if pairFits(existingMin, incomingMin, in: leafRect, dir: dir) {
-                    return leaf
+                // a full-height tenant or newcomer always gets a column: the
+                // pair splits left | right and no other axis is tried
+                let fullHeightPair = (leaf.window.map(tree.isFullHeight) ?? false)
+                    || (window.map(tree.isFullHeight) ?? false)
+                let preferred: SplitDirection = fullHeightPair ? .horizontal
+                    : leaf.savedSplitRatio == nil
+                        ? leaf.direction(for: leafRect)
+                        : (leaf.savedSplitOverride ?? leaf.direction(for: leafRect))
+                let alternate: SplitDirection = preferred == .horizontal ? .vertical : .horizontal
+                let canChooseAxis = !fullHeightPair && leaf.splitOverride == nil && leaf.savedSplitRatio == nil
+                let directions = canChooseAxis ? [preferred, alternate] : [preferred]
+                var preferredFit: PairFit?
+
+                for dir in directions {
+                    if pass == 0 {
+                        let (a, b) = splitRects(leafRect, dir: dir)
+                        let childMin = min(min(a.width, a.height), min(b.width, b.height))
+                        if childMin < minSlotDimension { continue }
+                    }
+
+                    let fit = pairFit(existingMin, incomingMin, in: leafRect, dir: dir)
+                    if dir == preferred { preferredFit = fit }
+                    if fit.fits { return (leaf, dir, fullHeightPair) }
+                }
+
+                if pass == 1, let noting {
+                    let fit = preferredFit ?? pairFit(existingMin, incomingMin,
+                                                      in: leafRect, dir: preferred)
+                    noting(SlotRefusal(tenantID: leaf.window?.windowID,
+                                       slot: leafRect.size,
+                                       direction: preferred,
+                                       depthExhausted: false,
+                                       axis: fit.refusedAxis,
+                                       incomingMinimum: incomingMin,
+                                       tenantMinimum: existingMin))
                 }
             }
         }
@@ -127,12 +237,23 @@ struct LayoutEngine {
             return true
         }
 
-        guard let leaf = fittingLeaf(for: window, in: tree, maxDepth: maxDepth,
-                                     rect: rect, minimumSize: minimumSize) else {
+        guard let placement = fittingPlacement(for: window, in: tree, maxDepth: maxDepth,
+                                               rect: rect, minimumSize: minimumSize) else {
             return false
         }
 
+        let leaf = placement.leaf
+        let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize,
+                                        padding: outerPadding) ?? rect
+        // a direction the full-height rule forced belongs to the window,
+        // not the slot: the column lock re-derives it on every mapping
+        // change, so no override is pinned here (it would outlive a swap)
+        let needsOverride = !placement.columnRule
+            && leaf.splitOverride == nil
+            && leaf.savedSplitRatio == nil
+            && placement.direction != leaf.direction(for: leafRect)
         leaf.insert(window)
+        if needsOverride { leaf.splitOverride = placement.direction }
         tree.applyFullHeight()
         if let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) {
             hyprLog(.debug, .lifecycle, "smart insert fit at depth \(leaf.depth) (\(Int(leafRect.width))x\(Int(leafRect.height)))")

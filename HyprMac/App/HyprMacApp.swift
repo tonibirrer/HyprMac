@@ -2,24 +2,32 @@
 // Real lifecycle work lives in `AppDelegate`.
 
 import SwiftUI
+#if !HYPRMAC_DEBUG_VARIANT
 import Sparkle
+#endif
 
 /// SwiftUI app shell.
 @main
 struct HyprMacApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #if !HYPRMAC_DEBUG_VARIANT
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    #endif
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(updater: updaterController.updater)
+            #if HYPRMAC_DEBUG_VARIANT
+            MenuBarView(appDelegate: appDelegate)
+            #else
+            MenuBarView(appDelegate: appDelegate, updater: updaterController.updater)
+            #endif
         } label: {
             WorkspaceIndicatorLabel()
         }
         .menuBarExtraStyle(.window)
 
         Window("HyprMac Settings", id: "settings") {
-            SettingsView()
+            SettingsView(showTutorial: { appDelegate.showTour() })
         }
         .defaultSize(width: 760, height: 600)
     }

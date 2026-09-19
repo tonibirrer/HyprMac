@@ -61,8 +61,8 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_DownArrow), modifiers: [.hypr, .control, .shift],
                              action: .resizeDirection(.down)))
 
-        // hypr + shift + t: toggle floating
-        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: [.hypr, .shift],
+        // hypr + t: toggle floating
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: .hypr,
                              action: .toggleFloating))
 
         // hypr + j: toggle split direction (transpose)
@@ -72,6 +72,10 @@ extension Keybind {
         // hypr + k: show keybinds
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_K), modifiers: .hypr,
                              action: .showKeybinds))
+
+        // hypr + p: pause or resume tiling
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_P), modifiers: .hypr,
+                             action: .toggleTiling))
 
         // hypr + f: focus/raise floating windows
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,

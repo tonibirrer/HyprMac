@@ -100,6 +100,59 @@ final class LayoutEngineTests: XCTestCase {
         XCTAssertEqual(tree.root.right?.right?.window?.windowID, 3)
     }
 
+    func testSmartInsertFittingUsesAlternateAxisForConstrainedPortraitBatch() {
+        let tree = BSPTree()
+        let rect = CGRect(x: 0, y: 0, width: 1080, height: 1890)
+        let widths: [CGWindowID: CGFloat] = [1: 574, 2: 528, 3: 708, 4: 640]
+        let windows = (1...4).map { makeWindow(id: CGWindowID($0)) }
+        let mins: (HyprWindow?) -> CGSize = { window in
+            CGSize(width: widths[window?.windowID ?? 0] ?? 0, height: 300)
+        }
+
+        for window in windows {
+            XCTAssertTrue(layout.smartInsertFitting(window, into: tree, maxDepth: 2,
+                                                    rect: rect, minimumSize: mins))
+        }
+
+        XCTAssertEqual(Set(tree.allWindows.map(\.windowID)), Set(widths.keys))
+        XCTAssertEqual(tree.root.left?.splitOverride, .vertical)
+        XCTAssertEqual(tree.root.right?.splitOverride, .vertical)
+        let frames = tree.layout(in: rect, gap: layout.gapSize, padding: layout.outerPadding)
+        XCTAssertEqual(frames.count, 4)
+        XCTAssertTrue(frames.allSatisfy { $0.1.width == 1064 })
+    }
+
+    func testSmartInsertFittingKeepsPreferredAxisWhenBothAxesFit() {
+        let tree = BSPTree()
+        XCTAssertTrue(layout.smartInsertFitting(makeWindow(id: 1), into: tree, maxDepth: 3,
+                                                rect: bigRect, minimumSize: zeroMins))
+        XCTAssertTrue(layout.smartInsertFitting(makeWindow(id: 2), into: tree, maxDepth: 3,
+                                                rect: bigRect, minimumSize: zeroMins))
+
+        XCTAssertEqual(tree.root.direction(for: bigRect.insetBy(dx: 8, dy: 8)), .horizontal)
+        XCTAssertNil(tree.root.splitOverride)
+    }
+
+    func testSmartInsertFittingDoesNotReplaceASavedSplitDirection() {
+        let tree = BSPTree()
+        let tenant = makeWindow(id: 1)
+        tree.root.window = tenant
+        tree.root.savedSplitRatio = 0.5
+        tree.root.savedChildWasLeft = false
+        tree.root.savedSplitOverride = .horizontal
+        let incoming = makeWindow(id: 2)
+        let mins: (HyprWindow?) -> CGSize = { window in
+            window === tenant ? CGSize(width: 574, height: 300)
+                : CGSize(width: 640, height: 300)
+        }
+
+        XCTAssertFalse(layout.smartInsertFitting(incoming, into: tree, maxDepth: 2,
+                                                 rect: CGRect(x: 0, y: 0, width: 1080, height: 950),
+                                                 minimumSize: mins))
+        XCTAssertEqual(tree.root.window?.windowID, tenant.windowID)
+        XCTAssertEqual(tree.root.savedSplitOverride, .horizontal)
+    }
+
     func testSmartInsertFittingFailsAtMaxDepth() {
         let tree = BSPTree()
         // fill a maxDepth=1 tree (2 leaves at depth 1)
@@ -148,5 +201,132 @@ final class LayoutEngineTests: XCTestCase {
         let leaf = layout.fittingLeaf(for: huge, in: tree, maxDepth: 3,
                                       rect: bigRect, minimumSize: mins)
         XCTAssertNil(leaf)
+    }
+
+    // MARK: - refusal reporting
+
+    func testPairFitNamesTheAxisTheSumOverflowed() {
+        let wide = CGSize(width: 1000, height: 10)
+        let fit = layout.pairFit(wide, wide, in: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                                 dir: .horizontal)
+        XCTAssertFalse(fit.fits)
+        XCTAssertFalse(fit.sumOk)
+        XCTAssertEqual(fit.refusedAxis, "width")
+    }
+
+    func testPairFitNamesTheCrossAxisSeparately() {
+        let tall = CGSize(width: 10, height: 2000)
+        let fit = layout.pairFit(tall, .zero, in: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                                 dir: .horizontal)
+        XCTAssertFalse(fit.aCross)
+        XCTAssertEqual(fit.refusedAxis, "height")
+    }
+
+    func testPairFitNamesBothAxesWhenBothRefuse() {
+        let huge = CGSize(width: 2000, height: 2000)
+        let fit = layout.pairFit(huge, huge, in: CGRect(x: 0, y: 0, width: 1200, height: 800),
+                                 dir: .horizontal)
+        XCTAssertEqual(fit.refusedAxis, "width+height")
+    }
+
+    func testPairFitOnAFittingPairRefusesNoAxis() {
+        let fit = layout.pairFit(.zero, .zero, in: bigRect, dir: .horizontal)
+        XCTAssertTrue(fit.fits)
+        XCTAssertEqual(fit.refusedAxis, "none")
+    }
+
+    func testFittingLeafReportsOneRefusalPerLeafWithTheSlotAndTheAxis() {
+        let tree = BSPTree()
+        let tenant = makeWindow(id: 1)
+        layout.smartInsertFitting(tenant, into: tree, maxDepth: 3,
+                                  rect: bigRect, minimumSize: zeroMins)
+        let huge = makeWindow(id: 2)
+        let mins: (HyprWindow?) -> CGSize = { w in
+            w === huge ? CGSize(width: 100_000, height: 0) : .zero
+        }
+
+        var refusals: [LayoutEngine.SlotRefusal] = []
+        let leaf = layout.fittingLeaf(for: huge, in: tree, maxDepth: 3, rect: bigRect,
+                                      minimumSize: mins, noting: { refusals.append($0) })
+
+        XCTAssertNil(leaf)
+        XCTAssertEqual(refusals.count, 1, "one leaf, reported once — not once per pass")
+        guard let only = refusals.first else { return }
+        XCTAssertEqual(only.tenantID, 1)
+        XCTAssertEqual(only.axis, "width")
+        XCTAssertEqual(only.incomingMinimum, CGSize(width: 100_000, height: 0))
+        XCTAssertEqual(only.tenantMinimum, .zero)
+        XCTAssertFalse(only.depthExhausted)
+        XCTAssertEqual(only.slot.width, bigRect.width - 2 * 8, accuracy: 0.001)
+    }
+
+    func testFittingLeafReportsOnceWhenBothAxesRefuse() {
+        let tree = BSPTree()
+        let tenant = makeWindow(id: 1)
+        layout.smartInsertFitting(tenant, into: tree, maxDepth: 3,
+                                  rect: bigRect, minimumSize: zeroMins)
+        let incoming = makeWindow(id: 2)
+        let mins: (HyprWindow?) -> CGSize = { window in
+            window == nil ? .zero : CGSize(width: 2_000, height: 2_000)
+        }
+        var refusals: [LayoutEngine.SlotRefusal] = []
+
+        let leaf = layout.fittingLeaf(for: incoming, in: tree, maxDepth: 3,
+                                      rect: bigRect, minimumSize: mins,
+                                      noting: { refusals.append($0) })
+
+        XCTAssertNil(leaf)
+        XCTAssertEqual(refusals.count, 1)
+        XCTAssertEqual(tree.root.window?.windowID, tenant.windowID)
+        XCTAssertNil(tree.root.splitOverride)
+    }
+
+    func testFittingLeafReportsNothingWhenALeafTakesTheWindow() {
+        let tree = BSPTree()
+        layout.smartInsertFitting(makeWindow(id: 1), into: tree, maxDepth: 3,
+                                  rect: bigRect, minimumSize: zeroMins)
+        var refusals: [LayoutEngine.SlotRefusal] = []
+
+        let leaf = layout.fittingLeaf(for: makeWindow(id: 2), in: tree, maxDepth: 3,
+                                      rect: bigRect, minimumSize: zeroMins,
+                                      noting: { refusals.append($0) })
+
+        XCTAssertNotNil(leaf)
+        XCTAssertTrue(refusals.isEmpty)
+    }
+
+    func testFittingLeafReportsDepthExhaustionAsItsOwnRefusal() {
+        let tree = BSPTree()
+        layout.smartInsertFitting(makeWindow(id: 1), into: tree, maxDepth: 3,
+                                  rect: bigRect, minimumSize: zeroMins)
+        layout.smartInsertFitting(makeWindow(id: 2), into: tree, maxDepth: 3,
+                                  rect: bigRect, minimumSize: zeroMins)
+        var refusals: [LayoutEngine.SlotRefusal] = []
+
+        let leaf = layout.fittingLeaf(for: makeWindow(id: 3), in: tree, maxDepth: 1,
+                                      rect: bigRect, minimumSize: zeroMins,
+                                      noting: { refusals.append($0) })
+
+        XCTAssertNil(leaf)
+        XCTAssertEqual(refusals.count, 2)
+        XCTAssertTrue(refusals.allSatisfy { $0.depthExhausted })
+        XCTAssertTrue(refusals.allSatisfy { $0.axis == "depth" })
+        XCTAssertEqual(Set(refusals.compactMap(\.tenantID)), [1, 2])
+    }
+
+    func testReportingDoesNotChangeWhichLeafIsChosen() {
+        let tree = BSPTree()
+        layout.smartInsertFitting(makeWindow(id: 1), into: tree, maxDepth: 3,
+                                  rect: narrowRect, minimumSize: zeroMins)
+        layout.smartInsertFitting(makeWindow(id: 2), into: tree, maxDepth: 3,
+                                  rect: narrowRect, minimumSize: zeroMins)
+        let incoming = makeWindow(id: 3)
+
+        let quiet = layout.fittingLeaf(for: incoming, in: tree, maxDepth: 3,
+                                       rect: narrowRect, minimumSize: zeroMins)
+        let loud = layout.fittingLeaf(for: incoming, in: tree, maxDepth: 3,
+                                      rect: narrowRect, minimumSize: zeroMins, noting: { _ in })
+
+        XCTAssertTrue(quiet === loud)
     }
 }

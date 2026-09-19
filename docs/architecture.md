@@ -16,7 +16,7 @@ HyprMac/
 ├── App/                      lifecycle, settings shell, menu bar
 ├── Core/
 │   ├── Discovery/            window discovery service
-│   ├── Input/                drag-swap result application
+│   ├── Input/                verified tiled-drag sessions
 │   ├── Orchestration/        action dispatch, polling
 │   ├── State/                window state cache, focus, suppressions
 │   ├── Workspace/            workspace orchestration
@@ -46,11 +46,12 @@ singleton except `UserConfig.shared` and `MenuBarState.shared`.
 | `DisplayManager` | NSScreen tracking and CG ↔ NS coordinate conversion. |
 | `SpaceManager` | macOS native Spaces enumeration via private CGS APIs (read-only). |
 | `WorkspaceManager` | HyprMac's nine virtual workspaces, screen↔workspace mapping, home-screen affinity. |
-| `TilingEngine` | One BSP tree per `(workspace, screen)` plus smart insert, swap, two-pass min-size resolution. |
+| `TilingEngine` | One BSP tree per `(workspace, screen)`, verified sizing, smart insert, keyboard swap, and candidate drag commit. |
 | `FloatingWindowController` | Float / tile toggle, cycle, raise-behind, auto-float predicate. |
 | `MouseTrackingManager` | Focus-follows-mouse, refocus-under-cursor, menu-tracking suppression. |
-| `DragManager` | Classifies drag gestures into resize / swap / cross-monitor / snap-back. |
-| `DragSwapHandler` | Applies the classified drag (tree mutation, workspace reassignment, animation). |
+| `TiledDragHandler` | Owns captured press/release state, cancellation, and verified cache updates. |
+| `TiledDragTransaction` | Builds isolated insertion, swap, or resize candidates and verifies frames before commit. |
+| `FrameSizingAttempt` | Bounded AX writes and complete frame readback through an injected clock and IO surface. |
 | `FocusBorder` | Visual focus indicator. Persistent panels at `.floating` level with occlusion masking. |
 | `FocusBrackets` | Corner brackets shown around the focus target while the Hypr key is held. |
 | `DimmingOverlay` | Dim mask over non-focused tiled windows; one panel per display at `.floating - 1`. |
@@ -71,16 +72,16 @@ These types decompose what would otherwise be a monolithic
   passes through the focus-border tracked id.
 - **`SuppressionRegistry`** is a tiny date-gated key-value store for
   short-lived "don't react to X for Y seconds" flags
-  (`activation-switch`, `mouse-focus`, `cross-swap-in-flight`).
+  (`activation-switch`, `mouse-focus`, `workspace-transition`).
 - **`PollingScheduler`** owns a slow (10s) reconcile timer plus a
   coalescing token that funnels event-driven `schedule(after:)` requests
   down to a single in-flight call. The timer is a safety net — it catches
   apps that refuse AX observers, notifications the observer layer missed,
   and external moves nothing else reports; `AXNotificationService` events
-  are the primary trigger. Honors
-  `SuppressionRegistry["cross-swap-in-flight"]` so cross-monitor
-  drag-swap can hold polling off for the duration of its two
-  back-to-back retiles.
+  are the primary trigger. WindowManager suppresses polling while the mouse
+  is down, a tiled release is finishing, or a workspace transition is active.
+  The drag finishing flag lasts through the deferred settle and verified
+  transaction rather than expiring after a fixed timeout.
 - **`AXNotificationService`** owns one `AXObserver` per regular app and
   translates their AX notifications (window created / destroyed /
   miniaturized / deminiaturized, focused-window changed) into
@@ -243,8 +244,10 @@ default deepest-right split would create slots below
 `TilingConfig.minSlotDimension` (500 px), producing 2×2 grids on
 constrained vertical monitors.
 
-Max BSP depth is 3 (smallest slot = 1/8 of screen). Beyond that,
-windows auto-float via `TilingEngine.onAutoFloat`.
+Max BSP depth is 3 (smallest slot = 1/8 of screen). Beyond that, smart
+insert finds no fitting leaf. The pass reports the window as refused on its
+`AdmissionResult`; nothing routes it elsewhere, and `AdmissionRecovery`
+gives it one bounded retry and then floats it where it stands.
 
 Two-pass layout via `HyprWindow.setFrameWithReadback`:
 1. Pass 1 applies target frames and reads back actual sizes.
@@ -298,6 +301,14 @@ launch with a dedicated directory copies `config.json` and
 `monitor-config.json` over from the stock app's directory (read-only,
 gated by a marker file). Future schema bumps land here too.
 
+`ConfigUpdateCoordinator` observes one post-mutation signal from `UserConfig`
+and compares complete snapshots against the initial configuration. Disk reloads
+emit after all properties have been stored. Geometry and monitor changes route
+to layout callbacks; appearance changes route only to chrome updates. This
+avoids first-reload retiles, stale `@Published` reads, and duplicate listeners
+after restart. Hover response and focus-follows-mouse are read on each mouse
+event and need no update callback. See [settings polish](settings-polish.md).
+
 The on-disk JSON wire format for keybinds is frozen — see
 `docs/keybinds-and-actions.md` for the contract.
 
@@ -328,7 +339,9 @@ this list is the index.
 - **Floating windows can sit behind tiled windows** — without SIP
   disabled, HyprMac cannot reliably set another process's window
   level. `Hypr+F` cycles and raises floaters; `raiseBehind` runs
-  automatically on app activation.
+  automatically on app activation and discovery reconciliation. It leaves
+  floating siblings of the focused tiled app alone, because restoring focus
+  within that app can put the tile back above its sibling and cause a loop.
 - **Squishy-sibling swap rejection** — when a swap squishes a
   sibling app that has no AX-reported or readback-confirmed minimum
   size (the canonical case in the user's setup is Sidenote), the

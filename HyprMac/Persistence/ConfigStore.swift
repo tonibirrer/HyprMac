@@ -239,6 +239,11 @@ struct SavedConfig: Codable {
     let showFocusBorder: Bool?
     let focusBorderColorHex: String?
     let floatingBorderColorHex: String?
+    let focusBracketStyle: FocusBracketStyle?
+    let focusBracketColorHex: String?
+    let focusBracketRadius: CGFloat?
+    let focusBracketThickness: CGFloat?
+    var focusBracketLength: CGFloat? = nil
     let dimInactiveWindows: Bool?
     let dimIntensity: Double?
     let mouseHoverPollHz: Int?
@@ -285,6 +290,8 @@ extension SavedConfig {
         case focusFollowsMouse, hyprKey, excludedBundleIDs, showMenuBarIndicator
         case maxSplitsPerMonitor, disabledMonitors
         case showFocusBorder, focusBorderColorHex, floatingBorderColorHex
+        case focusBracketStyle, focusBracketColorHex, focusBracketRadius, focusBracketThickness
+        case focusBracketLength
         case dimInactiveWindows, dimIntensity, mouseHoverPollHz
         case chromeFadeDurationSec, windowCornerRadius
         case scratchpadTileByDefault, scratchpadRegionInset
@@ -329,6 +336,20 @@ extension SavedConfig {
         self.showFocusBorder = try c.decodeIfPresent(Bool.self, forKey: .showFocusBorder)
         self.focusBorderColorHex = try c.decodeIfPresent(String.self, forKey: .focusBorderColorHex)
         self.floatingBorderColorHex = try c.decodeIfPresent(String.self, forKey: .floatingBorderColorHex)
+        // A style added by a newer build must not invalidate the whole config.
+        // Key presence also marks the new bracket schema, so an unknown value
+        // cannot accidentally reimport the old focus-border color.
+        if c.contains(.focusBracketStyle) {
+            self.focusBracketStyle = (try? c.decode(
+                FocusBracketStyle.self,
+                forKey: .focusBracketStyle)) ?? UserConfigDefaults.focusBracketStyle
+        } else {
+            self.focusBracketStyle = nil
+        }
+        self.focusBracketColorHex = try c.decodeIfPresent(String.self, forKey: .focusBracketColorHex)
+        self.focusBracketRadius = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketRadius)
+        self.focusBracketThickness = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketThickness)
+        self.focusBracketLength = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketLength)
         self.dimInactiveWindows = try c.decodeIfPresent(Bool.self, forKey: .dimInactiveWindows)
         self.dimIntensity = try c.decodeIfPresent(Double.self, forKey: .dimIntensity)
         self.mouseHoverPollHz = try c.decodeIfPresent(Int.self, forKey: .mouseHoverPollHz)

@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var welcomeController: WelcomeWindowController?
     private var permissionsGate: PermissionsGateWindowController?
     private var permissionPollTimer: Timer?
+    private var diagnosticOnly = false
 
     /// AX permission gate plus the rest of startup. Trusted →
     /// applies the Hypr key remap and starts the manager. Not
@@ -26,6 +27,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         hyprLog(.debug, .lifecycle, "bundle: \(Bundle.main.bundleIdentifier ?? "?")")
         hyprLog(.debug, .lifecycle, "AXIsProcessTrusted=\(AXIsProcessTrusted())")
+
+        #if HYPRMAC_DEBUG_VARIANT
+        if CommandLine.arguments.contains("--request-accessibility") {
+            diagnosticOnly = true
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+            let trusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+            print("HyprMac accessibility request trusted=\(trusted) bundle=\(Bundle.main.bundleIdentifier ?? "?")")
+            fflush(stdout)
+            NSApp.terminate(nil)
+            return
+        }
+
+        if CommandLine.arguments.contains("--check-accessibility") {
+            diagnosticOnly = true
+            let trusted = AXIsProcessTrusted()
+            print("HyprMac accessibility trusted=\(trusted) bundle=\(Bundle.main.bundleIdentifier ?? "?")")
+            fflush(stdout)
+            NSApp.terminate(nil)
+            return
+        }
+        #endif
+
+        // one-shot frame diagnostic. runs before anything starts, so no
+        // window manager and no key remap touch the machine.
+        #if DEBUG
+        if let probe = ProbeFrameArguments.parse(CommandLine.arguments) {
+            switch probe {
+            case let .success(arguments):
+                ProbeFrame.run(arguments)
+            case let .failure(reason):
+                print("HyprMac --probe-frame: \(reason)")
+                fflush(stdout)
+                exit(1)
+            }
+        }
+        #endif
 
         if AXIsProcessTrusted() {
             startAfterPermissionGranted()
@@ -75,6 +112,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func startWindowManager() {
         let config = UserConfig.shared
         windowManager = WindowManager(config: config)
+        windowManager?.keybindOverlay.onShowTutorial = { [weak self] in
+            self?.showTour()
+        }
         if config.enabled {
             windowManager?.start()
         }
@@ -82,19 +122,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkFirstLaunchOrUpdate() {
-        let hasSeenOnboarding = UserDefaults.standard.bool(forKey: "hasSeenOnboarding")
+        let hasSeenOnboarding = RuntimeVariant.inheritedBool(forKey: "hasSeenOnboarding")
         let lastVersion = UserDefaults.standard.string(forKey: "lastSeenVersion")
         let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
 
+        if let mode = RuntimeVariant.shouldShowWelcome(
+            hasSeenOnboarding: hasSeenOnboarding,
+            lastVersion: lastVersion,
+            currentVersion: currentVersion
+        ) {
+            showWelcome(mode: mode)
+        }
         if !hasSeenOnboarding {
-            // first time ever — first-run walkthrough
-            showWelcome(mode: .firstRun)
             UserDefaults.standard.set(true, forKey: "hasSeenOnboarding")
-        } else if lastVersion == nil {
-            // existing user who never had version tracking — show what's new
-            showWelcome(mode: .whatsNew)
-        } else if lastVersion != currentVersion {
-            showWelcome(mode: .whatsNew)
         }
 
         UserDefaults.standard.set(currentVersion, forKey: "lastSeenVersion")
@@ -102,22 +142,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Public entry for replaying the first-run tour from Settings.
     func showTour() {
-        showWelcome(mode: .firstRun)
+        hyprLog(.debug, .lifecycle, "tutorial requested")
+        presentWelcome(mode: .firstRun)
     }
 
     private func showWelcome(mode: WelcomeMode) {
         // small delay so tiling engine settles first
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            let controller = WelcomeWindowController()
-            controller.show(mode: mode)
-            self?.welcomeController = controller
+            self?.presentWelcome(mode: mode)
         }
+    }
+
+    private func presentWelcome(mode: WelcomeMode) {
+        welcomeController?.dismiss()
+        let controller = WelcomeWindowController()
+        welcomeController = controller
+        controller.show(mode: mode)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // config writes are coalesced — persist the last edit before exit
         UserConfig.shared.flushPendingSave()
-        windowManager?.stop()
+        guard !diagnosticOnly else { return }
+        windowManager?.stop(keepPauseShortcut: false)
         // restore caps lock to normal when quitting
         KeyRemapper.restoreCapsLock()
     }

@@ -30,22 +30,20 @@ class FocusBrackets {
     // accent, black outline behind light accent).
     private var outlineLayers: [CAShapeLayer] = []
     private var trackedFrame: CGRect?
+    private(set) var style: FocusBracketStyle = .rounded
+    private(set) var markRadius: CGFloat = UserConfigDefaults.focusBracketRadius
+    private(set) var markThickness: CGFloat = UserConfigDefaults.focusBracketThickness
+    private(set) var markLength: CGFloat = UserConfigDefaults.focusBracketLength
 
     /// Resolved from config — call before `show()` when the user picks a
     /// new color in settings. Same source as `FocusBorder.accentCGColor`.
-    var accentCGColor: CGColor = NSColor.controlAccentColor.cgColor
+    var accentCGColor: CGColor = UserConfigDefaults.focusBracketColor.cgColor
 
     /// Primary screen height for CG → NS coordinate flip. Set from
     /// `WindowManager` alongside `FocusBorder.primaryScreenHeight`.
     var primaryScreenHeight: CGFloat = 0
 
     private enum Tuning {
-        // straight leg length on each side of the corner arc.
-        static let legLength: CGFloat = 14
-        static let strokeWidth: CGFloat = 4.5
-        // contrast outline stroke — wider than the accent stroke so it
-        // shows ~1.25pt on each side. drawn behind the accent layer.
-        static let outlineStrokeWidth: CGFloat = 7
         // inset from window edge — brackets sit *inside* the window
         // padded away from its edge.
         static let inset: CGFloat = 14
@@ -68,6 +66,7 @@ class FocusBrackets {
     /// frame.
     func show(around rect: CGRect, windowID: CGWindowID) {
         mainThreadOnly()
+        guard style != .off else { hide(); return }
 
         let p: NSPanel
         if let existing = panel {
@@ -80,6 +79,10 @@ class FocusBrackets {
         let isFirstAppear = !isVisible
         let isWindowSwitch = trackedWindowID != nil && trackedWindowID != windowID
 
+        // Paths resolve per-window curvature, so establish tracking before the
+        // first stamp (and after every hide, which clears the tracked id).
+        trackedWindowID = windowID
+        trackedFrame = rect
         p.setFrame(panelRect(for: rect), display: false)
         layoutHostView(in: p)
         stampCornerPaths()
@@ -96,9 +99,6 @@ class FocusBrackets {
         p.alphaValue = 1.0
         p.orderFront(nil)
         isVisible = true
-        trackedWindowID = windowID
-        trackedFrame = rect
-
         if isFirstAppear || isWindowSwitch {
             animateScaleIn()
         }
@@ -122,6 +122,47 @@ class FocusBrackets {
         stampCornerPaths()
     }
 
+    /// Apply bracket style and color without replaying the entrance animation.
+    func applyAppearance(
+        style: FocusBracketStyle,
+        color: CGColor,
+        radius: CGFloat,
+        thickness: CGFloat,
+        length: CGFloat = UserConfigDefaults.focusBracketLength
+    ) {
+        mainThreadOnly()
+        self.style = style
+        accentCGColor = color
+        markRadius = max(0, min(32, radius))
+        markThickness = max(1, min(6, thickness))
+        markLength = max(4, min(40, length))
+        guard style != .off else { hide(); return }
+        guard isVisible else { return }
+        stampCornerPaths()
+        let outline = Self.contrastOutlineColor(for: color)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in cornerLayers { layer.strokeColor = color }
+        for layer in outlineLayers { layer.strokeColor = outline }
+        CATransaction.commit()
+    }
+
+    func currentAppearance() -> (style: FocusBracketStyle, color: CGColor?, radius: CGFloat, thickness: CGFloat, length: CGFloat) {
+        (style, cornerLayers.first?.strokeColor, markRadius, markThickness, markLength)
+    }
+
+    func currentPathCount() -> Int {
+        cornerLayers.compactMap(\.path).count
+    }
+
+    func currentStrokeWidths() -> (mark: CGFloat?, outline: CGFloat?) {
+        (cornerLayers.first?.lineWidth, outlineLayers.first?.lineWidth)
+    }
+
+    func currentPathBounds() -> CGRect? {
+        cornerLayers.first?.path?.boundingBox
+    }
+
     /// Fade out and order out. Cheap to call repeatedly — no-op when
     /// already hidden.
     func hide() {
@@ -138,7 +179,8 @@ class FocusBrackets {
             ctx.duration = duration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             captured.animator().alphaValue = 0
-        }, completionHandler: {
+        }, completionHandler: { [weak self] in
+            guard self?.isVisible == false else { return }
             captured.orderOut(nil)
             captured.alphaValue = 1.0
         })
@@ -147,14 +189,12 @@ class FocusBrackets {
     // MARK: - drawing
 
     private func stampCornerPaths() {
-        guard let host = hostView, let windowID = trackedWindowID else { return }
+        guard let host = hostView, trackedWindowID != nil else { return }
         let bounds = host.bounds
         let inset = Tuning.inset
-        let leg = Tuning.legLength
-        // arc curvature matches the host window's own corner radius so
-        // each bracket looks like a piece of the window's own corner,
-        // floated inward.
-        let r = WindowCornerRadius.resolve(for: windowID)
+        let leg = markLength
+        // stylistic curvature is independent from the app window edge.
+        let r = markRadius
         let W = bounds.width
         let H = bounds.height
 
@@ -185,16 +225,17 @@ class FocusBrackets {
                 legLength: leg)
             outlineLayers[i].frame = bounds
             outlineLayers[i].path = path
+            outlineLayers[i].lineWidth = markThickness + 2
             cornerLayers[i].frame = bounds
             cornerLayers[i].path = path
+            cornerLayers[i].lineWidth = markThickness
         }
         CATransaction.commit()
     }
 
     /// Build a single corner bracket: a straight leg, a 90° arc, another
-    /// straight leg. Arc radius matches the window's corner radius so
-    /// the bracket reads as a corner echo. Legs extend tangent to the
-    /// arc, along the window's edges (inset by `Tuning.inset`).
+    /// straight leg. Legs extend tangent to the configured arc, along
+    /// the window's edges (inset by `Tuning.inset`).
     private func makeCornerPath(center: CGPoint,
                                 arcRadius: CGFloat,
                                 startAngle: CGFloat,
@@ -236,7 +277,7 @@ class FocusBrackets {
             let outline = CAShapeLayer()
             outline.fillColor = nil
             outline.strokeColor = outlineColor
-            outline.lineWidth = Tuning.outlineStrokeWidth
+            outline.lineWidth = markThickness + 2
             outline.lineCap = .round
             outline.lineJoin = .round
             hostLayer.addSublayer(outline)
@@ -245,7 +286,7 @@ class FocusBrackets {
             let layer = CAShapeLayer()
             layer.fillColor = nil
             layer.strokeColor = accentCGColor
-            layer.lineWidth = Tuning.strokeWidth
+            layer.lineWidth = markThickness
             layer.lineCap = .round
             layer.lineJoin = .round
             hostLayer.addSublayer(layer)

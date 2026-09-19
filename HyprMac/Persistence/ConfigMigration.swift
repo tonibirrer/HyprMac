@@ -5,6 +5,7 @@
 // import from the stock app's Application Support directory. Future
 // schema bumps land here too.
 
+import Carbon
 import Foundation
 
 /// One-time migrations and schema-version helpers for `SavedConfig`.
@@ -19,6 +20,29 @@ enum ConfigMigration {
     /// config decodes as v1.
     static func schemaVersion(of saved: SavedConfig) -> Int {
         saved.version ?? 1
+    }
+
+    /// Brackets shared the persistent focus-border color before they gained
+    /// their own preference. Preserve an explicit legacy color; otherwise nil
+    /// selects the new black default.
+    static func resolveFocusBracketColor(saved: SavedConfig) -> String? {
+        guard saved.focusBracketStyle == nil else { return saved.focusBracketColorHex }
+        return saved.focusBracketColorHex ?? saved.focusBorderColorHex
+    }
+
+    // leave customized actions and occupied chords alone, including multiple float bindings.
+    static func migrateToggleFloating(saved: [Keybind]) -> [Keybind] {
+        let old = Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: [.hypr, .shift],
+                          action: .toggleFloating)
+        let replacement = Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: .hypr,
+                                  action: .toggleFloating)
+        guard saved.filter({ $0.action == .toggleFloating }) == [old],
+              saved.filter({ $0.id == old.id }).count == 1,
+              !saved.contains(where: { $0.id == replacement.id }),
+              let index = saved.firstIndex(of: old) else { return saved }
+        var migrated = saved
+        migrated[index] = replacement
+        return migrated
     }
 
     /// Resolve monitor config, preferring the local file and falling

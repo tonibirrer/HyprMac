@@ -37,6 +37,37 @@ final class HandleDisplayChangeTests: XCTestCase {
         XCTAssertNil(engine.existingTree(forWorkspace: 1, screen: screen))
     }
 
+    func testAMigratedTreeCarriesItsUnverifiedMark() throws {
+        let trace = MigrationTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = (961...962).map {
+            HyprWindow(element: AXUIElementCreateApplication(99996), windowID: CGWindowID($0),
+                       ownerPID: 99996)
+        }
+        let usable = engine.displayManager.cgRect(for: screen)
+        for (index, window) in windows.enumerated() {
+            trace.frames[window.windowID] = CGRect(x: usable.minX + 20 + CGFloat(index) * 150,
+                                                   y: usable.minY + 20, width: 120, height: 120)
+        }
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertFalse(engine.intendedTileRects().isEmpty)
+
+        trace.rejectNextRead = true
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertTrue(engine.intendedTileRects().isEmpty)
+
+        // the workspace's home moves to a screen that is not in the manager's
+        // live list, so the tree migrates and the claim has to go with it
+        let destination = MigrationScreen()
+        engine.handleDisplayChange(currentScreens: [screen, destination],
+                                   homeScreensForWorkspace: { _ in [destination] })
+
+        XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: destination))
+        XCTAssertEqual(engine.unverifiedGeometryWindowIDs, Set(windows.map(\.windowID)),
+                       "a migrated tree has still never had a layout accepted")
+    }
+
     func testHandleDisplayChangeIsNoopWhenTreeOnItsHome() {
         engine.prepareTileLayout([makeWindow(id: 1), makeWindow(id: 2)],
                                  onWorkspace: 1, screen: screen)
@@ -50,5 +81,129 @@ final class HandleDisplayChangeTests: XCTestCase {
 
         XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: screen))
         XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.count, countBefore)
+    }
+}
+
+final class FitAwareDisplayMigrationTests: XCTestCase {
+    func testCollidingMigrationsDoNotMergeWindowsWhoseKnownMinimumsCannotFit() throws {
+        let left = CollisionScreen(x: 0, width: 1400)
+        let right = CollisionScreen(x: 2000, width: 1400)
+        let destination = CollisionScreen(x: 4000, width: 1400)
+        let displayManager = DisplayManager(screenSource: { [left, right, destination] })
+        let engine = TilingEngine(displayManager: displayManager)
+        let first = makeWindow(id: 971)
+        let second = makeWindow(id: 972)
+        first.observedMinSize = CGSize(width: 1000, height: 500)
+        second.observedMinSize = CGSize(width: 1000, height: 500)
+
+        engine.prepareTileLayout([first], onWorkspace: 1, screen: left)
+        engine.prepareTileLayout([second], onWorkspace: 1, screen: right)
+
+        engine.handleDisplayChange(currentScreens: [destination],
+                                   homeScreensForWorkspace: { _ in [destination] })
+
+        let migrated = try XCTUnwrap(engine.existingTree(forWorkspace: 1,
+                                                         screen: destination))
+        XCTAssertEqual(migrated.allWindows.count, 1,
+                       "migration must use the same geometric fit decision as admission")
+    }
+}
+
+private final class MigrationScreen: NSScreen {
+    // detached test screen: AppKit traps naming it on macOS 26
+    override var localizedName: String { "MigrationScreen" }
+    override var frame: NSRect { NSRect(x: 6000, y: 0, width: 1400, height: 900) }
+    override var visibleFrame: NSRect { frame }
+}
+
+private final class CollisionScreen: NSScreen {
+    // detached test screen: AppKit traps naming it on macOS 26
+    override var localizedName: String { "CollisionScreen" }
+    let bounds: NSRect
+
+    init(x: CGFloat, width: CGFloat) {
+        bounds = NSRect(x: x, y: 0, width: width, height: 900)
+        super.init()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var frame: NSRect { bounds }
+    override var visibleFrame: NSRect { bounds }
+}
+
+private final class MigrationTrace {
+    var frames: [CGWindowID: CGRect] = [:]
+    var rejectNextRead = false
+    private var wrote = false
+    private var now: TimeInterval = 0
+
+    func io(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(setMessagingTimeout: { _, _ in .success },
+                      writeSize: { [self] id, size, _ in wrote = true; frames[id]?.size = size; return .success },
+                      writePosition: { [self] id, position, _ in frames[id]?.origin = position; return .success },
+                      readPosition: { [self] id, _ in
+                          if wrote && rejectNextRead { rejectNextRead = false; return (.cannotComplete, nil) }
+                          return (.success, frames[id]?.origin)
+                      },
+                      readSize: { [self] id, _ in (.success, frames[id]?.size) },
+                      now: { [self] in now }, sleep: { [self] in now += $0 },
+                      currentGeneration: generation)
+    }
+}
+
+final class DisplaySnapshotTests: XCTestCase {
+    func testFingerprintRefreshesAChangedProviderWithoutNotification() {
+        let first = SnapshotScreen()
+        let second = SnapshotScreen()
+        second.bounds.size.width = 1512
+        var provided: [NSScreen] = [first]
+        let manager = DisplayManager(screenSource: { provided })
+        let before = manager.refreshedFingerprint()
+        provided = [second]
+        XCTAssertNotEqual(manager.refreshedFingerprint(), before)
+        XCTAssertEqual(manager.screens.first?.frame.width, 1512)
+    }
+
+    func testOnePointUsableFrameNoiseKeepsTheSameFingerprint() {
+        let screen = SnapshotScreen()
+        let manager = DisplayManager(screenSource: { [screen] })
+        let before = manager.refreshedFingerprint()
+        screen.usable = screen.bounds.offsetBy(dx: 0, dy: 1)
+        XCTAssertEqual(manager.refreshedFingerprint(), before)
+        screen.usable = screen.bounds.offsetBy(dx: 0, dy: 2)
+        XCTAssertNotEqual(manager.refreshedFingerprint(), before, "noise cannot accumulate against a moving anchor")
+    }
+
+    func testASymmetricOnePointInsetChangesTheFingerprint() {
+        let screen = SnapshotScreen()
+        let manager = DisplayManager(screenSource: { [screen] })
+        let before = manager.refreshedFingerprint()
+        // each edge moves one point, so every edge delta is inside the slack,
+        // but the usable area is two points narrower
+        screen.usable = screen.bounds.insetBy(dx: 1, dy: 0)
+        XCTAssertNotEqual(manager.refreshedFingerprint(), before)
+    }
+
+    func testUsableBoundsAndPhysicalIdentityChangeTheFingerprint() {
+        let screen = SnapshotScreen()
+        let manager = DisplayManager(screenSource: { [screen] })
+        let before = manager.refreshedFingerprint()
+        screen.usable = screen.bounds.insetBy(dx: 0, dy: 25)
+        let inset = manager.refreshedFingerprint()
+        XCTAssertNotEqual(inset, before)
+        screen.displayID = 42
+        XCTAssertNotEqual(manager.refreshedFingerprint(), inset)
+    }
+}
+
+private final class SnapshotScreen: NSScreen {
+    var bounds = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+    var usable: NSRect?
+    var displayID = 41
+    override var frame: NSRect { bounds }
+    override var visibleFrame: NSRect { usable ?? bounds }
+    override var localizedName: String { "Test display" }
+    override var deviceDescription: [NSDeviceDescriptionKey: Any] {
+        [NSDeviceDescriptionKey("NSScreenNumber"): NSNumber(value: displayID)]
     }
 }

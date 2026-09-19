@@ -7,8 +7,10 @@ import SwiftUI
 /// indicator, iCloud sync, launch-at-login), and a footer with
 /// replay-the-tour + reset.
 struct GeneralSettingsView: View {
+    let showTutorial: () -> Void
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
+    @StateObject private var loginItem = LoginItemController()
 
     var body: some View {
         VStack(spacing: HyprSpacing.lg) {
@@ -20,6 +22,10 @@ struct GeneralSettingsView: View {
         }
         .onAppear {
             accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
+            loginItem.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginItem.refresh()
         }
     }
 
@@ -54,27 +60,25 @@ struct GeneralSettingsView: View {
 
     private var mousePanel: some View {
         HyprPanel("Mouse",
-                  footer: "Hovering over a tiled window focuses it. Higher refresh rates feel snappier on ProMotion displays at the cost of more CPU.") {
+                  footer: "Hover response controls how often focus can react while the pointer moves. Higher rates check for a new focus target more often.") {
             HyprRow("Focus follows mouse", icon: "cursorarrow.motionlines") {
                 Toggle("", isOn: $config.focusFollowsMouse)
                     .toggleStyle(HyprToggleStyle())
                     .labelsHidden()
             }
-            HyprRow("Refresh rate", icon: "speedometer", divider: false) {
-                HStack(spacing: HyprSpacing.sm) {
-                    Slider(
-                        value: Binding(
-                            get: { Double(config.mouseHoverPollHz) },
-                            set: { config.mouseHoverPollHz = Int($0) }
-                        ),
-                        in: 60...240,
-                        step: 30
-                    )
-                    .frame(width: 180)
-                    .disabled(!config.focusFollowsMouse)
-                    HyprChip("\(config.mouseHoverPollHz) Hz")
-                        .frame(width: 64, alignment: .trailing)
+            HyprRow("Hover response", icon: "speedometer", divider: false) {
+                Picker("", selection: $config.mouseHoverPollHz) {
+                    if HoverResponseRate(rawValue: config.mouseHoverPollHz) == nil {
+                        Text(HoverResponseRate.displayName(for: config.mouseHoverPollHz))
+                            .tag(config.mouseHoverPollHz)
+                    }
+                    ForEach(HoverResponseRate.allCases) { rate in
+                        Text(rate.displayName).tag(rate.rawValue)
+                    }
                 }
+                .labelsHidden()
+                .frame(width: 220)
+                .disabled(!config.focusFollowsMouse)
             }
         }
     }
@@ -138,7 +142,7 @@ struct GeneralSettingsView: View {
 
     private var systemPanel: some View {
         HyprPanel("System",
-                  footer: "Add HyprMac to Login Items in System Settings → General → Login Items to launch at startup.") {
+                  footer: loginItemFooter) {
             HyprRow("Menu bar workspace indicator", icon: "rectangle.fill.on.rectangle.fill") {
                 Toggle("", isOn: $config.showMenuBarIndicator)
                     .toggleStyle(HyprToggleStyle())
@@ -156,14 +160,33 @@ struct GeneralSettingsView: View {
                         subtitle: "Enable iCloud Drive in System Settings") { EmptyView() }
             }
 
-            Button { openLoginItems() } label: {
-                HyprRow("Launch at login", icon: "power", divider: false) {
-                    HyprChip("MANUAL ↗")
+            HyprRow("Launch at login", icon: "power", divider: false) {
+                switch loginItem.state {
+                case .enabled:
+                    HStack(spacing: HyprSpacing.sm) {
+                        HyprAccentBadge("ENABLED", icon: "checkmark")
+                        Button("Manage") { loginItem.openLoginItems() }
+                            .controlSize(.small)
+                    }
+                case .notEnabled:
+                    Button("Enable") { loginItem.enable() }
+                        .controlSize(.small)
+                case .requiresApproval, .failed:
+                    Button("Open Login Items") { loginItem.openLoginItems() }
+                        .controlSize(.small)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
         }
+    }
+
+    private var loginItemFooter: String {
+        if let instruction = loginItem.instructionText {
+            return instruction
+        }
+        if loginItem.state == .enabled {
+            return "\(loginItem.appName) will launch automatically when you sign in. You can turn it off in System Settings → General → Login Items."
+        }
+        return "Start \(loginItem.appName) automatically when you sign in."
     }
 
     // MARK: footer — replay tour + reset
@@ -171,9 +194,9 @@ struct GeneralSettingsView: View {
     private var footerPanel: some View {
         HyprPanel {
             Button {
-                (NSApp.delegate as? AppDelegate)?.showTour()
+                showTutorial()
             } label: {
-                HyprRow("Replay the tour", icon: "sparkles") {
+                HyprRow("HyprMac Tutorial", icon: "sparkles") {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.hyprTextTertiary)
@@ -194,12 +217,6 @@ struct GeneralSettingsView: View {
     }
 
     // MARK: helpers
-
-    private func openLoginItems() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension") {
-            NSWorkspace.shared.open(url)
-        }
-    }
 
     private func pickExcludedApp() {
         let panel = NSOpenPanel()

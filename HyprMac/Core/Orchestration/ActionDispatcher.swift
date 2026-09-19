@@ -18,8 +18,8 @@ import Cocoa
 ///
 /// What does not live here: workspace switch/move/cycle (in
 /// `WorkspaceOrchestrator`), float/cycle/raise (in
-/// `FloatingWindowController`), drag-result application (in
-/// `DragSwapHandler`).
+/// `FloatingWindowController`), and tiled drag transactions (in
+/// `TiledDragHandler`).
 ///
 /// Closure handles plumb in WM-side helpers without a service home:
 /// `currentFocusedWindow`, `updateFocusBorder`, `updatePositionCache`,
@@ -29,6 +29,30 @@ import Cocoa
 ///
 /// Threading: main-thread only.
 final class ActionDispatcher {
+    /// Ids that must not count as occupancy when admitting new windows.
+    /// a closed-but-app-alive ghost holds no tile slot, while a minimized,
+    /// Cmd-H'd, or AX-unreadable window still does — it can come back.
+    static func admissionExclusions(
+        floatingWindowIDs: Set<CGWindowID>,
+        hiddenWindowIDs: Set<CGWindowID>,
+        reservedHiddenWindowIDs: Set<CGWindowID>
+    ) -> Set<CGWindowID> {
+        floatingWindowIDs.union(hiddenWindowIDs.subtracting(reservedHiddenWindowIDs))
+    }
+
+    static func newWindowIDsForAdmission(
+        _ windowIDs: [CGWindowID],
+        workspaceFor: (CGWindowID) -> Int?
+    ) -> [CGWindowID] {
+        windowIDs.filter { workspaceFor($0) != ScratchpadController.workspace }
+    }
+
+    static func existingAssignmentsForAdmission(
+        _ assignments: [Int: Set<CGWindowID>],
+        fullyForgottenIDs: Set<CGWindowID>
+    ) -> [Int: Set<CGWindowID>] {
+        assignments.mapValues { $0.subtracting(fullyForgottenIDs) }
+    }
 
     // hard dependencies
     private let stateCache: WindowStateCache
@@ -57,7 +81,7 @@ final class ActionDispatcher {
     /// `applyForgottenIDCleanup` this keeps all cache state — the window
     /// may come back — and only touches the visuals.
     var hideChromeForGoneWindow: (CGWindowID) -> Void = { _ in }
-    var animatedRetile: ([HyprWindow]) -> Void = { _ in }
+    var animatedRetile: ([HyprWindow]) -> [TilingEngine.AdmissionResult] = { _ in [] }
     var refocusUnderCursor: () -> Void = {}
     // true while a native menu tracks or an overlay process (Control
     // Center, Dock…) is frontmost — the focus invariant must hold off then.
@@ -116,7 +140,15 @@ final class ActionDispatcher {
     /// - Parameter allWindows: the same window snapshot
     ///   `WindowDiscoveryService` consumed; passed through so
     ///   `animatedRetile` and workspace assignment do not re-query AX.
-    func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow]) {
+    func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow])
+        -> [TilingEngine.AdmissionResult] {
+        // CGWindowIDs get recycled. an id discovery calls new is a different
+        // window from the one that held it, so it must not inherit that
+        // window's verified admission — an inherited incumbency costs it its
+        // place in admission recovery.
+        for w in changes.newWindows {
+            tilingEngine.forgetAdmittedIdentity(windowID: w.windowID)
+        }
         // set when a non-silent window rule matched this cycle: switch to
         // the rule's workspace once every other reaction has run. last
         // match wins when several ruled windows appear in one cycle.
@@ -125,11 +157,18 @@ final class ActionDispatcher {
         // workspace assignment for new windows that didn't auto-float onto a
         // disabled monitor. assigning by physical screen — cursor-based was
         // unreliable under multi-monitor + display-reconfig churn.
+        // window rules (Hyprland-style app → workspace pins) win over
+        // physical placement; every other newcomer goes through the
+        // capacity-aware admission planner.
+        var unruled: [HyprWindow] = []
         for w in changes.newWindows where !changes.newOnDisabledMonitor.contains(w.windowID) {
-            if let ws = assignNewWindow(w) {
-                pendingActivation = (ws, w)
+            if let ruled = assignRuledWindow(w) {
+                if ruled.activate { pendingActivation = (ruled.workspace, w) }
+            } else {
+                unruled.append(w)
             }
         }
+        assignNewWindows(unruled, fullyForgottenIDs: changes.fullyForgottenIDs)
 
         // engine/workspace/focus cleanup for ids the service forgot.
         for id in changes.fullyForgottenIDs {
@@ -172,6 +211,7 @@ final class ActionDispatcher {
             workspaceManager.moveWindow(drift.windowID, toWorkspace: drift.toWorkspace)
         }
 
+        var retileResults: [TilingEngine.AdmissionResult] = []
         if changes.needsRetile {
             // one line per visual re-layout naming its cause — the timeline
             // anchor for diagnosing retile churn (flap investigation).
@@ -183,7 +223,7 @@ final class ActionDispatcher {
             ].compactMap { $0 }.joined(separator: " ")
             hyprLog(.notice, .discovery, "discovery retile: \(causes)")
             // animate surrounding windows sliding to fill gaps / make room.
-            animatedRetile(allWindows)
+            retileResults = animatedRetile(allWindows)
         }
 
         // if the FFM-tracked window disappeared, refocus to whatever tiled window
@@ -222,6 +262,7 @@ final class ActionDispatcher {
         }
 
         hasCompletedInitialDiscovery = true
+        return retileResults
     }
 
     /// Route a single `Action` to the service that handles it. Called
@@ -260,6 +301,8 @@ final class ActionDispatcher {
             moveToScratchpad()
         case .resizeDirection(let dir):
             resizeInDirection(dir)
+        case .toggleTiling:
+            break // handled by WindowManager so it remains available while paused
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -288,6 +331,7 @@ final class ActionDispatcher {
         case .toggleScratchpad:    return "toggleScratchpad"
         case .moveToScratchpad:    return "moveToScratchpad"
         case .resizeDirection:     return "resizeDirection"
+        case .toggleTiling:        return "toggleTiling"
         }
     }
 
@@ -295,18 +339,15 @@ final class ActionDispatcher {
 
     /// Assign a newly-discovered window to a workspace.
     ///
-    /// A matching window rule wins: the window goes to the rule's pinned
-    /// workspace regardless of which screen it opened on. Otherwise the
-    /// window is assigned by where it physically opened — its own screen
-    /// (that is where macOS placed it), falling back to the cursor's
-    /// screen only when the window has no usable frame yet. Always
-    /// overwrites any prior assignment: a recycled `CGWindowID` could
-    /// carry a leftover entry pointing at a workspace the user has not
-    /// touched in days.
+    /// Window-rule half of new-window assignment. A matching rule wins:
+    /// the window goes to the rule's pinned workspace regardless of which
+    /// screen it opened on.
     ///
-    /// - Returns: the rule's workspace when a non-silent rule matched and
-    ///   the caller should activate it after the apply loop; nil otherwise.
-    private func assignNewWindow(_ window: HyprWindow) -> Int? {
+    /// - Returns: the rule's workspace and whether the caller should
+    ///   activate it after the apply loop; nil when no rule applies (no
+    ///   match, auto-floated window, or a full target) — the window then
+    ///   takes the default placement path.
+    private func assignRuledWindow(_ window: HyprWindow) -> (workspace: Int, activate: Bool)? {
         // window rules (Hyprland-style app → workspace pins). auto-floated
         // windows (never-tile apps) keep default placement, and a full
         // target workspace falls through to default placement too.
@@ -316,26 +357,14 @@ final class ActionDispatcher {
             workspaceManager.assignWindow(window.windowID, toWorkspace: rule.workspace)
             let activate = !rule.silent && hasCompletedInitialDiscovery
             hyprLog(.notice, .orchestration, "window rule: '\(window.title ?? "?")' (\(window.windowID)) \(rule.bundleID) → ws\(rule.workspace) silent=\(rule.silent) activate=\(activate)")
-            if activate { return rule.workspace }
             // silent move to a hidden workspace: park now — nothing else
             // hides a window assigned off-screen outside a switch.
-            if !workspaceManager.isWorkspaceVisible(rule.workspace),
+            if !activate, !workspaceManager.isWorkspaceVisible(rule.workspace),
                let home = workspaceManager.homeScreenForWorkspace(rule.workspace) {
                 workspaceManager.hideInCorner(window, on: home)
             }
-            return nil
+            return (rule.workspace, activate)
         }
-
-        let physical = displayManager.screen(for: window)
-        let cursor = screenUnderCursor()
-        let screen = physical ?? cursor
-        let frameDesc = window.frame.map { "(\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height)))" } ?? "nil"
-        let physicalName = physical?.localizedName ?? "nil"
-        hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspaceManager.workspaceForScreen(screen)) on \(screen.localizedName)")
-        guard !workspaceManager.isMonitorDisabled(screen) else { return nil }
-        let ws = workspaceManager.workspaceForScreen(screen)
-        // overwrite any stale entry — assignWindow handles old-set cleanup
-        workspaceManager.assignWindow(window.windowID, toWorkspace: ws)
         return nil
     }
 
@@ -361,6 +390,75 @@ final class ActionDispatcher {
         }
         hyprLog(.notice, .orchestration, "window rule: ws\(ws) can't take '\(window.title ?? "?")' (\(window.windowID)) — falling back to default placement")
         return false
+    }
+
+    /// Prefers the window's own screen — that is where macOS placed it —
+    /// and falls back to the cursor's screen only when the window has no
+    /// usable frame yet. Always overwrites any prior assignment: a
+    /// recycled `CGWindowID` could carry a leftover entry pointing at a
+    /// workspace the user has not touched in days.
+    private func assignNewWindows(_ windows: [HyprWindow], fullyForgottenIDs: Set<CGWindowID>) {
+        let admittedIDs = Set(Self.newWindowIDsForAdmission(
+            windows.map(\.windowID), workspaceFor: workspaceManager.workspaceFor
+        ))
+        var groups: [(screen: NSScreen, windows: [HyprWindow])] = []
+        for window in windows where admittedIDs.contains(window.windowID) {
+            let screen = displayManager.screen(for: window) ?? screenUnderCursor()
+            if let index = groups.firstIndex(where: { $0.screen == screen }) {
+                groups[index].windows.append(window)
+            } else {
+                groups.append((screen, [window]))
+            }
+        }
+        for group in groups {
+            assignNewWindows(group.windows, on: group.screen, fullyForgottenIDs: fullyForgottenIDs)
+        }
+    }
+
+    private func assignNewWindows(_ windows: [HyprWindow], on screen: NSScreen,
+                                  fullyForgottenIDs: Set<CGWindowID>) {
+        guard !workspaceManager.isMonitorDisabled(screen) else { return }
+        let preferredWorkspace = workspaceManager.workspaceForScreen(screen)
+        let byID = Dictionary(windows.map { ($0.windowID, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let plan = RetileAllPlanner.admit(
+            windowIDs: windows.map(\.windowID),
+            preferredWorkspace: preferredWorkspace,
+            eligibleWorkspaces: Array(1...workspaceManager.workspaceCount),
+            existingAssignments: Self.existingAssignmentsForAdmission(
+                workspaceManager.regularWorkspaceWindowIDs(),
+                fullyForgottenIDs: fullyForgottenIDs
+            ),
+            excludedWindowIDs: Self.admissionExclusions(
+                floatingWindowIDs: stateCache.floatingWindowIDs,
+                hiddenWindowIDs: stateCache.hiddenWindowIDs,
+                reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs
+            ),
+            capacityForWorkspace: { [self] workspace in
+                guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return 0 }
+                return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))
+            }
+        )
+        RetileAllPlanner.applyAdmission(
+            plan,
+            isWorkspaceVisible: workspaceManager.isWorkspaceVisible,
+            assign: { [self] windowID, workspace in
+                if let window = byID[windowID] {
+                    let physical = displayManager.screen(for: window)
+                    let cursor = screenUnderCursor()
+                    let frameDesc = window.frame.map { "(\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))×\(Int($0.height)))" } ?? "nil"
+                    let physicalName = physical?.localizedName ?? "nil"
+                    let homeName = workspaceManager.homeScreenForWorkspace(workspace)?.localizedName ?? "nil"
+                    hyprLog(.notice, .orchestration, "assignNewWindow: '\(window.title ?? "?")' (\(window.windowID)) frame=\(frameDesc) physical=\(physicalName) cursor=\(cursor.localizedName) → ws\(workspace) home=\(homeName)")
+                }
+                workspaceManager.assignWindow(windowID, toWorkspace: workspace)
+            },
+            park: { [self] windowID, workspace in
+                guard let window = byID[windowID],
+                      let home = workspaceManager.homeScreenForWorkspace(workspace) else { return }
+                workspaceManager.hideInCorner(window, on: home)
+            }
+        )
     }
 
     /// Re-establish keyboard focus when the border has gone dark but the
@@ -518,7 +616,9 @@ final class ActionDispatcher {
         // stateCache.tiledPositions can't be used here — it stores the
         // *live* AX frame for tiled windows, not the layout-intended rect.
         let intended = tilingEngine.intendedTileRects()
-        let frameFor: (HyprWindow) -> CGRect? = { intended[$0.windowID] ?? $0.frame }
+        let frameFor: (HyprWindow) -> CGRect? = {
+            DirectionalGeometry.frame(for: $0.windowID, intended: intended, actual: $0.frame)
+        }
         // diag: source rect (intended vs live) + physical screen. see directional-focus bug.
         hyprLog(.debug, .orchestration, "focus \(direction): src '\(focused.title ?? "?")' (\(focused.windowID)) intended=\(intended[focused.windowID].map { "\($0)" } ?? "nil") live=\(focused.frame.map { "\($0)" } ?? "nil") screen=\(displayManager.screen(for: focused)?.localizedName ?? "?")")
         if let target = accessibility.windowInDirection(direction, from: focused, among: windows, frameFor: frameFor) {
@@ -581,7 +681,9 @@ final class ActionDispatcher {
 
         // intended tile rects — see focusInDirection for rationale.
         let intended = tilingEngine.intendedTileRects()
-        let frameFor: (HyprWindow) -> CGRect? = { intended[$0.windowID] ?? $0.frame }
+        let frameFor: (HyprWindow) -> CGRect? = {
+            DirectionalGeometry.frame(for: $0.windowID, intended: intended, actual: $0.frame)
+        }
         guard let target = accessibility.windowInDirection(direction, from: focused, among: windows, frameFor: frameFor) else { return }
         guard tilingEngine.canSwapWindows(focused, target, onWorkspace: workspace, screen: screen) else {
             rejectSwap(focused, reason: "swap would violate min-size constraints")
@@ -601,9 +703,8 @@ final class ActionDispatcher {
         updatePositionCache()
     }
 
-    /// Beep and flash a red border around `window` to signal a rejected
-    /// swap. Exposed publicly so `DragSwapHandler` can route cross-monitor
-    /// rejections through the same feedback as direction swaps.
+    /// Beep and flash a red border around `window` when a keyboard swap is
+    /// rejected.
     func rejectSwap(_ window: HyprWindow, reason: String) {
         hyprLog(.debug, .orchestration, "\(reason) — rejected swap")
         NSSound.beep()
@@ -721,5 +822,21 @@ final class ActionDispatcher {
 
         tilingEngine.toggleSplit(focused, onWorkspace: workspace, screen: screen)
         updatePositionCache()
+    }
+}
+
+/// Which rect a directional pick should judge a window by.
+///
+/// The tree's intended rect when the engine still stands behind it: a
+/// crammed window's live frame can push past a neighbour's far edge and
+/// exclude that neighbour from the candidate set. Otherwise the window's
+/// own frame. A window with no intended rect is never dropped from the
+/// candidate set for that — a newcomer that never entered a tree, and
+/// every member of a key whose geometry is unverified, stay reachable on
+/// their actual frames.
+enum DirectionalGeometry {
+    static func frame(for windowID: CGWindowID, intended: [CGWindowID: CGRect],
+                      actual: CGRect?) -> CGRect? {
+        intended[windowID] ?? actual
     }
 }
