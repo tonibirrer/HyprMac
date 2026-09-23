@@ -4,7 +4,7 @@
 
 import Cocoa
 
-/// Single source of truth for HyprMac's nine virtual workspaces.
+/// Single source of truth for HyprMac's virtual workspaces.
 ///
 /// **Static anchoring**: every workspace has a deterministic home
 /// monitor computed as `enabledScreens[(N - 1) % enabledScreens.count]`.
@@ -58,8 +58,8 @@ class WorkspaceManager {
     /// by the owner; the owner reconciles visibility after a change.
     var linkedMonitors = false
 
-    /// Total number of virtual workspaces (1...9).
-    let workspaceCount = 9
+    /// Total number of virtual workspaces (`Constants.workspaceRange`).
+    let workspaceCount = Constants.workspaceCount
 
     /// True while the scratchpad layer is summoned. Workspace 0 is the
     /// scratchpad pseudo-workspace — never in `monitorWorkspace`, so its
@@ -68,7 +68,7 @@ class WorkspaceManager {
     /// cycling, raise-behind, dim carve-outs, and discovery for free.
     var scratchpadVisible = false
 
-    /// Workspaces (1...9) that opt into showing sticky windows. Mirrors
+    /// Workspaces (within `Constants.workspaceRange`) that opt into showing sticky windows. Mirrors
     /// `UserConfig.stickyWorkspaces`; set by the owner.
     var stickyWorkspaces: Set<Int> = []
 
@@ -118,9 +118,24 @@ class WorkspaceManager {
 
     // the pure static-anchoring computation, independent of `linkedMonitors`.
     private func staticWorkspacesAnchoredTo(_ screen: NSScreen, enabled: [NSScreen]) -> [Int] {
-        guard let idx = enabled.firstIndex(of: screen) else { return [] }
+        let requestedID = screenID(for: screen)
+        guard let idx = enabled.firstIndex(where: { screenID(for: $0) == requestedID }) else { return [] }
         let count = enabled.count
         return Array(stride(from: idx + 1, through: workspaceCount, by: count))
+    }
+
+    /// The next empty workspace owned by `screen`, in anchored numeric order.
+    /// Every assignment reserves a workspace, including floating and hidden
+    /// windows; lifecycle reconciliation is responsible for removing ghosts.
+    func nextEmptyWorkspace(after source: Int, on screen: NSScreen) -> Int? {
+        let anchored = workspacesAnchoredTo(screen)
+        guard workspaceForScreen(screen) == source,
+              let sourceIndex = anchored.firstIndex(of: source), anchored.count > 1 else { return nil }
+        for offset in 1..<anchored.count {
+            let candidate = anchored[(sourceIndex + offset) % anchored.count]
+            if !isWorkspaceVisible(candidate), windowIDs(onWorkspace: candidate).isEmpty { return candidate }
+        }
+        return nil
     }
 
     /// Establish or refresh the screen→workspace mapping.
@@ -204,7 +219,7 @@ class WorkspaceManager {
     /// `homeScreensForWorkspace`). Returns `nil` only when no enabled
     /// screens exist.
     func homeScreenForWorkspace(_ workspace: Int) -> NSScreen? {
-        guard workspace >= 1 && workspace <= workspaceCount else { return nil }
+        guard Constants.workspaceRange.contains(workspace) else { return nil }
         let enabled = enabledScreensLeftToRight()
         guard !enabled.isEmpty else { return nil }
         if linkedMonitors { return enabled.first }
@@ -290,7 +305,7 @@ class WorkspaceManager {
 
     /// Snapshot regular workspace membership for deterministic bulk operations.
     func regularWorkspaceWindowIDs() -> [Int: Set<CGWindowID>] {
-        Dictionary(uniqueKeysWithValues: (1...workspaceCount).map {
+        Dictionary(uniqueKeysWithValues: Constants.workspaceRange.map {
             ($0, workspaceWindowSets[$0] ?? [])
         })
     }
@@ -446,7 +461,7 @@ class WorkspaceManager {
     ///   exist or `number` is out of range, and as the linked-mode
     ///   result screen (the warp target for an empty workspace).
     func switchWorkspace(_ number: Int, cursorScreen: NSScreen) -> SwitchResult {
-        guard number >= 1 && number <= workspaceCount else {
+        guard Constants.workspaceRange.contains(number) else {
             return SwitchResult(toHide: [], toShow: [], screen: cursorScreen, alreadyVisible: false)
         }
 

@@ -182,8 +182,8 @@ final class IPCServer {
         case "workspaces":
             return json(workspacesPayload())
         case "windows":
-            guard parts.count == 2, let ws = Int(parts[1]), (1...9).contains(ws) else {
-                return json(["error": "usage: windows <1-9>"])
+            guard parts.count == 2, let ws = Int(parts[1]), Constants.workspaceRange.contains(ws) else {
+                return json(["error": "usage: windows <1-\(Constants.workspaceCount)>"])
             }
             return json(windowsPayload(ws))
         case "focused":
@@ -191,11 +191,11 @@ final class IPCServer {
         case "dispatch":
             // Hyprland's `hyprctl dispatch workspace N` shape — the hook
             // for clickable status-bar workspace indicators.
-            guard parts.count == 2 else { return json(["error": "usage: dispatch workspace <1-9>"]) }
+            guard parts.count == 2 else { return json(["error": "usage: dispatch workspace <1-\(Constants.workspaceCount)>"]) }
             let args = parts[1].split(separator: " ").map(String.init)
             guard args.count == 2, args[0] == "workspace",
-                  let ws = Int(args[1]), (1...9).contains(ws) else {
-                return json(["error": "usage: dispatch workspace <1-9>"])
+                  let ws = Int(args[1]), Constants.workspaceRange.contains(ws) else {
+                return json(["error": "usage: dispatch workspace <1-\(Constants.workspaceCount)>"])
             }
             switchWorkspace(ws)
             return json(["ok": true, "workspace": ws])

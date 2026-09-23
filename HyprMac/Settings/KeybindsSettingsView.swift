@@ -10,6 +10,7 @@ struct KeybindsSettingsView: View {
     @State private var selectedBindID: String?
     @State private var showingAddKeybind = false
     @State private var showingAddLauncher = false
+    @State private var showingAddCommand = false
     @State private var editingBind: Keybind?
     @State private var search = ""
     @State private var expandedWorkspaceFamilies: Set<String> = []
@@ -79,6 +80,11 @@ struct KeybindsSettingsView: View {
         .sheet(isPresented: $showingAddLauncher) {
             AppLauncherEditorSheet { config.keybinds.append($0) }
         }
+        .sheet(isPresented: $showingAddCommand) {
+            KeybindEditorSheet(existingBind: nil, initialAction: .runCommand) {
+                config.keybinds.append($0)
+            }
+        }
         .sheet(item: $editingBind) { bind in
             KeybindEditorSheet(existingBind: bind) { updated in
                 if let idx = config.keybinds.firstIndex(where: { $0.id == bind.id }) {
@@ -111,7 +117,7 @@ struct KeybindsSettingsView: View {
         let collapsedIDs = Set((switchFamily ?? []).map(\.id) + (moveFamily ?? []).map(\.id))
         let exceptions = binds.filter { !collapsedIDs.contains($0.id) }
 
-        return HyprPanel("Workspaces", footer: "N = workspace number (1–9). Expand a group to edit individual bindings.") {
+        return HyprPanel("Workspaces", footer: "Keys 1–9 select workspaces 1–9; 0 selects workspace 10. Expand a group to edit individual bindings.") {
             if let switchFamily {
                 workspaceDisclosure(
                     id: "switch", title: "Switch to workspace N", binds: switchFamily)
@@ -206,6 +212,7 @@ struct KeybindsSettingsView: View {
             Menu {
                 Button("Keybind…") { showingAddKeybind = true }
                 Button("App launcher…") { showingAddLauncher = true }
+                Button("Command…") { showingAddCommand = true }
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus")
@@ -262,7 +269,7 @@ struct KeybindsSettingsView: View {
                     .font(.hyprCaption)
                     .foregroundStyle(Color.hyprTextSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Shortcuts call it HYPR. N means a workspace number from 1 to 9.")
+                Text("Shortcuts call it HYPR. Workspace 10 uses the 0 key.")
                     .font(.hyprCaption)
                     .foregroundStyle(Color.hyprTextTertiary)
             }
@@ -393,7 +400,17 @@ private struct KeybindRow: View {
 
 struct KeybindEditorSheet: View {
     let existingBind: Keybind?
+    /// preselects the action when adding a new bind from a dedicated menu item
+    let initialAction: KeybindEditorViewModel.ActionChoice?
     let onSave: (Keybind) -> Void
+
+    init(existingBind: Keybind?,
+         initialAction: KeybindEditorViewModel.ActionChoice? = nil,
+         onSave: @escaping (Keybind) -> Void) {
+        self.existingBind = existingBind
+        self.initialAction = initialAction
+        self.onSave = onSave
+    }
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var vm = KeybindEditorViewModel()
@@ -446,6 +463,10 @@ struct KeybindEditorSheet: View {
                     .pickerStyle(.segmented)
                 case .launchApp:
                     BundleIDPicker(bundleID: $vm.bundleIDParam)
+                case .runCommand:
+                    CommandPicker(label: $vm.commandLabelParam,
+                                  command: $vm.commandParam,
+                                  validationMessage: vm.commandValidationMessage)
                 default:
                     EmptyView()
                 }
@@ -466,6 +487,11 @@ struct KeybindEditorSheet: View {
         }
         .padding(HyprSpacing.xl)
         .frame(width: 480)
-        .onAppear { vm.load(existingBind) }
+        .onAppear {
+            vm.load(existingBind)
+            if existingBind == nil, let initialAction {
+                vm.selectedAction = initialAction
+            }
+        }
     }
 }

@@ -54,12 +54,16 @@ extension Keybind {
             return "rectangle.split.2x1"
         case .showKeybinds:
             return "keyboard"
+        case .showWorkspaceOverview:
+            return "rectangle.grid.3x2"
         case .launchApp:
             return "app"
         case .focusMenuBar:
             return "menubar.rectangle"
         case .focusFloating:
             return "macwindow.on.rectangle"
+        case .moveToNextEmptyWorkspace:
+            return "rectangle.stack.badge.plus"
         case .closeWindow:
             return "xmark.circle"
         case .cycleWorkspace:
@@ -72,6 +76,8 @@ extension Keybind {
             return "arrow.up.left.and.arrow.down.right"
         case .toggleTiling:
             return "pause.circle"
+        case .runCommand:
+            return "terminal"
         }
     }
 
@@ -95,15 +101,29 @@ extension Keybind {
         case .toggleFloating:               return "Toggle Floating"
         case .toggleSplit:                  return "Toggle Split Direction"
         case .showKeybinds:                 return "Show Keybind Overlay"
+        case .showWorkspaceOverview:        return "Show Workspace Overview"
         case .launchApp(let b):             return "Launch \(appDisplayName(for: b))"
         case .focusMenuBar:                 return "Focus Menu Bar"
         case .focusFloating:                return "Cycle Floating Windows"
+        case .moveToNextEmptyWorkspace:     return "Move to dedicated workspace"
         case .closeWindow:                  return "Close Window"
         case .cycleWorkspace(let d):        return d > 0 ? "Next Workspace" : "Previous Workspace"
         case .toggleScratchpad:             return "Toggle Scratchpad"
         case .moveToScratchpad:             return "Send to Scratchpad"
         case .resizeDirection(let d):       return "Resize \(d.rawValue.capitalized)"
         case .toggleTiling:                 return "Pause / Resume Tiling"
+        case .runCommand(let label, let cmd): return Keybind.commandDescription(label: label, command: cmd)
         }
+    }
+
+    /// Row title for a `runCommand` bind: the user's label when they gave
+    /// one, else the program's basename.
+    static func commandDescription(label: String, command: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty { return trimmed }
+        guard let program = (try? CommandLineParser.tokenize(command))?.first else {
+            return "Run command"
+        }
+        return "Run \((program as NSString).lastPathComponent)"
     }
 }

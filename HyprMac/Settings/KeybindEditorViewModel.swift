@@ -13,6 +13,8 @@ final class KeybindEditorViewModel: ObservableObject {
     @Published var directionParam: Direction = .left
     @Published var workspaceParam = 1
     @Published var bundleIDParam = "com.apple.Terminal"
+    @Published var commandLabelParam = ""
+    @Published var commandParam = ""
 
     @Published var recordedKeyCode: UInt16 = 0
     @Published var useHypr = true
@@ -30,18 +32,28 @@ final class KeybindEditorViewModel: ObservableObject {
         case toggleFloating         = "Toggle Floating"
         case toggleSplit            = "Toggle Split"
         case showKeybinds           = "Show Keybinds"
+        case showWorkspaceOverview  = "Show Workspace Overview"
         case launchApp              = "Launch App"
         case focusMenuBar           = "Focus Menu Bar"
         case focusFloating          = "Focus Floating"
+        case moveToNextEmptyWorkspace = "Move to dedicated workspace"
         case closeWindow            = "Close Window"
         case cycleWorkspace         = "Cycle Workspace"
         case toggleScratchpad       = "Toggle Scratchpad"
         case moveToScratchpad       = "Send to Scratchpad"
         case resizeDirection        = "Resize Direction"
         case toggleTiling           = "Pause / Resume Tiling"
+        case runCommand             = "Run a command"
     }
 
-    var canSave: Bool { recordedKeyCode != 0 }
+    /// nil unless the command action is selected and its line is unusable
+    var commandValidationError: CommandRunner.ValidationError? {
+        selectedAction == .runCommand ? CommandRunner.validate(commandParam) : nil
+    }
+
+    var commandValidationMessage: String? { commandValidationError?.message }
+
+    var canSave: Bool { recordedKeyCode != 0 && commandValidationError == nil }
 
     func load(_ bind: Keybind?) {
         guard let bind else { return }
@@ -60,15 +72,21 @@ final class KeybindEditorViewModel: ObservableObject {
         case .toggleFloating:                selectedAction = .toggleFloating
         case .toggleSplit:                   selectedAction = .toggleSplit
         case .showKeybinds:                  selectedAction = .showKeybinds
+        case .showWorkspaceOverview:         selectedAction = .showWorkspaceOverview
         case .launchApp(let b):              selectedAction = .launchApp;              bundleIDParam = b
         case .focusMenuBar:                  selectedAction = .focusMenuBar
         case .focusFloating:                 selectedAction = .focusFloating
+        case .moveToNextEmptyWorkspace:      selectedAction = .moveToNextEmptyWorkspace
         case .closeWindow:                   selectedAction = .closeWindow
         case .cycleWorkspace(let d):         selectedAction = .cycleWorkspace;         workspaceParam = d
         case .toggleScratchpad:              selectedAction = .toggleScratchpad
         case .moveToScratchpad:              selectedAction = .moveToScratchpad
         case .resizeDirection(let d):        selectedAction = .resizeDirection;       directionParam = d
         case .toggleTiling:                  selectedAction = .toggleTiling
+        case .runCommand(let label, let cmd):
+            selectedAction = .runCommand
+            commandLabelParam = label
+            commandParam = cmd
         }
     }
 
@@ -87,15 +105,21 @@ final class KeybindEditorViewModel: ObservableObject {
         case .toggleFloating:         action = .toggleFloating
         case .toggleSplit:            action = .toggleSplit
         case .showKeybinds:           action = .showKeybinds
+        case .showWorkspaceOverview:  action = .showWorkspaceOverview
         case .launchApp:              action = .launchApp(bundleID: bundleIDParam)
         case .focusMenuBar:           action = .focusMenuBar
         case .focusFloating:          action = .focusFloating
+        case .moveToNextEmptyWorkspace: action = .moveToNextEmptyWorkspace
         case .closeWindow:            action = .closeWindow
         case .cycleWorkspace:         action = .cycleWorkspace(workspaceParam)
         case .toggleScratchpad:       action = .toggleScratchpad
         case .moveToScratchpad:       action = .moveToScratchpad
         case .resizeDirection:        action = .resizeDirection(directionParam)
         case .toggleTiling:           action = .toggleTiling
+        case .runCommand:
+            action = .runCommand(
+                label: commandLabelParam.trimmingCharacters(in: .whitespaces),
+                command: commandParam.trimmingCharacters(in: .whitespaces))
         }
         return Keybind(keyCode: recordedKeyCode, modifiers: mods, action: action)
     }

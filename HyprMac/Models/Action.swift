@@ -30,9 +30,13 @@ enum Action: Equatable {
     case toggleFloating
     case toggleSplit
     case showKeybinds
+    case showWorkspaceOverview
     case launchApp(bundleID: String)
     case focusMenuBar
     case focusFloating
+    /// Move the focused window to the next empty workspace anchored to
+    /// its current display, switch there, and tile it as the sole window.
+    case moveToNextEmptyWorkspace
     case closeWindow
     /// Cycle through occupied workspaces on the current monitor.
     /// `+1` advances to the next occupied workspace; `-1` rewinds.
@@ -48,6 +52,10 @@ enum Action: Equatable {
     case resizeDirection(Direction)
     /// Pause or resume tiling while keeping this recovery shortcut active.
     case toggleTiling
+    /// Run a user-supplied command line directly (never through a shell).
+    /// `label` is the display name shown in the keybind list and overlay;
+    /// an empty label falls back to the program's basename.
+    case runCommand(label: String, command: String)
 }
 
 // MARK: - Codable
@@ -77,15 +85,18 @@ extension Action: Codable {
         case toggleFloating
         case toggleSplit
         case showKeybinds
+        case showWorkspaceOverview
         case launchApp
         case focusMenuBar
         case focusFloating
+        case moveToNextEmptyWorkspace
         case closeWindow
         case cycleWorkspace
         case toggleScratchpad
         case moveToScratchpad
         case resizeDirection
         case toggleTiling
+        case runCommand
     }
 
     /// Accepted-but-not-emitted aliases. Lets a hand-edited config
@@ -100,6 +111,8 @@ extension Action: Codable {
     private enum PayloadKey: String, CodingKey {
         case _0
         case bundleID
+        case label
+        case command
     }
 
     init(from decoder: Decoder) throws {
@@ -139,12 +152,20 @@ extension Action: Codable {
         case .toggleFloating: self = .toggleFloating
         case .toggleSplit:    self = .toggleSplit
         case .showKeybinds:   self = .showKeybinds
+        case .showWorkspaceOverview: self = .showWorkspaceOverview
         case .focusMenuBar:   self = .focusMenuBar
         case .focusFloating:  self = .focusFloating
+        case .moveToNextEmptyWorkspace: self = .moveToNextEmptyWorkspace
         case .closeWindow:    self = .closeWindow
         case .toggleScratchpad: self = .toggleScratchpad
         case .moveToScratchpad: self = .moveToScratchpad
         case .toggleTiling: self = .toggleTiling
+        case .runCommand:
+            // command is required (same as launchApp's bundleID); a missing
+            // label is tolerated and decodes empty.
+            self = .runCommand(
+                label: try inner.decodeIfPresent(String.self, forKey: .label) ?? "",
+                command: try inner.decode(String.self, forKey: .command))
         case .resizeDirection:
             self = .resizeDirection(try Self.decodeDirection(inner, field: "resizeDirection"))
         }
@@ -192,10 +213,14 @@ extension Action: Codable {
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleSplit)
         case .showKeybinds:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .showKeybinds)
+        case .showWorkspaceOverview:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .showWorkspaceOverview)
         case .focusMenuBar:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .focusMenuBar)
         case .focusFloating:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .focusFloating)
+        case .moveToNextEmptyWorkspace:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToNextEmptyWorkspace)
         case .closeWindow:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .closeWindow)
         case .toggleScratchpad:
@@ -207,6 +232,10 @@ extension Action: Codable {
             try p.encode(d.rawValue, forKey: ._0)
         case .toggleTiling:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleTiling)
+        case .runCommand(let label, let command):
+            var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .runCommand)
+            try p.encode(label, forKey: .label)
+            try p.encode(command, forKey: .command)
         }
     }
 }

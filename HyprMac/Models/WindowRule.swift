@@ -21,7 +21,7 @@ import Foundation
 struct WindowRule: Codable, Equatable, Hashable, Identifiable {
     /// Exact bundle identifier of the owning app, e.g. "com.mitchellh.ghostty".
     var bundleID: String
-    /// Target workspace, 1...9. Any value outside that range (the UI
+    /// Target workspace, within `Constants.workspaceRange`. Any value outside that range (the UI
     /// writes 0) means "no pin" — the rule then only carries a sort
     /// priority.
     var workspace: Int
@@ -92,10 +92,10 @@ struct WindowRule: Codable, Equatable, Hashable, Identifiable {
 
 extension Array where Element == WindowRule {
     /// First rule matching `bundleID` with a valid workspace pin, or nil.
-    /// Priority-only rules (workspace outside 1...9) never match here.
+    /// Priority-only rules (workspace outside `Constants.workspaceRange`) never match here.
     func firstMatch(bundleID: String?) -> WindowRule? {
         guard let bundleID else { return nil }
-        return first { $0.bundleID == bundleID && (1...9).contains($0.workspace) }
+        return first { $0.bundleID == bundleID && Constants.workspaceRange.contains($0.workspace) }
     }
 
     /// Sort priority of the first rule matching `bundleID`, or 0 when no

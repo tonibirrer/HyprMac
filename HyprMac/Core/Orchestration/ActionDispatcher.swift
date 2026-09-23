@@ -68,6 +68,9 @@ final class ActionDispatcher {
     private let workspaceOrchestrator: WorkspaceOrchestrator
     private let floatingController: FloatingWindowController
     private let config: UserConfig
+    // owned outright: stateless, and keeping it off the init keeps every
+    // existing construction site untouched.
+    private let commandRunner = CommandRunner()
 
     // closure handles for WM-side helpers
     var currentFocusedWindow: () -> HyprWindow? = { nil }
@@ -285,12 +288,16 @@ final class ActionDispatcher {
             toggleSplit()
         case .showKeybinds:
             keybindOverlay.toggle(keybinds: config.keybinds)
+        case .showWorkspaceOverview:
+            break // handled by WindowManager, which owns the snapshot
         case .launchApp(let bundleID):
             appLauncher.launchOrFocus(bundleID: bundleID)
         case .focusMenuBar:
             warpToMenuBar()
         case .focusFloating:
             floatingController.cycleFocus()
+        case .moveToNextEmptyWorkspace:
+            workspaceOrchestrator.moveToNextEmptyWorkspace()
         case .closeWindow:
             closeWindow()
         case .cycleWorkspace(let delta):
@@ -303,6 +310,8 @@ final class ActionDispatcher {
             resizeInDirection(dir)
         case .toggleTiling:
             break // handled by WindowManager so it remains available while paused
+        case .runCommand(_, let command):
+            commandRunner.run(command: command)
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -312,8 +321,10 @@ final class ActionDispatcher {
             userInfo: ["action": Self.discriminator(for: action)])
     }
 
-    /// Stable string tag for an `Action` case, used as notification payload.
-    private static func discriminator(for action: Action) -> String {
+    /// Stable string tag for an `Action` case. Used as the notification
+    /// payload and as the log-safe name for an action — it never carries
+    /// an associated value, so free-text payloads cannot leak into a log.
+    static func discriminator(for action: Action) -> String {
         switch action {
         case .focusDirection:      return "focusDirection"
         case .swapDirection:       return "swapDirection"
@@ -323,15 +334,18 @@ final class ActionDispatcher {
         case .toggleFloating:      return "toggleFloating"
         case .toggleSplit:         return "toggleSplit"
         case .showKeybinds:        return "showKeybinds"
+        case .showWorkspaceOverview: return "showWorkspaceOverview"
         case .launchApp:           return "launchApp"
         case .focusMenuBar:        return "focusMenuBar"
         case .focusFloating:       return "focusFloating"
+        case .moveToNextEmptyWorkspace: return "moveToNextEmptyWorkspace"
         case .closeWindow:         return "closeWindow"
         case .cycleWorkspace:      return "cycleWorkspace"
         case .toggleScratchpad:    return "toggleScratchpad"
         case .moveToScratchpad:    return "moveToScratchpad"
         case .resizeDirection:     return "resizeDirection"
         case .toggleTiling:        return "toggleTiling"
+        case .runCommand:          return "runCommand"
         }
     }
 
@@ -424,7 +438,7 @@ final class ActionDispatcher {
         let plan = RetileAllPlanner.admit(
             windowIDs: windows.map(\.windowID),
             preferredWorkspace: preferredWorkspace,
-            eligibleWorkspaces: Array(1...workspaceManager.workspaceCount),
+            eligibleWorkspaces: Array(Constants.workspaceRange),
             existingAssignments: Self.existingAssignmentsForAdmission(
                 workspaceManager.regularWorkspaceWindowIDs(),
                 fullyForgottenIDs: fullyForgottenIDs
@@ -763,14 +777,14 @@ final class ActionDispatcher {
     private func cycleOccupiedWorkspace(delta: Int) {
         let screen = screenUnderCursor()
         let current = workspaceManager.workspaceForScreen(screen)
-        let total = workspaceManager.workspaceCount
+        let total = Constants.workspaceCount
 
         let screenSID = workspaceManager.screenID(for: screen)
 
         // collect occupied workspaces whose static home is this monitor.
         // linked mode has no per-monitor scoping — every workspace spans
         // all screens, so cycle through all occupied ones.
-        let occupied = Set((1...total).filter { ws in
+        let occupied = Set(Constants.workspaceRange.filter { ws in
             guard !workspaceManager.windowIDs(onWorkspace: ws).isEmpty else { return false }
             if workspaceManager.linkedMonitors { return true }
             guard let home = workspaceManager.homeScreenForWorkspace(ws) else { return false }
