@@ -55,10 +55,15 @@ class HotkeyManager {
     // released — possibly seconds after the Tab press — so the release
     // must refresh the timestamp too. written on the tap thread.
     private var lastCommandGestureTimeLocked: CFAbsoluteTime = 0
+    // a ⌘-Tab was pressed and ⌘ has not been released yet
+    private var cmdTabPending = false
 
-    /// Timestamp of the most recent ⌘-involved keystroke. Read on main by
-    /// `WindowManager.appDidActivate` to distinguish a user-driven app
-    /// switch (Cmd-Tab) from a programmatic self-activation.
+    /// Timestamp of the most recent ⌘-Tab app-switch gesture (the Tab
+    /// press, refreshed by the ⌘ release that commits it). Read on main by
+    /// `WindowManager.appDidActivate` via `ActivationGate` to distinguish
+    /// a user-driven app switch from a programmatic self-activation. Only
+    /// ⌘-Tab counts: any ⌘ keystroke used to qualify, which let ⌘C/⌘V and
+    /// the ⌘ release authorize whatever app macOS activated next.
     var lastCommandGestureTime: CFAbsoluteTime {
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -73,6 +78,7 @@ class HotkeyManager {
         stateLock.lock()
         defer { stateLock.unlock() }
         lastCommandGestureTimeLocked = 0
+        cmdTabPending = false
     }
 
     private static func packKey(_ keyCode: UInt16, _ modifiers: ModifierFlags) -> UInt32 {
@@ -290,10 +296,15 @@ class HotkeyManager {
         trackModifierState(type, keyCode)
 
         // breadcrumb for the activation gate (see lastCommandGestureTime):
-        // keyCode 55/54 = left/right Command
-        if (type == .keyDown && event.flags.contains(.maskCommand))
-            || (type == .flagsChanged && (keyCode == 55 || keyCode == 54)) {
+        // keyCode 48 = Tab, 55/54 = left/right Command. the app switch
+        // lands on the ⌘ release — possibly seconds after the Tab — so the
+        // release refreshes the timestamp while a ⌘-Tab is pending.
+        if type == .keyDown && keyCode == 48 && event.flags.contains(.maskCommand) {
+            cmdTabPending = true
             lastCommandGestureTimeLocked = CFAbsoluteTimeGetCurrent()
+        } else if type == .flagsChanged && (keyCode == 55 || keyCode == 54) && cmdTabPending {
+            lastCommandGestureTimeLocked = CFAbsoluteTimeGetCurrent()
+            if !event.flags.contains(.maskCommand) { cmdTabPending = false }
         }
 
         // track the configured physical key as our logical Hypr modifier
