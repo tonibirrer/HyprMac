@@ -269,6 +269,21 @@ class TilingEngine {
     /// back to the first window in tree order.
     var accordionFocusedWindowID: () -> CGWindowID? = { nil }
 
+    /// One-shot front slot for the accordion layouts run while it is set.
+    /// The workspace switch sets it to the window it is about to focus
+    /// before the retile that un-parks the incoming stack: at that moment
+    /// `accordionFocusedWindowID` still names the displaced workspace's
+    /// window (not in the tree being laid out), the layout would fall
+    /// back to the tree's first window, and the stack would arrive
+    /// ordered around the wrong window until the focus call re-raised the
+    /// right one — a visible flicker on every switch, repeated by the
+    /// relayouts the focus change then schedules.
+    var accordionFrontOverride: CGWindowID?
+
+    private func resolvedAccordionFocusedID() -> CGWindowID? {
+        accordionFrontOverride ?? accordionFocusedWindowID()
+    }
+
     /// Public probe for the dispatcher's order-based navigation.
     func isAccordionActive(on screen: NSScreen) -> Bool { accordionActive(screen) }
 
@@ -287,7 +302,7 @@ class TilingEngine {
     func accordionWindowAt(_ cgPoint: CGPoint, onWorkspace workspace: Int, screen: NSScreen) -> HyprWindow? {
         AccordionLayout.windowAt(cgPoint,
                                  order: accordionOrder(onWorkspace: workspace, screen: screen),
-                                 focusedID: accordionFocusedWindowID(),
+                                 focusedID: resolvedAccordionFocusedID(),
                                  in: displayManager.cgRect(for: screen),
                                  padding: outerPadding,
                                  overlap: accordionOverlap)
@@ -299,7 +314,7 @@ class TilingEngine {
     /// background tile to the front in accordion mode).
     func accordionFrontWindow(onWorkspace workspace: Int, screen: NSScreen) -> HyprWindow? {
         AccordionLayout.frontWindow(order: accordionOrder(onWorkspace: workspace, screen: screen),
-                                    focusedID: accordionFocusedWindowID())
+                                    focusedID: resolvedAccordionFocusedID())
     }
 
     /// Apply accordion frames + z-order for `tree` inside `rect`.
@@ -311,16 +326,24 @@ class TilingEngine {
     private func applyAccordionLayout(_ tree: BSPTree, rect: CGRect) {
         let order = tree.allWindows
         guard !order.isEmpty else { return }
-        let focusedID = accordionFocusedWindowID()
+        let focusedID = resolvedAccordionFocusedID()
         let frames = AccordionLayout.frames(order: order, focusedID: focusedID,
                                             in: rect, padding: outerPadding,
                                             overlap: accordionOverlap)
+        let frameByID = Dictionary(uniqueKeysWithValues: frames.map { ($0.0.windowID, $0.1) })
+        let raiseOrder = AccordionLayout.raiseOrder(order, focusedID: focusedID)
+        // z-order first: after a workspace switch the windows are still
+        // parked in the hide corner, where reordering them is invisible.
+        // written after the frames, the stack would land in whatever order
+        // it was parked and re-sort in front of the user.
+        for w in raiseOrder { w.raise() }
         // presentation-only frames: written directly, outside the verified
         // sizing transaction. near-fullscreen rects cannot hit a minimum,
         // and a readback here would only fight the peek-strip overlaps.
-        for (w, frame) in frames { w.setFrame(frame) }
-        for w in AccordionLayout.raiseOrder(order, focusedID: focusedID) {
-            w.raise()
+        // front window first so it is the first to arrive at the rect; the
+        // rest slide in beneath it, nearest neighbor first.
+        for w in raiseOrder.reversed() {
+            if let frame = frameByID[w.windowID] { w.setFrame(frame) }
         }
         hyprLog(.debug, .tiling, "accordion: \(order.count) windows, front=\(focusedID.map(String.init) ?? "first")")
     }
@@ -1967,7 +1990,7 @@ class TilingEngine {
             // intent there; BSP rects would disagree with every live frame.
             let layout = accordionActive(screen)
                 ? AccordionLayout.frames(order: t.allWindows,
-                                         focusedID: accordionFocusedWindowID(),
+                                         focusedID: resolvedAccordionFocusedID(),
                                          in: rect, padding: outerPadding,
                                          overlap: accordionOverlap)
                 : t.layout(in: rect, gap: gapSize, padding: outerPadding)
