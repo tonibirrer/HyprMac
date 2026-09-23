@@ -178,6 +178,11 @@ class WindowManager {
     // raising itself when a background job prints) and must not switch
     // workspaces out from under the user.
     private var lastLeftMouseDownTime: CFAbsoluteTime = 0
+    // the last click landed on a tile or floater on a visible workspace —
+    // intent for that window, never a Dock click (see ActivationGate)
+    private var lastLeftMouseDownHitManagedWindow = false
+    // rate limit for repairFocusOffParkedWindow
+    private var lastParkedFocusRepair: CFAbsoluteTime = 0
     // fork-only config observers (see start()); the shared settings
     // flow through ConfigUpdateCoordinator
     private var configObservers = Set<AnyCancellable>()
@@ -189,16 +194,6 @@ class WindowManager {
     /// change hook; entries drop with the window or the app.
     private var lastFocusedWindowByApp: [pid_t: CGWindowID] = [:]
     private var previousActivationBundleID: String?
-    // 0.75s: a Cmd-Tab's activation lands well under 0.5s after the ⌘
-    // release; the original 1.5s let programmatic activations ride a
-    // stale gesture and yank the workspace "randomly".
-    private static let activationGestureWindow: CFAbsoluteTime = 0.75
-    private static let launcherBundleIDs: Set<String> = [
-        "com.apple.dock",
-        "com.apple.Spotlight",
-        "com.raycast.macos",
-        "com.runningwithcrayons.Alfred",
-    ]
 
     // date-gated suppression flags. owned here, shared with subsystems via closures.
     // keys in use: "activation-switch" (gates appDidActivate workspace switch),
@@ -285,9 +280,18 @@ class WindowManager {
         self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
             self?.animatedRetile(prepare: prepare, completion: completion)
         }
-        // the HUD goes up before the hide/retile/focus pass, not after it
+        // the HUD goes up before the hide/retile/focus pass, not after it.
+        // the switch is also the freshest statement of where the user
+        // wants to be: whatever click or ⌘-Tab came before it authorizes
+        // nothing afterwards, and for a second only a fresh ⌘-Tab may move
+        // them again (ActivationGate.explicitSwitchRecent) — the fallback
+        // activations macOS hands to parked windows while the incoming
+        // workspace's app refuses focus ride no gesture.
         self.workspaceOrchestrator.onWillSwitch = { [weak self] workspace, screen in
-            self?.workspaceOverview.showSwitchHUD(workspace: workspace, screen: screen)
+            guard let self else { return }
+            self.consumeActivationGesture()
+            self.suppressions.suppress("activation-switch-hard", for: 1.0)
+            self.workspaceOverview.showSwitchHUD(workspace: workspace, screen: screen)
         }
         self.workspaceOrchestrator.onDidSwitch = { [weak self] _, _ in
             self?.updateMenuBarState()
@@ -1103,6 +1107,7 @@ class WindowManager {
             let downNS = CGPoint(x: downCG.x,
                                  y: self.displayManager.primaryScreenHeight - downCG.y)
             self.mouseDownPointCG = downCG
+            self.lastLeftMouseDownHitManagedWindow = self.clickHitsManagedWindow(atCG: downCG)
             self.tiledDragHandler.handleMouseDown(at: downCG)
             self.armDimDragIfFloating(downPointNS: downNS)
             // a menu open at the OS level eats clicks before we'd see them
@@ -1406,8 +1411,11 @@ class WindowManager {
         // a parked (hidden-workspace) window is still a live, focusable AX
         // window; following it would outline the hide corner or a rect on
         // the wrong workspace. same for a tile behind the scratchpad scrim.
-        guard stateCache.knownWindowIDs.contains(id),
-              workspaceManager.isWindowVisible(id) else { return }
+        guard stateCache.knownWindowIDs.contains(id) else { return }
+        guard workspaceManager.isWindowVisible(id) else {
+            repairFocusOffParkedWindow(focused, reason: reason)
+            return
+        }
         if scratchpad.isVisible && !scratchpad.contains(id) { return }
         if let screen = displayManager.screen(for: focused), workspaceManager.isMonitorDisabled(screen) { return }
         if let restored = accordionActivationRestore(systemPick: focused) {
@@ -1420,6 +1428,41 @@ class WindowManager {
         hyprLog(.debug, .focus, "follow system focus → \(id) '\(focused.title ?? "?")' (\(reason))")
         focusController.recordFocus(id, reason: reason)
         updateFocusBorder(for: stateCache.cachedWindows[id] ?? focused)
+    }
+
+    /// A parked (hidden-workspace) window took system focus without a
+    /// workspace switch. macOS does this on its own: when the front app
+    /// refuses or loses activation (Citrix, a window closing mid-session)
+    /// the window server activates the topmost on-screen window, and the
+    /// hide-corner slivers qualify. The affordance rightly ignores that
+    /// activation, but leaving focus there sends every keystroke to a
+    /// window the user cannot see until the next Hypr press runs
+    /// `ensureFocus`. Run it now instead. Not during a switch (parked
+    /// windows take AX focus transiently while the incoming workspace
+    /// settles) and at most twice a second.
+    private func repairFocusOffParkedWindow(_ focused: HyprWindow, reason: String) {
+        guard !suppressions.isSuppressed("workspace-transition"), !scratchpad.isVisible else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastParkedFocusRepair > 0.5 else { return }
+        lastParkedFocusRepair = now
+        hyprLog(.notice, .focus, "focus repair: system focus landed on parked \(focused.windowID) '\(focused.title ?? "?")' (\(reason)) — re-asserting the visible workspace")
+        ensureFocus()
+    }
+
+    /// `true` when a click at `point` (CG coordinates) landed on a tile or
+    /// floater HyprMac currently shows. Such a click is intent for that
+    /// window and must not authorize a workspace switch for whatever app
+    /// macOS activates next — see `ActivationGate`.
+    private func clickHitsManagedWindow(atCG point: CGPoint) -> Bool {
+        for (wid, rect) in stateCache.tiledPositions where rect.contains(point) {
+            if workspaceManager.isWindowVisible(wid), !stateCache.hiddenWindowIDs.contains(wid) { return true }
+        }
+        for wid in stateCache.floatingWindowIDs where workspaceManager.isWindowVisible(wid) {
+            if stateCache.hiddenWindowIDs.contains(wid) { continue }
+            if let frame = stateCache.cachedWindows[wid]?.frame, frame.contains(point) { return true }
+        }
+        if scratchpad.isVisible, scratchpad.containsPoint(point) { return true }
+        return false
     }
 
     /// Accordion mode: the tile to re-focus when the system just switched
@@ -3049,9 +3092,9 @@ class WindowManager {
     /// 1. Note when the dock is the active app so FFM can be suppressed
     ///    while dock popups (downloads, stacks) are open.
     /// 2. If the activation was not suppressed (FFM, workspace switch,
-    ///    floater-raise), looks user-initiated (recent click, recent ⌘
-    ///    keystroke, or launched via Dock/Spotlight/Raycast — see
-    ///    `isUserInitiatedActivation`), and the activated app has no
+    ///    floater-raise), looks user-initiated (⌘-Tab, a click outside
+    ///    every managed window, or launched via Dock/Spotlight/Raycast —
+    ///    see `ActivationGate`), and the activated app has no
     ///    visible window, jump to a workspace that does — this is the
     ///    "dock-click takes me to that app's workspace" affordance.
     ///    Returns early when it fires; the workspace switch will trigger
@@ -3101,62 +3144,69 @@ class WindowManager {
             scratchpad.noteAppActivation(pid: app.processIdentifier, bundleID: app.bundleIdentifier)
         }
 
-        // dock-click workspace switch. the activation-switch suppression
-        // exists to keep HyprMac's OWN focus churn (FFM focus, workspace
-        // switch, floater raise — all of which only ever activate apps
-        // with visible windows) from re-triggering the affordance — but a
-        // fresh user gesture proves this activation is not our own doing,
-        // so it overrides the suppression: without the override, FFM's
-        // 0.5s suppression on every hover silently ate Cmd-Tabs that
-        // landed right after a mouse move.
+        // dock-click workspace switch. ActivationGate decides from the
+        // user's last unambiguous gesture (⌘-Tab, a click outside every
+        // managed window, a launcher as predecessor) whether this
+        // activation may show the app's workspace; HyprMac's own focus
+        // churn (FFM, switch, floater raise — all of which only activate
+        // apps with visible windows) is suppressed unless a fresh gesture
+        // proves the activation is not our doing.
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-            let userInitiated = isUserInitiatedActivation(predecessorBundleID: predecessorBundleID)
-            let ruleActivate = config.windowRules.focusOnActivate(bundleID: app.bundleIdentifier)
+            let pid = app.processIdentifier
+            let bid = app.bundleIdentifier ?? "?"
+            let visibleWorkspaces = Set(workspaceManager.monitorWorkspace.values)
 
-            if suppressions.isSuppressed("activation-switch") && !userInitiated {
-                hyprLog(.notice, .lifecycle, "dock-affordance: activation of \(app.bundleIdentifier ?? "?") suppressed (activation-switch window, no user gesture)")
-            } else {
-                let pid = app.processIdentifier
-                let visibleWorkspaces = Set(workspaceManager.monitorWorkspace.values)
+            // only consider windows still tracked (not hidden/closed)
+            let appWindows = stateCache.windowOwners
+                .filter { $0.value == pid && stateCache.knownWindowIDs.contains($0.key) && !stateCache.hiddenWindowIDs.contains($0.key) }
+            let appWorkspaces = appWindows.compactMap { (wid, _) in workspaceManager.workspaceFor(wid) }
+            let hasVisibleWindow = appWorkspaces.contains {
+                visibleWorkspaces.contains($0) || ($0 == ScratchpadController.workspace && scratchpad.isVisible)
+            }
 
-                // only consider windows still tracked (not hidden/closed)
-                let appWindows = stateCache.windowOwners
-                    .filter { $0.value == pid && stateCache.knownWindowIDs.contains($0.key) && !stateCache.hiddenWindowIDs.contains($0.key) }
+            let decision = ActivationGate.decide(ActivationGate.Input(
+                now: CFAbsoluteTimeGetCurrent(),
+                lastCmdTabTime: hotkeyManager.lastCommandGestureTime,
+                lastClickTime: lastLeftMouseDownTime,
+                clickHitManagedWindow: lastLeftMouseDownHitManagedWindow,
+                predecessorBundleID: predecessorBundleID,
+                ownChurnSuppressed: suppressions.isSuppressed("activation-switch"),
+                explicitSwitchRecent: suppressions.isSuppressed("activation-switch-hard"),
+                hasVisibleWindow: hasVisibleWindow,
+                ruleActivate: config.windowRules.focusOnActivate(bundleID: app.bundleIdentifier)))
 
-                let appWorkspaces = appWindows.compactMap { (wid, _) in workspaceManager.workspaceFor(wid) }
-                let hasVisibleWindow = appWorkspaces.contains {
-                    visibleWorkspaces.contains($0) || ($0 == ScratchpadController.workspace && scratchpad.isVisible)
+            switch decision {
+            case .passThrough:
+                break
+            case .suppressed(let why):
+                hyprLog(.notice, .lifecycle, "dock-affordance: activation of \(bid) suppressed (activation-switch window; \(why))")
+            case .ignoredProgrammatic(let why):
+                // a terminal raising itself when a background job prints,
+                // an app calling activate(), macOS handing activation to a
+                // parked window. honoring it would yank the user to another
+                // workspace every few seconds; followSystemFocus repairs
+                // the focus if it landed on a parked window.
+                hyprLog(.notice, .lifecycle, "dock-affordance: ignoring programmatic activation of \(bid) — \(why)")
+            case .allowed(let why):
+                // all of the app's windows live in the hidden scratchpad:
+                // summon the layer instead of a workspace switch —
+                // switchWorkspace(0) would range-guard into a no-op and
+                // strand the activation.
+                let hiddenWs = appWorkspaces.filter { !visibleWorkspaces.contains($0) }
+                if hiddenWs.contains(ScratchpadController.workspace), !scratchpad.isVisible {
+                    let member = appWindows.keys.first { scratchpad.contains($0) }
+                    hyprLog(.notice, .lifecycle, "dock-affordance: \(bid) lives in scratchpad — auto-showing layer (\(why))")
+                    consumeActivationGesture()
+                    scratchpad.show(focusing: member)
+                    return
                 }
-
-                if !hasVisibleWindow, !userInitiated, !ruleActivate {
-                    // programmatic self-activation — a terminal raising itself
-                    // when a background job prints, an app calling activate().
-                    // honoring it would yank the user to another workspace
-                    // every few seconds; only user gestures — or an explicit
-                    // focus-on-activate window rule — may switch.
-                    hyprLog(.notice, .lifecycle, "dock-affordance: ignoring programmatic activation of \(app.bundleIdentifier ?? "?") — no recent click/⌘ gesture, predecessor=\(predecessorBundleID ?? "none")")
-                } else if !hasVisibleWindow {
-                    // all of the app's windows live in the hidden scratchpad:
-                    // summon the layer instead of a workspace switch —
-                    // switchWorkspace(0) would range-guard into a no-op and
-                    // strand the activation.
-                    let hiddenWs = appWorkspaces.filter { !visibleWorkspaces.contains($0) }
-                    if hiddenWs.contains(ScratchpadController.workspace), !scratchpad.isVisible {
-                        let member = appWindows.keys.first { scratchpad.contains($0) }
-                        hyprLog(.notice, .lifecycle, "dock-affordance: \(app.bundleIdentifier ?? "?") lives in scratchpad — auto-showing layer")
-                        consumeActivationGesture()
-                        scratchpad.show(focusing: member)
-                        return
-                    }
-                    if let targetWS = hiddenWs.filter({ $0 != ScratchpadController.workspace }).min() {
-                        let bid = app.bundleIdentifier ?? "?"
-                        let wsSorted = appWorkspaces.sorted()
-                        let widList = appWindows.map { "\($0.key)→ws\(workspaceManager.workspaceFor($0.key) ?? -1)" }.joined(separator: ",")
-                        hyprLog(.notice, .lifecycle, "dock-affordance: \(bid) pid=\(pid) appWorkspaces=\(wsSorted) visible=\(visibleWorkspaces.sorted()) wids=[\(widList)] ruleActivate=\(ruleActivate) → switchWorkspace(\(targetWS))")
-                        consumeActivationGesture()
-                        workspaceOrchestrator.switchWorkspace(targetWS)
-                        return
-                    }
+                if let targetWS = hiddenWs.filter({ $0 != ScratchpadController.workspace }).min() {
+                    let wsSorted = appWorkspaces.sorted()
+                    let widList = appWindows.map { "\($0.key)→ws\(workspaceManager.workspaceFor($0.key) ?? -1)" }.joined(separator: ",")
+                    hyprLog(.notice, .lifecycle, "dock-affordance: \(bid) pid=\(pid) appWorkspaces=\(wsSorted) visible=\(visibleWorkspaces.sorted()) wids=[\(widList)] \(why) → switchWorkspace(\(targetWS))")
+                    consumeActivationGesture()
+                    workspaceOrchestrator.switchWorkspace(targetWS)
+                    return
                 }
             }
         }
@@ -3182,20 +3232,6 @@ class WindowManager {
     }
 
 
-    /// `true` when the current app activation can be traced to a user
-    /// gesture: a recent left click (Dock icon, Spotlight result), a recent
-    /// ⌘-involved keystroke (Cmd-Tab), or a launcher as the previous
-    /// frontmost app (keyboard-driven Spotlight/Raycast launches, where the
-    /// last plain keystroke is Return and carries no ⌘). Programmatic
-    /// self-activations have none of these.
-    private func isUserInitiatedActivation(predecessorBundleID: String?) -> Bool {
-        let now = CFAbsoluteTimeGetCurrent()
-        if now - lastLeftMouseDownTime < Self.activationGestureWindow { return true }
-        if now - hotkeyManager.lastCommandGestureTime < Self.activationGestureWindow { return true }
-        if let prev = predecessorBundleID, Self.launcherBundleIDs.contains(prev) { return true }
-        return false
-    }
-
     /// One gesture authorizes one workspace switch. Called by the
     /// dock-affordance right before it fires: invalidating the click/⌘
     /// breadcrumbs means a programmatic activation arriving moments later
@@ -3205,6 +3241,7 @@ class WindowManager {
     /// gesture window switched workspaces several times per second.
     private func consumeActivationGesture() {
         lastLeftMouseDownTime = 0
+        lastLeftMouseDownHitManagedWindow = false
         hotkeyManager.consumeCommandGesture()
     }
 

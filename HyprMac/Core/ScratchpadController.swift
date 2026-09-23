@@ -568,17 +568,24 @@ final class ScratchpadController {
     func handleMouseDown(atCG point: CGPoint) {
         guard isVisible else { return }
         guard Date().timeIntervalSince(shownAt) > showGraceSec else { return }
-        for id in summonedIDs {
-            if let f = stateCache.cachedWindows[id]?.frame, f.contains(point) {
-                noteFocus(id)
-                return
-            }
-            if let f = lastShownFrames[id], f.contains(point) {
-                noteFocus(id)
-                return
-            }
+        if let id = summonedMember(atCG: point) {
+            noteFocus(id)
+            return
         }
         hide(reason: .clickOutside)
+    }
+
+    /// `true` when `point` (CG coordinates) is inside a summoned member.
+    func containsPoint(_ point: CGPoint) -> Bool {
+        isVisible && summonedMember(atCG: point) != nil
+    }
+
+    private func summonedMember(atCG point: CGPoint) -> CGWindowID? {
+        for id in summonedIDs {
+            if let f = stateCache.cachedWindows[id]?.frame, f.contains(point) { return id }
+            if let f = lastShownFrames[id], f.contains(point) { return id }
+        }
+        return nil
     }
 
     /// App activation while visible. Member apps and our own process keep
