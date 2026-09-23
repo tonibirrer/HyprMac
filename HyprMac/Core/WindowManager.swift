@@ -673,6 +673,12 @@ class WindowManager {
             guard self.workspaceManager.isWindowVisible(id) else { return nil }
             return id
         }
+        // each app's remembered tile stays on top of the app's other
+        // background tiles, so a Dock click / Cmd-Tab lands on it directly
+        // instead of flashing the outermost tile until the restore runs
+        tilingEngine.accordionAppFrontWindowID = { [weak self] pid in
+            self?.lastFocusedWindowByApp[pid]
+        }
         // focus moves are layout changes on an accordion screen — the
         // stack re-shuffles around whichever window came to the front.
         focusController.onFocusChanged = { [weak self] id in

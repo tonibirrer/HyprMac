@@ -284,6 +284,12 @@ class TilingEngine {
         accordionFrontOverride ?? accordionFocusedWindowID()
     }
 
+    /// Per app, the tile the user last focused (the owner's per-app focus
+    /// memory). The accordion raise order keeps it on top of the app's
+    /// other background tiles so a system activation of the app lands
+    /// on it directly — see `AccordionLayout.raiseOrder`.
+    var accordionAppFrontWindowID: (pid_t) -> CGWindowID? = { _ in nil }
+
     /// Public probe for the dispatcher's order-based navigation.
     func isAccordionActive(on screen: NSScreen) -> Bool { accordionActive(screen) }
 
@@ -331,7 +337,13 @@ class TilingEngine {
                                             in: rect, padding: outerPadding,
                                             overlap: accordionOverlap)
         let frameByID = Dictionary(uniqueKeysWithValues: frames.map { ($0.0.windowID, $0.1) })
-        let raiseOrder = AccordionLayout.raiseOrder(order, focusedID: focusedID)
+        var appFront: [pid_t: CGWindowID] = [:]
+        for pid in Set(order.map(\.ownerPID)) {
+            if let id = accordionAppFrontWindowID(pid), order.contains(where: { $0.windowID == id }) {
+                appFront[pid] = id
+            }
+        }
+        let raiseOrder = AccordionLayout.raiseOrder(order, focusedID: focusedID, appFront: appFront)
         // z-order first: after a workspace switch the windows are still
         // parked in the hide corner, where reordering them is invisible.
         // written after the frames, the stack would land in whatever order
@@ -341,11 +353,19 @@ class TilingEngine {
         // sizing transaction. near-fullscreen rects cannot hit a minimum,
         // and a readback here would only fight the peek-strip overlaps.
         // front window first so it is the first to arrive at the rect; the
-        // rest slide in beneath it, nearest neighbor first.
+        // rest slide in beneath it, nearest neighbor first. a window that
+        // already sits where it belongs is left alone: a focus change
+        // moves only the tiles between the old and the new front slot, and
+        // every skipped write (five AX calls behind an EnhancedUI toggle)
+        // shortens the reshuffle the user watches.
+        var written = 0
         for w in raiseOrder.reversed() {
-            if let frame = frameByID[w.windowID] { w.setFrame(frame) }
+            guard let frame = frameByID[w.windowID] else { continue }
+            if let current = w.frame, current.approximatelyEquals(frame, tolerance: 1) { continue }
+            w.setFrame(frame)
+            written += 1
         }
-        hyprLog(.debug, .tiling, "accordion: \(order.count) windows, front=\(focusedID.map(String.init) ?? "first")")
+        hyprLog(.debug, .tiling, "accordion: \(order.count) windows, front=\(focusedID.map(String.init) ?? "first"), \(written) frames written")
     }
 
     /// Resolves a window's app sort priority (Hyprland-style window

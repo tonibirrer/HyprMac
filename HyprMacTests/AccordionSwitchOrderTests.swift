@@ -63,6 +63,34 @@ final class AccordionSwitchOrderTests: XCTestCase {
         XCTAssertEqual(frames().first, "frame:101")
     }
 
+    func testTheAppMemoryKeepsItsTileOnTopOfTheAppsOtherTiles() {
+        // 101 is app A and fronted; 102 and 103 are app B behind it. far-
+        // to-near raises 103 then 102, leaving 102 on top of B's windows;
+        // the memory says the user left 103, so 103 goes above 102.
+        let a = AccordionTestWindow(id: 101, pid: 1, frame: .zero) { [weak self] in self?.log.append($0) }
+        let b1 = AccordionTestWindow(id: 102, pid: 2, frame: .zero) { [weak self] in self?.log.append($0) }
+        let b2 = AccordionTestWindow(id: 103, pid: 2, frame: .zero) { [weak self] in self?.log.append($0) }
+        engine.accordionFrontOverride = 101
+        engine.accordionAppFrontWindowID = { pid in pid == 2 ? 103 : nil }
+
+        engine.tileWindows([a, b1, b2], onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(raises(), ["raise:102", "raise:103", "raise:101"])
+    }
+
+    func testARelayoutSkipsWindowsAlreadyInPlace() {
+        engine.accordionFrontOverride = 102
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertEqual(frames().count, 3)
+        log = []
+
+        // same front, same rects: the stack is re-raised but nothing moves
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(raises().count, 3)
+        XCTAssertEqual(frames(), [], "windows already at their frame are not rewritten")
+    }
+
     func testTheOverrideBeatsTheFocusLookup() {
         engine.accordionFocusedWindowID = { 101 }
         engine.accordionFrontOverride = 103
@@ -140,10 +168,10 @@ private final class AccordionTestScreen: NSScreen {
 private final class AccordionTestWindow: HyprWindow {
     private var storedFrame: CGRect
     private let record: (String) -> Void
-    init(id: CGWindowID, frame: CGRect, record: @escaping (String) -> Void) {
+    init(id: CGWindowID, pid: pid_t = 9877, frame: CGRect, record: @escaping (String) -> Void) {
         storedFrame = frame
         self.record = record
-        super.init(element: AXUIElementCreateApplication(9877), windowID: id, ownerPID: 9877)
+        super.init(element: AXUIElementCreateApplication(pid), windowID: id, ownerPID: pid)
     }
     override var isFullscreen: Bool { false }
     override var isSizeSettable: Bool? { true }
