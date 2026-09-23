@@ -111,6 +111,28 @@ final class AccordionSwitchOrderTests: XCTestCase {
         XCTAssertEqual(frames().count, 3, "frames are still written for parked windows")
     }
 
+    func testWithoutStripsOnlyTheFrontIsRaised() {
+        engine.accordionOverlap = 0
+        engine.accordionFrontOverride = 102
+        // background order is scrambled relative to far-to-near, but no
+        // strip shows it — only the front matters, and it is not on top
+        engine.accordionCurrentZOrder = { _ in [103, 102, 101] }
+
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(raises(), ["raise:102"])
+    }
+
+    func testWithoutStripsAFrontAlreadyOnTopRaisesNothing() {
+        engine.accordionOverlap = 0
+        engine.accordionFrontOverride = 102
+        engine.accordionCurrentZOrder = { _ in [103, 101, 102] }
+
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(raises(), [])
+    }
+
     func testTheOverrideBeatsTheFocusLookup() {
         engine.accordionFocusedWindowID = { 101 }
         engine.accordionFrontOverride = 103

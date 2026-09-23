@@ -357,9 +357,17 @@ class TilingEngine {
         // out of place: every raise of a background tile covers the front
         // window until the front is raised again.
         let desired = raiseOrder.map(\.windowID)
+        let peek = AccordionLayout.clampedOverlap(accordionOverlap, innerWidth: outerPadding.inset(rect).width)
         let toRaise: Set<CGWindowID>
         if let current = accordionCurrentZOrder(Set(desired)) {
-            toRaise = Set(AccordionLayout.minimalRaises(current: current, desired: desired))
+            if peek == 0, let front = desired.last, current.contains(front) {
+                // no strips: the order beneath the front is invisible, and
+                // each app keeps its own key window on top by itself. only
+                // the front has to be on top — one raise at most.
+                toRaise = current.last == front ? [] : [front]
+            } else {
+                toRaise = Set(AccordionLayout.minimalRaises(current: current, desired: desired))
+            }
         } else {
             toRaise = Set(desired)
         }
