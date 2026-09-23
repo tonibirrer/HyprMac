@@ -101,6 +101,7 @@ class HotkeyManager {
 
     static func actionIsAvailable(_ action: Action, tilingEnabled: Bool) -> Bool {
         tilingEnabled || action == .toggleTiling || action == .showKeybinds
+            || action == .showWorkspaceOverview
     }
 
     static func shouldDispatchAction(
@@ -109,7 +110,7 @@ class HotkeyManager {
         isRepeat: Bool
     ) -> Bool {
         actionIsAvailable(action, tilingEnabled: tilingEnabled)
-            && !(action == .toggleTiling && isRepeat)
+            && !((action == .toggleTiling || action == .moveToNextEmptyWorkspace) && isRepeat)
     }
 
     /// Switch the physical key acting as the Hypr modifier. Resets any

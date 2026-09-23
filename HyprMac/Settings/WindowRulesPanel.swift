@@ -47,7 +47,7 @@ struct WindowRulesPanel: View {
             Spacer()
             Picker("", selection: binding(for: rule.bundleID, keyPath: \.workspace)) {
                 Text("—").tag(0)
-                ForEach(1...9, id: \.self) { Text("\($0)").tag($0) }
+                ForEach(Constants.workspaceRange, id: \.self) { Text("\($0)").tag($0) }
             }
             .labelsHidden()
             .frame(width: 56)

@@ -38,6 +38,7 @@ class WindowManager {
     let mouseTracker = MouseTrackingManager()
     let dragManager = DragManager()
     let keybindOverlay = KeybindOverlayController()
+    let workspaceOverview = WorkspaceOverviewController()
 
     private(set) var workspaceManager: WorkspaceManager!
     private(set) var tilingEngine: TilingEngine!
@@ -279,9 +280,28 @@ class WindowManager {
         self.workspaceOrchestrator.screenUnderCursor = { [weak self] in self?.screenUnderCursor() ?? NSScreen.main! }
         self.workspaceOrchestrator.currentFocusedWindow = { [weak self] in self?.currentFocusedWindow() }
         self.workspaceOrchestrator.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
+        self.workspaceOrchestrator.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         self.workspaceOrchestrator.tileAllVisibleSpaces = { [weak self] in self?.tileAllVisibleSpaces() }
         self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
             self?.animatedRetile(prepare: prepare, completion: completion)
+        }
+        self.workspaceOrchestrator.onDidSwitch = { [weak self] workspace, screen in
+            self?.updateMenuBarState()
+            self?.workspaceOverview.showSwitchHUD(workspace: workspace, screen: screen)
+        }
+        self.workspaceOrchestrator.excludedBundleIDs = { [weak self] in
+            Set(self?.config.excludedBundleIDs ?? [])
+        }
+        self.workspaceOrchestrator.isScratchpadWindow = { [weak self] id in
+            self?.scratchpad.contains(id) ?? false
+        }
+        self.workspaceOverview.onSelectWorkspace = { [weak self] workspace in
+            guard let self, self.config.enabled else { return }
+            self.handleAction(.switchWorkspace(workspace))
+        }
+        self.workspaceOverview.onSelectWindow = { [weak self] workspace, windowID in
+            guard let self, self.config.enabled else { return }
+            self.workspaceOrchestrator.switchWorkspace(workspace, preferredWindowID: windowID)
         }
         self.scratchpad = ScratchpadController(
             workspaceManager: workspaceManager,
@@ -330,7 +350,7 @@ class WindowManager {
                 self.config.enabled.toggle()
                 return
             }
-            guard self.config.enabled || action == .showKeybinds else { return }
+            guard self.config.enabled || action == .showKeybinds || action == .showWorkspaceOverview else { return }
             self.suppressions.suppress("mouse-focus", for: 0.15)
             self.handleAction(action)
         }
@@ -963,7 +983,7 @@ class WindowManager {
         var homes: [Int: String] = [:]
         var trees: [Int: [CGWindowID]] = [:]
         var visible: Set<Int> = []
-        for ws in 1...workspaceManager.workspaceCount {
+        for ws in Constants.workspaceRange {
             if workspaceManager.isWorkspaceVisible(ws) { visible.insert(ws) }
             guard let home = workspaceManager.homeScreenForWorkspace(ws) else { continue }
             homes[ws] = home.localizedName
@@ -1734,6 +1754,11 @@ class WindowManager {
     /// callback site stays terse and so subclasses or tests can intercept
     /// in one place. Also called from the menu bar (cheat-sheet row).
     func handleAction(_ action: Action) {
+        if action == .showWorkspaceOverview {
+            let overview = workspaceOverviewSnapshots()
+            workspaceOverview.toggle(snapshots: overview.workspaces, scratchpad: overview.scratchpad)
+            return
+        }
         if Self.cancelsPendingRecovery(action) {
             admissionRecovery.cancelAll(reason: "later press")
         }
@@ -1743,7 +1768,8 @@ class WindowManager {
         // drop them for the settle window (a few seconds around wake).
         if displayTransitionPending {
             switch action {
-            case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace:
+            case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
+                 .moveToNextEmptyWorkspace:
                 hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
                 return
             default:
@@ -1768,6 +1794,9 @@ class WindowManager {
                 }
             case .switchWorkspace, .cycleWorkspace:
                 scratchpad.hide(reason: .workspaceAction)
+            case .moveToNextEmptyWorkspace:
+                NSSound.beep()
+                return
             case .toggleFloating:
                 // Hypr+T on a summoned member toggles it tiled<->floating
                 // within the layer (membership stays sticky — only Shift+S /
@@ -1811,12 +1840,12 @@ class WindowManager {
         stateCache.floatingWindowIDs.contains { workspaceManager.isWindowVisible($0) }
     }
 
-    /// Workspaces (1–9) that hold at least one live, non-hidden window.
+    /// Regular workspaces that hold at least one live, non-hidden window.
     /// Hidden windows (minimized or closed apps still running) are excluded
     /// so the menu bar grid does not show ghost occupancy.
     func occupiedWorkspaces() -> Set<Int> {
         var result = Set<Int>()
-        for ws in 1...9 {
+        for ws in Constants.workspaceRange {
             // exclude hidden windows (minimized/closed but app still running)
             let live = workspaceManager.windowIDs(onWorkspace: ws).subtracting(stateCache.hiddenWindowIDs)
             if !live.isEmpty {
@@ -1964,12 +1993,13 @@ class WindowManager {
             stateCache.knownWindowIDs.insert(w.windowID)
             stateCache.windowOwners[w.windowID] = w.ownerPID
 
-            // auto-float excluded apps
-            if floatingController.shouldAutoFloat(w, excludedBundleIDs: Set(config.excludedBundleIDs))
-                && !stateCache.floatingWindowIDs.contains(w.windowID) {
+            // auto-float excluded apps and explicitly fixed-size windows
+            if let reason = floatingController.autoFloatReason(
+                w, excludedBundleIDs: Set(config.excludedBundleIDs)
+            ), !stateCache.floatingWindowIDs.contains(w.windowID) {
                 stateCache.floatingWindowIDs.insert(w.windowID)
                 w.isFloating = true
-                hyprLog(.debug, .lifecycle, "auto-float excluded app: '\(w.title ?? "?")'")
+                hyprLog(.debug, .lifecycle, "auto-float \(reason.rawValue): '\(w.title ?? "?")'")
             }
 
             // auto-float windows on disabled monitors — don't assign workspace
@@ -2515,7 +2545,7 @@ class WindowManager {
     static func cancelsPendingRecovery(_ action: Action) -> Bool {
         switch action {
         case .switchWorkspace, .cycleWorkspace, .focusDirection, .focusFloating,
-             .focusMenuBar, .showKeybinds, .launchApp:
+             .focusMenuBar, .showKeybinds, .showWorkspaceOverview, .launchApp:
             return false
         default: return true
         }
@@ -2741,13 +2771,22 @@ class WindowManager {
         let floating = workspacesWithFloatingWindows()
         let labelText = MenuBarPresentation.workspaceGlyphs(
             active: active, occupied: occupied, floating: floating)
-        let monitors = workspaceManager.enabledScreensLeftToRight().enumerated().map {
+        let enabledScreens = workspaceManager.enabledScreensLeftToRight()
+        let monitors = enabledScreens.enumerated().map {
             index, screen in
-                MenuBarMonitorSnapshot(
+                let anchored = workspaceManager.workspacesAnchoredTo(screen)
+                return MenuBarMonitorSnapshot(
                     id: index,
                     name: screen.localizedName,
                     currentWorkspace: workspaceManager.workspaceForScreen(screen),
-                    isPortrait: screen.frame.height > screen.frame.width)
+                    isPortrait: screen.frame.height > screen.frame.width,
+                    workspaces: anchored.map { workspace in
+                        MenuBarWorkspaceBadge(
+                            id: workspace,
+                            isActive: active.contains(workspace),
+                            isOccupied: occupied.contains(workspace),
+                            hasFloatingWindows: floating.contains(workspace))
+                    })
             }
         let scratchpadCount = scratchpad.members.count
         let scratchpadVisible = scratchpad.isVisible
@@ -2762,11 +2801,70 @@ class WindowManager {
         }
     }
 
+    private func workspaceOverviewSnapshots() -> (workspaces: [WorkspaceSnapshot], scratchpad: [WorkspaceWindowSnapshot]) {
+        let active = Set(activeWorkspaces())
+        let currentWindows = Dictionary(accessibility.getAllWindows().map { ($0.windowID, $0) },
+                                        uniquingKeysWith: { first, _ in first })
+        let currentWindowIDs = Set(currentWindows.keys)
+        let knownOrCachedWindowIDs = stateCache.knownWindowIDs.union(stateCache.cachedWindows.keys)
+        let hiddenWindowIDs = stateCache.hiddenWindowIDs
+        let reservedHidden = stateCache.reservedHiddenWindowIDs
+        let intendedFrames = tilingEngine.intendedTileRects()
+
+        func snapshot(_ id: CGWindowID, screenFrame: CGRect) -> WorkspaceWindowSnapshot {
+            let window = currentWindows[id] ?? stateCache.cachedWindows[id]
+            let owner = window?.ownerPID ?? stateCache.windowOwners[id]
+            let app = owner.flatMap { NSRunningApplication(processIdentifier: $0) }
+            let bundleID = window?.bundleID ?? app?.bundleIdentifier
+            let appName = app?.localizedName ?? bundleID ?? "Unknown app"
+            let isFloating = stateCache.floatingWindowIDs.contains(id)
+            let frame = isFloating
+                ? (workspaceManager.savedFloatingFrame(for: id) ?? window?.cachedFrame ?? stateCache.originalFrames[id])
+                : (intendedFrames[id] ?? stateCache.tiledPositions[id] ?? window?.cachedFrame ?? stateCache.originalFrames[id])
+            return WorkspaceWindowSnapshot(
+                id: id,
+                title: window?.title ?? appName,
+                bundleID: bundleID,
+                appName: appName,
+                normalizedFrame: WorkspaceOverviewPresentation.normalized(frame, in: screenFrame),
+                isFloating: isFloating)
+        }
+
+        let workspaces = Constants.workspaceRange.compactMap { workspace -> WorkspaceSnapshot? in
+            guard let screen = workspaceManager.homeScreenForWorkspace(workspace) else { return nil }
+            let screenFrame = displayManager.cgRect(for: screen)
+            let visibleIDs = WorkspaceOverviewPresentation.displayedWindowIDs(
+                assigned: workspaceManager.windowIDs(onWorkspace: workspace),
+                current: currentWindowIDs,
+                knownOrCached: knownOrCachedWindowIDs,
+                hidden: hiddenWindowIDs,
+                reservedHidden: reservedHidden)
+            let windows = visibleIDs.map {
+                snapshot($0, screenFrame: screenFrame)
+            }
+            return WorkspaceSnapshot(
+                id: workspace,
+                monitorID: workspaceManager.screenID(for: screen),
+                monitorName: screen.localizedName,
+                isActive: active.contains(workspace),
+                windows: windows)
+        }
+        let scratchFrame = displayManager.screens.first.map { displayManager.cgRect(for: $0) } ?? .zero
+        let scratchIDs = WorkspaceOverviewPresentation.displayedWindowIDs(
+            assigned: scratchpad.members,
+            current: currentWindowIDs,
+            knownOrCached: knownOrCachedWindowIDs,
+            hidden: hiddenWindowIDs,
+            reservedHidden: reservedHidden)
+        let scratchWindows = scratchIDs.map { snapshot($0, screenFrame: scratchFrame) }
+        return (workspaces, scratchWindows)
+    }
+
     /// Workspaces that hold at least one live floating window.
     private func workspacesWithFloatingWindows() -> Set<Int> {
         var result = Set<Int>()
         let liveFloating = stateCache.floatingWindowIDs.subtracting(stateCache.hiddenWindowIDs)
-        for workspace in 1...9 {
+        for workspace in Constants.workspaceRange {
             if !workspaceManager.windowIDs(onWorkspace: workspace).isDisjoint(with: liveFloating) {
                 result.insert(workspace)
             }
@@ -3591,7 +3689,7 @@ private extension WindowManager {
                     windowIDs: localIDs, framesByID: frames, focusedWindowID: focusedID)
             )
         }
-        let reserved = Dictionary(uniqueKeysWithValues: (1...workspaceManager.workspaceCount).map { workspace in
+        let reserved = Dictionary(uniqueKeysWithValues: Constants.workspaceRange.map { workspace in
             (workspace, workspaceManager.windowIDs(onWorkspace: workspace)
                 .intersection(stateCache.reservedHiddenWindowIDs)
                 .subtracting(stateCache.floatingWindowIDs)

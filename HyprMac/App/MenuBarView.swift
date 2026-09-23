@@ -86,19 +86,31 @@ struct MenuBarView: View {
     }
 
     private func monitorRow(_ monitor: MenuBarMonitorSnapshot) -> some View {
-        HStack(spacing: HyprSpacing.sm) {
-            Image(systemName: monitor.isPortrait ? "rectangle.portrait" : "display")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.hyprTextSecondary)
-            Text(monitor.name)
-                .font(.hyprBody)
-                .foregroundStyle(Color.hyprTextSecondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: HyprSpacing.sm)
-            Text("Workspace \(monitor.currentWorkspace)")
-                .font(.hyprMonoSm)
-                .foregroundStyle(Color.hyprCyan)
+        VStack(alignment: .leading, spacing: HyprSpacing.sm) {
+            HStack(spacing: HyprSpacing.sm) {
+                Image(systemName: monitor.isPortrait ? "rectangle.portrait" : "display")
+                    .font(.system(size: 11))
+                Text(monitor.name).font(.hyprBody).lineLimit(1).truncationMode(.middle)
+                Spacer()
+            }.foregroundStyle(Color.hyprTextSecondary)
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.fixed(25), spacing: 6), count: 5),
+                alignment: .leading,
+                spacing: 6
+            ) {
+                ForEach(monitor.workspaces) { workspace in
+                    Button {
+                        guard config.enabled else { return }
+                        appDelegate.windowManager?.handleAction(.switchWorkspace(workspace.id))
+                    } label: {
+                        Text("\(workspace.id)").font(.hyprMonoSm)
+                            .frame(width: 25, height: 23)
+                            .background(RoundedRectangle(cornerRadius: 4).fill(workspace.isActive ? Color.hyprCyan : (workspace.isOccupied ? Color.hyprMagenta.opacity(0.24) : Color.white.opacity(0.06))))
+                            .foregroundStyle(workspace.isActive ? Color.hyprBackground : Color.hyprTextPrimary)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? Color.hyprMagenta : Color.clear, lineWidth: 1.5))
+                    }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to workspace \(workspace.id)")
+                }
+            }
         }
         .padding(.horizontal, HyprSpacing.md)
         .padding(.vertical, HyprSpacing.sm)
@@ -114,6 +126,15 @@ struct MenuBarView: View {
                 HStack(spacing: 3) {
                     KeyChip("HYPR")
                     KeyChip("K")
+                }
+            }
+            MenuBarRow("Workspace overview", icon: "rectangle.grid.3x2") {
+                appDelegate.windowManager?.handleAction(.showWorkspaceOverview)
+            } trailing: {
+                if let binding = config.keybinds.first(where: { $0.action == .showWorkspaceOverview }) {
+                    HStack(spacing: 3) {
+                        ForEach(binding.badgeLabels(), id: \.self) { KeyChip($0) }
+                    }
                 }
             }
             MenuBarRow("Settings…", icon: "gearshape") {
@@ -229,18 +250,41 @@ struct MenuBarMonitorSnapshot: Equatable, Identifiable {
     let name: String
     let currentWorkspace: Int
     let isPortrait: Bool
+    let workspaces: [MenuBarWorkspaceBadge]
+
+    init(id: Int, name: String, currentWorkspace: Int, isPortrait: Bool,
+         workspaces: [MenuBarWorkspaceBadge] = []) {
+        self.id = id
+        self.name = name
+        self.currentWorkspace = currentWorkspace
+        self.isPortrait = isPortrait
+        self.workspaces = workspaces
+    }
+}
+
+struct MenuBarWorkspaceBadge: Equatable, Identifiable {
+    let id: Int
+    let isActive: Bool
+    let isOccupied: Bool
+    let hasFloatingWindows: Bool
 }
 
 enum MenuBarPresentation {
+    static func workspaceBadgeRows(_ badges: [MenuBarWorkspaceBadge]) -> [[MenuBarWorkspaceBadge]] {
+        stride(from: 0, to: badges.count, by: 5).map { start in
+            Array(badges[start..<min(start + 5, badges.count)])
+        }
+    }
+
     static func workspaceGlyphs(active: Set<Int>, occupied: Set<Int>,
                                 floating: Set<Int>) -> String {
         let lastWorkspace = max(active.max() ?? 1, occupied.max() ?? 1)
         return (1...lastWorkspace).map { workspace in
             if active.contains(workspace) {
-                return floating.contains(workspace) ? "◆" : "●"
+                return floating.contains(workspace) ? "◆" : "■"
             }
             if occupied.contains(workspace) {
-                return floating.contains(workspace) ? "◇" : "○"
+                return floating.contains(workspace) ? "◇" : "□"
             }
             return "·"
         }.joined(separator: " ")

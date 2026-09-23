@@ -51,6 +51,9 @@ class UserConfig: ObservableObject {
     @Published var showMenuBarIndicator: Bool {
         didSet { persistRuntimeChange() }
     }
+    @Published var overlayAppearance: OverlayAppearance {
+        didSet { persistRuntimeChange() }
+    }
     @Published var maxSplitsPerMonitor: [String: Int] {
         didSet { persistRuntimeChange() }
     }
@@ -238,6 +241,7 @@ class UserConfig: ObservableObject {
             self.hyprKey = saved.hyprKey ?? UserConfigDefaults.hyprKey
             self.excludedBundleIDs = Set(saved.excludedBundleIDs ?? Self.defaultExcludedBundleIDs)
             self.showMenuBarIndicator = saved.showMenuBarIndicator ?? UserConfigDefaults.showMenuBarIndicator
+            self.overlayAppearance = saved.overlayAppearance ?? UserConfigDefaults.overlayAppearance
             self.showFocusBorder = saved.showFocusBorder ?? UserConfigDefaults.showFocusBorder
             self.focusBorderColorHex = saved.focusBorderColorHex
             self.floatingBorderColorHex = saved.floatingBorderColorHex
@@ -269,6 +273,7 @@ class UserConfig: ObservableObject {
             self.hyprKey = UserConfigDefaults.hyprKey
             self.excludedBundleIDs = Set(Self.defaultExcludedBundleIDs)
             self.showMenuBarIndicator = UserConfigDefaults.showMenuBarIndicator
+            self.overlayAppearance = UserConfigDefaults.overlayAppearance
             self.showFocusBorder = UserConfigDefaults.showFocusBorder
             self.focusBorderColorHex = nil
             self.floatingBorderColorHex = nil
@@ -323,7 +328,8 @@ class UserConfig: ObservableObject {
     // would silently shadow (or be shadowed by) the user's, and neither is
     // discoverable. the user can bind the new action manually in Settings.
     static func mergeNewDefaults(saved: [Keybind]) -> [Keybind] {
-        let saved = ConfigMigration.migrateToggleFloating(saved: saved)
+        let toggleMigrated = ConfigMigration.migrateToggleFloating(saved: saved)
+        let saved = ConfigMigration.migrateFocusFloating(saved: toggleMigrated)
         let savedActions = Set(saved.map { "\($0.action)" })
         let takenChords = Set(saved.map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
         var merged = saved
@@ -406,6 +412,7 @@ class UserConfig: ObservableObject {
             hyprKey: hyprKey,
             excludedBundleIDs: Array(excludedBundleIDs),
             showMenuBarIndicator: showMenuBarIndicator,
+            overlayAppearance: overlayAppearance,
             maxSplitsPerMonitor: nil,
             disabledMonitors: nil,
             showFocusBorder: showFocusBorder,
@@ -440,6 +447,7 @@ class UserConfig: ObservableObject {
         hyprKey = UserConfigDefaults.hyprKey
         excludedBundleIDs = Set(Self.defaultExcludedBundleIDs)
         showMenuBarIndicator = UserConfigDefaults.showMenuBarIndicator
+        overlayAppearance = UserConfigDefaults.overlayAppearance
         maxSplitsPerMonitor = [:]
         disabledMonitors = []
         linkedMonitors = UserConfigDefaults.linkedMonitors
@@ -527,6 +535,7 @@ class UserConfig: ObservableObject {
         hyprKey = saved.hyprKey ?? UserConfigDefaults.hyprKey
         excludedBundleIDs = Set(saved.excludedBundleIDs ?? Self.defaultExcludedBundleIDs)
         showMenuBarIndicator = saved.showMenuBarIndicator ?? UserConfigDefaults.showMenuBarIndicator
+        overlayAppearance = saved.overlayAppearance ?? UserConfigDefaults.overlayAppearance
         showFocusBorder = saved.showFocusBorder ?? UserConfigDefaults.showFocusBorder
         focusBorderColorHex = saved.focusBorderColorHex
         floatingBorderColorHex = saved.floatingBorderColorHex
@@ -580,6 +589,7 @@ extension SavedConfig {
             hyprKey: UserConfigDefaults.hyprKey,
             excludedBundleIDs: nil,
             showMenuBarIndicator: UserConfigDefaults.showMenuBarIndicator,
+            overlayAppearance: UserConfigDefaults.overlayAppearance,
             maxSplitsPerMonitor: nil, disabledMonitors: nil,
             showFocusBorder: UserConfigDefaults.showFocusBorder,
             focusBorderColorHex: nil, floatingBorderColorHex: nil,

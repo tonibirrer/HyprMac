@@ -30,9 +30,13 @@ enum Action: Equatable {
     case toggleFloating
     case toggleSplit
     case showKeybinds
+    case showWorkspaceOverview
     case launchApp(bundleID: String)
     case focusMenuBar
     case focusFloating
+    /// Move the focused window to the next empty workspace anchored to
+    /// its current display, switch there, and tile it as the sole window.
+    case moveToNextEmptyWorkspace
     case closeWindow
     /// Cycle through occupied workspaces on the current monitor.
     /// `+1` advances to the next occupied workspace; `-1` rewinds.
@@ -77,9 +81,11 @@ extension Action: Codable {
         case toggleFloating
         case toggleSplit
         case showKeybinds
+        case showWorkspaceOverview
         case launchApp
         case focusMenuBar
         case focusFloating
+        case moveToNextEmptyWorkspace
         case closeWindow
         case cycleWorkspace
         case toggleScratchpad
@@ -139,8 +145,10 @@ extension Action: Codable {
         case .toggleFloating: self = .toggleFloating
         case .toggleSplit:    self = .toggleSplit
         case .showKeybinds:   self = .showKeybinds
+        case .showWorkspaceOverview: self = .showWorkspaceOverview
         case .focusMenuBar:   self = .focusMenuBar
         case .focusFloating:  self = .focusFloating
+        case .moveToNextEmptyWorkspace: self = .moveToNextEmptyWorkspace
         case .closeWindow:    self = .closeWindow
         case .toggleScratchpad: self = .toggleScratchpad
         case .moveToScratchpad: self = .moveToScratchpad
@@ -192,10 +200,14 @@ extension Action: Codable {
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleSplit)
         case .showKeybinds:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .showKeybinds)
+        case .showWorkspaceOverview:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .showWorkspaceOverview)
         case .focusMenuBar:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .focusMenuBar)
         case .focusFloating:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .focusFloating)
+        case .moveToNextEmptyWorkspace:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToNextEmptyWorkspace)
         case .closeWindow:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .closeWindow)
         case .toggleScratchpad:

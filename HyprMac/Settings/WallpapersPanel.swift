@@ -15,8 +15,8 @@ struct WallpapersPanel: View {
     var body: some View {
         HyprPanel("Workspaces",
                   footer: "The accent color tints the focus border on that workspace and is exposed over IPC for status bars. The wallpaper swaps in when the workspace is shown; workspaces without one keep the current desktop image. \"Sticky\" opts the workspace into showing sticky apps from Window Rules — they follow you between opted-in workspaces on their monitor.") {
-            ForEach(1...9, id: \.self) { ws in
-                wallpaperRow(ws, isLast: ws == 9)
+            ForEach(Constants.workspaceRange, id: \.self) { ws in
+                wallpaperRow(ws, isLast: ws == Constants.workspaceCount)
             }
         }
     }
