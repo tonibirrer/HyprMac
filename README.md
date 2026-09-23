@@ -58,9 +58,11 @@ macOS doesn't ship with a tiling window manager. Third-party options either requ
 ### Homebrew (recommended)
 
 ```sh
-brew tap zacharytgray/hyprmac
-brew install --cask hyprmac
+brew trust --cask zacharytgray/hyprmac/hyprmac
+brew install --cask zacharytgray/hyprmac/hyprmac
 ```
+
+Homebrew refuses to load casks from third-party taps until you trust them. The first line trusts only the HyprMac cask, which also lets `brew upgrade --cask hyprmac` work later.
 
 ### Manual Download
 
@@ -90,6 +92,8 @@ All keybinds are configurable in Settings (menubar icon → Settings → Keybind
 Toggle Float uses **Hypr+T**, without Shift. On startup and config reload, an exact legacy Hypr+Shift+T Toggle Float binding moves to Hypr+T only if the new chord is free and there is a single, unambiguous Toggle Float binding. Customized bindings and occupied chords stay unchanged. The migrated value is written on the next normal settings save. A deliberately chosen binding identical to the old default cannot be distinguished from that default.
 
 Cycle Floating now uses **Hypr+Shift+T**. After the Toggle Float migration, an unambiguous old Hypr+F Cycle Floating binding moves to Shift+T only if that chord is free and the new dedicated-workspace action has not already been configured. Hypr+F then receives the new action. Custom or conflicting bindings stay unchanged; add the new action in Settings when its default chord is occupied. Hypr+0 and Hypr+Shift+0 are added only when their actions are missing and their chords are free. Workspace 10 is always stored as 10; internal workspace 0 remains the scratchpad.
+
+Settings → Keys → Add → Command… binds a chord to any program or script. It runs directly, not through a shell, so pipes and redirects are passed along as plain arguments — put those in a script and point the keybind at it.
 
 The physical Hypr key is configurable in Settings → General. Options include Caps Lock, Tab, backtick, backslash, F13-F20, and left/right variants of Shift, Control, Option, and Command.
 

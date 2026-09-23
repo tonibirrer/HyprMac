@@ -3,21 +3,16 @@ import XCTest
 import Carbon
 
 final class WelcomeContentTests: XCTestCase {
-    func testWhatsNewDescribesThe013SeriesAndPatchFixes() {
+    func testWhatsNewDescribesOnlyThe0142Changes() {
         let features = WhatsNewFeatures.current
 
         XCTAssertEqual(features.map(\.title), [
-            "Ten Workspaces at a Glance",
-            "Settings, Rebuilt",
-            "A Dedicated Workspace Shortcut",
-            "Safer Tiling and Recovery"
+            "An Instant Workspace Indicator",
+            "A Cleaner Workspace Flash"
         ])
-        XCTAssertTrue(features[0].description.contains("2×5"))
-        XCTAssertTrue(features[0].description.contains("Workspace 10"))
-        XCTAssertTrue(features[2].description.contains("HYPR+F"))
-        XCTAssertTrue(features[2].description.contains("next empty workspace"))
-        XCTAssertTrue(features[3].description.contains("bounded retry"))
-        XCTAssertFalse(features.map(\.title).contains("Splits Survive Tab Switches"))
+        XCTAssertTrue(features[0].description.contains("the moment you press"))
+        XCTAssertTrue(features[1].description.contains("display name no longer appears"))
+        XCTAssertFalse(features.map(\.title).contains("Run a Command"))
         XCTAssertEqual(WelcomeContent.productURL.absoluteString, "https://hyprmac.app/")
     }
 
