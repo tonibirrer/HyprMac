@@ -197,6 +197,31 @@ final class AccordionLayoutTests: XCTestCase {
                        [2, 1, 3])
     }
 
+    // MARK: - minimal raises
+
+    func testNothingToRaiseWhenTheStackIsAlreadyInOrder() {
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [1, 2, 3, 4], desired: [1, 2, 3, 4]), [])
+    }
+
+    func testOnlyTheFrontIsRaisedWhenOnlyItIsOutOfPlace() {
+        // the front (4) sank below its neighbors; everything else is fine
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [4, 1, 2, 3], desired: [1, 2, 3, 4]), [4])
+    }
+
+    func testTheShortestSuffixIsRaised() {
+        // after a Dock click the app's tiles (2, 4) jumped above the others:
+        // 3 must go back above 2, then 4 last
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [1, 3, 2, 4], desired: [1, 2, 3, 4]), [3, 4])
+    }
+
+    func testForeignWindowsInTheCurrentOrderAreIgnored() {
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [9, 1, 8, 2, 3, 7], desired: [1, 2, 3]), [])
+    }
+
+    func testAWindowNotOnScreenForcesAFullRaise() {
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [1, 2], desired: [1, 2, 3]), [1, 2, 3])
+    }
+
     // MARK: - activation restore
 
     func testActivationRestorePrefersRememberedTileOfSameStack() {

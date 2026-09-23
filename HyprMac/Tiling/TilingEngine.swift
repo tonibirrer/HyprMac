@@ -290,6 +290,12 @@ class TilingEngine {
     /// on it directly — see `AccordionLayout.raiseOrder`.
     var accordionAppFrontWindowID: (pid_t) -> CGWindowID? = { _ in nil }
 
+    /// The current back-to-front z-order of the given windows as the
+    /// window server sees it (on-screen members only), or `nil` when
+    /// unknown. Lets a relayout raise only what is out of place — see
+    /// `AccordionLayout.minimalRaises`.
+    var accordionCurrentZOrder: (Set<CGWindowID>) -> [CGWindowID]? = { _ in nil }
+
     /// Public probe for the dispatcher's order-based navigation.
     func isAccordionActive(on screen: NSScreen) -> Bool { accordionActive(screen) }
 
@@ -347,8 +353,17 @@ class TilingEngine {
         // z-order first: after a workspace switch the windows are still
         // parked in the hide corner, where reordering them is invisible.
         // written after the frames, the stack would land in whatever order
-        // it was parked and re-sort in front of the user.
-        for w in raiseOrder { w.raise() }
+        // it was parked and re-sort in front of the user. and only what is
+        // out of place: every raise of a background tile covers the front
+        // window until the front is raised again.
+        let desired = raiseOrder.map(\.windowID)
+        let toRaise: Set<CGWindowID>
+        if let current = accordionCurrentZOrder(Set(desired)) {
+            toRaise = Set(AccordionLayout.minimalRaises(current: current, desired: desired))
+        } else {
+            toRaise = Set(desired)
+        }
+        for w in raiseOrder where toRaise.contains(w.windowID) { w.raise() }
         // presentation-only frames: written directly, outside the verified
         // sizing transaction. near-fullscreen rects cannot hit a minimum,
         // and a readback here would only fight the peek-strip overlaps.
@@ -365,7 +380,7 @@ class TilingEngine {
             w.setFrame(frame)
             written += 1
         }
-        hyprLog(.debug, .tiling, "accordion: \(order.count) windows, front=\(focusedID.map(String.init) ?? "first"), \(written) frames written")
+        hyprLog(.debug, .tiling, "accordion: \(order.count) windows, front=\(focusedID.map(String.init) ?? "first"), \(toRaise.count) raised, \(written) frames written")
     }
 
     /// Resolves a window's app sort priority (Hyprland-style window

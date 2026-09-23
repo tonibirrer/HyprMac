@@ -91,6 +91,26 @@ final class AccordionSwitchOrderTests: XCTestCase {
         XCTAssertEqual(frames(), [], "windows already at their frame are not rewritten")
     }
 
+    func testARelayoutRaisesOnlyWhatTheWindowServerHasOutOfPlace() {
+        engine.accordionFrontOverride = 102
+        // desired back-to-front is [101, 103, 102]; the server says 102 sank
+        engine.accordionCurrentZOrder = { _ in [102, 101, 103] }
+
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(raises(), ["raise:102"])
+    }
+
+    func testARelayoutRaisesNothingWhenTheStackIsAlreadyRight() {
+        engine.accordionFrontOverride = 102
+        engine.accordionCurrentZOrder = { _ in [101, 103, 102] }
+
+        engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(raises(), [])
+        XCTAssertEqual(frames().count, 3, "frames are still written for parked windows")
+    }
+
     func testTheOverrideBeatsTheFocusLookup() {
         engine.accordionFocusedWindowID = { 101 }
         engine.accordionFrontOverride = 103

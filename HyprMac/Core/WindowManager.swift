@@ -679,6 +679,18 @@ class WindowManager {
         tilingEngine.accordionAppFrontWindowID = { [weak self] pid in
             self?.lastFocusedWindowByApp[pid]
         }
+        // the window server's current order, so a relayout raises only the
+        // tiles that are out of place instead of re-stacking everything
+        // (each raise covers the front window until it is raised last)
+        tilingEngine.accordionCurrentZOrder = { ids in
+            guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID)
+                    as? [[String: Any]] else { return nil }
+            // front-to-back from the window server → back-to-front
+            return info.compactMap { entry -> CGWindowID? in
+                guard let n = entry[kCGWindowNumber as String] as? CGWindowID, ids.contains(n) else { return nil }
+                return n
+            }.reversed()
+        }
         // focus moves are layout changes on an accordion screen — the
         // stack re-shuffles around whichever window came to the front.
         focusController.onFocusChanged = { [weak self] id in

@@ -103,6 +103,31 @@ enum AccordionLayout {
         return result
     }
 
+    /// The windows `raiseOrder` actually has to raise, given the stack's
+    /// current back-to-front z-order.
+    ///
+    /// An AX raise puts a window on top of everything, so the only way to
+    /// reach `desired` is to raise some suffix of it, in order, and leave
+    /// the rest where it is. Every raise of a background tile covers the
+    /// front window until the front is raised again — with near-identical
+    /// rects that is a visible flash of the wrong tile — so the suffix is
+    /// the shortest one whose remainder is already in the desired order.
+    /// An empty result means the stack is already right. A window missing
+    /// from `current` (not on screen) forces a full re-raise.
+    static func minimalRaises(current: [CGWindowID], desired: [CGWindowID]) -> [CGWindowID] {
+        let onScreen = Set(current)
+        guard desired.allSatisfy({ onScreen.contains($0) }) else { return desired }
+        let members = Set(desired)
+        let stack = current.filter { members.contains($0) }
+        for j in stride(from: desired.count, through: 0, by: -1) {
+            let suffix = Set(desired[j...])
+            if stack.filter({ !suffix.contains($0) }) == Array(desired[..<j]) {
+                return Array(desired[j...])
+            }
+        }
+        return desired
+    }
+
     /// Deterministic hit test for the accordion stack.
     ///
     /// Frame containment is useless here — every window's rect overlaps
