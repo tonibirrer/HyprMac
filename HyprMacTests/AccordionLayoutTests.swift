@@ -153,6 +153,75 @@ final class AccordionLayoutTests: XCTestCase {
         XCTAssertEqual(AccordionLayout.raiseOrder(single, focusedID: 7).map { $0.windowID }, [7])
     }
 
+    // MARK: - per-app front tile
+
+    func testAppFrontTileIsRaisedAboveItsSiblingsOnly() {
+        // zen(1) in front; ghostty tiles 2,3,4 behind it, the user left 4.
+        // far-to-near would put 2 on top of ghostty's windows; with the
+        // memory, 4 goes right above ghostty's last other tile (2) and
+        // stays below the focused window.
+        let order = [makeWindow(id: 1, pid: 10), makeWindow(id: 2, pid: 20),
+                     makeWindow(id: 3, pid: 20), makeWindow(id: 4, pid: 20)]
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1, appFront: [20: 4]).map(\.windowID),
+                       [3, 2, 4, 1])
+    }
+
+    func testAppFrontTileDoesNotCrossOtherApps() {
+        // left of the focused window (5): ghostty 1, zen 2, ghostty 3, zen 4.
+        // ghostty's front (1) moves right above its sibling 3 and no further.
+        let order = [makeWindow(id: 1, pid: 20), makeWindow(id: 2, pid: 10),
+                     makeWindow(id: 3, pid: 20), makeWindow(id: 4, pid: 10), makeWindow(id: 5, pid: 30)]
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 5, appFront: [20: 1]).map(\.windowID),
+                       [2, 3, 1, 4, 5])
+    }
+
+    func testAppFrontIsANoOpWhenAlreadyOnTopOrFocusedOrUnknown() {
+        let order = [makeWindow(id: 1, pid: 10), makeWindow(id: 2, pid: 20),
+                     makeWindow(id: 3, pid: 20), makeWindow(id: 4, pid: 20)]
+        let plain = AccordionLayout.raiseOrder(order, focusedID: 1).map(\.windowID)
+        XCTAssertEqual(plain, [4, 3, 2, 1])
+        // 2 is already ghostty's topmost background tile
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1, appFront: [20: 2]).map(\.windowID), plain)
+        // the focused window is raised last regardless
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1, appFront: [10: 1]).map(\.windowID), plain)
+        // a memory pointing outside the stack, or at another app's window
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1, appFront: [20: 99]).map(\.windowID), plain)
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 1, appFront: [20: 1]).map(\.windowID), plain)
+    }
+
+    func testAppFrontWithFocusedWindowOfTheSameApp() {
+        // ghostty 3 focused, ghostty 1 remembered: 1 goes above sibling 2,
+        // the focused tile still last
+        let order = [makeWindow(id: 1, pid: 20), makeWindow(id: 2, pid: 20), makeWindow(id: 3, pid: 20)]
+        XCTAssertEqual(AccordionLayout.raiseOrder(order, focusedID: 3, appFront: [20: 1]).map(\.windowID),
+                       [2, 1, 3])
+    }
+
+    // MARK: - minimal raises
+
+    func testNothingToRaiseWhenTheStackIsAlreadyInOrder() {
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [1, 2, 3, 4], desired: [1, 2, 3, 4]), [])
+    }
+
+    func testOnlyTheFrontIsRaisedWhenOnlyItIsOutOfPlace() {
+        // the front (4) sank below its neighbors; everything else is fine
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [4, 1, 2, 3], desired: [1, 2, 3, 4]), [4])
+    }
+
+    func testTheShortestSuffixIsRaised() {
+        // after a Dock click the app's tiles (2, 4) jumped above the others:
+        // 3 must go back above 2, then 4 last
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [1, 3, 2, 4], desired: [1, 2, 3, 4]), [3, 4])
+    }
+
+    func testForeignWindowsInTheCurrentOrderAreIgnored() {
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [9, 1, 8, 2, 3, 7], desired: [1, 2, 3]), [])
+    }
+
+    func testAWindowNotOnScreenForcesAFullRaise() {
+        XCTAssertEqual(AccordionLayout.minimalRaises(current: [1, 2], desired: [1, 2, 3]), [1, 2, 3])
+    }
+
     // MARK: - activation restore
 
     func testActivationRestorePrefersRememberedTileOfSameStack() {

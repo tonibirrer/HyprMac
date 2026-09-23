@@ -66,14 +66,66 @@ enum AccordionLayout {
     /// stack likewise (count-1 … idx+1), and the focused window last.
     /// This also makes FFM correct for free: the CG topmost window under
     /// a peek strip is exactly the adjacent window in accordion order.
-    static func raiseOrder(_ order: [HyprWindow], focusedID: CGWindowID?) -> [HyprWindow] {
+    ///
+    /// `appFront` names, per app, the tile the user last focused there.
+    /// That tile is raised above the app's other background tiles: a
+    /// Cmd-Tab or Dock click makes the app's own topmost window key, and
+    /// far-to-near stacking would leave the app's *outermost* tile there
+    /// — the activation would flash that tile until the restore re-raised
+    /// the remembered one. Only the order within the app changes; the
+    /// tile lands right above the app's last other background tile, so
+    /// a strip shows the remembered tile only where it would otherwise
+    /// have shown a sibling of the same app.
+    static func raiseOrder(_ order: [HyprWindow], focusedID: CGWindowID?,
+                           appFront: [pid_t: CGWindowID] = [:]) -> [HyprWindow] {
         guard order.count > 1 else { return order }
         let idx = focusedIndex(order: order, focusedID: focusedID)
         var result: [HyprWindow] = []
         result.append(contentsOf: order[..<idx])
         result.append(contentsOf: order[(idx + 1)...].reversed())
         result.append(order[idx])
+        guard !appFront.isEmpty else { return result }
+
+        let focused = order[idx].windowID
+        for (pid, frontID) in appFront.sorted(by: { $0.key < $1.key }) {
+            guard frontID != focused,
+                  let from = result.firstIndex(where: { $0.windowID == frontID }),
+                  result[from].ownerPID == pid,
+                  let lastSibling = result.lastIndex(where: {
+                      $0.ownerPID == pid && $0.windowID != frontID && $0.windowID != focused
+                  }),
+                  lastSibling > from else { continue }
+            let window = result.remove(at: from)
+            // the sibling shifted down by one; inserting at its old index
+            // puts the front tile directly above it
+            result.insert(window, at: lastSibling)
+        }
         return result
+    }
+
+    /// The windows `raiseOrder` actually has to raise, given the stack's
+    /// current back-to-front z-order.
+    ///
+    /// An AX raise puts a window on top of everything, so the only way to
+    /// reach `desired` is to raise some suffix of it, in order, and leave
+    /// the rest where it is. Every raise of a background tile covers the
+    /// front window until the front is raised again — with near-identical
+    /// rects that is a visible flash of the wrong tile — so the suffix is
+    /// the shortest one whose remainder is already in the desired order.
+    /// An empty result means the stack is already right. A window missing
+    /// from `current` (not on screen) forces a full re-raise.
+    static func minimalRaises(current: [CGWindowID], desired: [CGWindowID]) -> [CGWindowID] {
+        let onScreen = Set(current)
+        guard desired.allSatisfy({ onScreen.contains($0) }) else { return desired }
+        let members = Set(desired)
+        let stack = current.filter { members.contains($0) }
+        for j in stride(from: desired.count, through: 0, by: -1) {
+            let suffix = Set(desired[j...])
+            if stack.filter({ !suffix.contains($0) }) == Array(desired[..<j]) {
+                return Array(desired[j...])
+            }
+        }
+        return desired
     }
 
     /// Deterministic hit test for the accordion stack.
@@ -111,13 +163,13 @@ enum AccordionLayout {
     /// The window to put focus on after the system activated an app and
     /// made `systemPick` its key window.
     ///
-    /// `raiseOrder` stacks each side far-to-near so the peek strips show
-    /// the adjacent neighbor. For an app with several tiles behind the
-    /// front window that leaves its *outermost* tile on top of its own
-    /// windows, and a Cmd-Tab / Dock activation lands there instead of on
-    /// the tile the user left. `remembered` is that tile (the app's last
-    /// focus intent); it wins when it and `systemPick` are both members
-    /// of `order` and differ. `nil` means keep the system's pick.
+    /// `raiseOrder` keeps each app's remembered tile on top of the app's
+    /// other background tiles (`appFront`), so a Cmd-Tab / Dock activation
+    /// normally lands there directly. This is the fallback for when it did
+    /// not — the app re-ordered its own windows, or the memory changed
+    /// after the last layout. `remembered` is the app's last focus
+    /// intent; it wins when it and `systemPick` are both members of
+    /// `order` and differ. `nil` means keep the system's pick.
     static func activationRestoreTarget(order: [HyprWindow],
                                         systemPick: CGWindowID,
                                         remembered: CGWindowID?) -> HyprWindow? {

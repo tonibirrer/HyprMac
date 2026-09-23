@@ -172,6 +172,7 @@
 		98D72FEBD5773242B4F199B7 /* PollingSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F440861EC1F33CEB326CB4 /* PollingSchedulerTests.swift */; };
 		9A2732DA57E004BBC2860133 /* CommandRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D8E6D4FE4C4E6D244C14D76 /* CommandRunner.swift */; };
 		9A7B1CB7BE53FAD102B90AE5 /* DebugLogFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92C350B5FCD0242E1993F822 /* DebugLogFileTests.swift */; };
+		9BC10CB51BD527531132C66D /* AccordionSwitchOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D95B9944F99340F7EF2DB762 /* AccordionSwitchOrderTests.swift */; };
 		9D51788040A2380139C79B56 /* AXFrameWriteBatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF9248FBC1729E7F502A6186 /* AXFrameWriteBatchTests.swift */; };
 		9D75A3D3BAA41C0012711D6D /* UserConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A029C0AE0E8E5DEE2416684 /* UserConfig.swift */; };
 		9DFD6E23049B6DEACBAC46F1 /* TiledDragEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8665ECFAEE8AA274A2CD6635 /* TiledDragEvent.swift */; };
@@ -436,6 +437,7 @@
 		D2B096217238208C5F5BCA3E /* ActionDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDispatcher.swift; sourceTree = "<group>"; };
 		D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindDecoderToleranceTests.swift; sourceTree = "<group>"; };
 		D8425DC47E2604936890FF01 /* TiledDriftMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDriftMonitor.swift; sourceTree = "<group>"; };
+		D95B9944F99340F7EF2DB762 /* AccordionSwitchOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccordionSwitchOrderTests.swift; sourceTree = "<group>"; };
 		DBF46F80BB7FBDB9600ADAF4 /* ActivationGestureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivationGestureTests.swift; sourceTree = "<group>"; };
 		DBF9449D559067A61BBA8394 /* BSPTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BSPTree.swift; sourceTree = "<group>"; };
 		DC08AAC03ABC15E772214598 /* ToggleSplitFallthroughRegressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToggleSplitFallthroughRegressionTests.swift; sourceTree = "<group>"; };
@@ -695,6 +697,7 @@
 			isa = PBXGroup;
 			children = (
 				D1BF4A13B8D8E5DDDD0DC479 /* AccordionLayoutTests.swift */,
+				D95B9944F99340F7EF2DB762 /* AccordionSwitchOrderTests.swift */,
 				9A583E7C1D53AE97EEFB1ADE /* ActivationGateTests.swift */,
 				DBF46F80BB7FBDB9600ADAF4 /* ActivationGestureTests.swift */,
 				DDD57690AD7669194DF8619B /* AdmissionRecoveryTests.swift */,
@@ -1172,6 +1175,7 @@
 				9D51788040A2380139C79B56 /* AXFrameWriteBatchTests.swift in Sources */,
 				9540D5E1BBF47D714DEE6CD8 /* AXNotificationServiceTests.swift in Sources */,
 				2FD561E33DCC0C12765F24AB /* AccordionLayoutTests.swift in Sources */,
+				9BC10CB51BD527531132C66D /* AccordionSwitchOrderTests.swift in Sources */,
 				FEB773771BE1F8545E28F580 /* ActivationGateTests.swift in Sources */,
 				66C9487756FAB6109F650349 /* ActivationGestureTests.swift in Sources */,
 				5DF30CD6FFA3E20340A090F5 /* AdmissionRecoveryTests.swift in Sources */,

@@ -26,4 +26,12 @@ extension CGRect {
         guard area > 0 else { return false }
         return (overlap.width * overlap.height) / area > threshold
     }
+
+    /// `true` when every edge of this rect is within `tolerance` points
+    /// of the corresponding edge of `other` — the "is the window already
+    /// where the layout wants it" test that lets a relayout skip the write.
+    func approximatelyEquals(_ other: CGRect, tolerance: CGFloat) -> Bool {
+        abs(minX - other.minX) <= tolerance && abs(minY - other.minY) <= tolerance
+            && abs(maxX - other.maxX) <= tolerance && abs(maxY - other.maxY) <= tolerance
+    }
 }

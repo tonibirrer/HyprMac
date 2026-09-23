@@ -322,7 +322,7 @@ final class WorkspaceOrchestrator {
         // always has — the flash is the answer to "which workspace am I on".
         onWillSwitch(number, workspaceManager.homeScreenForWorkspace(number) ?? currentScreen)
 
-        let allWindows = accessibility.getAllWindows()
+        let allWindows = self.allWindows()
         let result = workspaceManager.switchWorkspace(number, cursorScreen: currentScreen)
 
         if result.alreadyVisible {
@@ -396,17 +396,14 @@ final class WorkspaceOrchestrator {
             }
         }
 
-        // retile immediately — no delay between hide and show
-        tileAllVisibleSpaces()
-
-        // focus the window the user last had focused on the new workspace
-        // (so a Cmd-Tab away and back — or Hypr+N — lands on the tile they
-        // left, which in accordion mode is also the front slot). Without a
-        // usable memory: best tiled window, then any floating window, and
-        // only warp+hide if truly empty. the workspace's own windows win
-        // over carried sticky ones — the user switched here for this
-        // workspace's content, and the sticky app was already in front of
-        // them.
+        // pick the focus target BEFORE the retile: the window the user last
+        // had focused on the new workspace (so a Cmd-Tab away and back — or
+        // Hypr+N — lands on the tile they left, which in accordion mode is
+        // also the front slot). Without a usable memory: best tiled window,
+        // then any floating window, and only warp+hide if truly empty. the
+        // workspace's own windows win over carried sticky ones — the user
+        // switched here for this workspace's content, and the sticky app
+        // was already in front of them.
         let newWorkspaceWindows = allWindows.filter { toShow.contains($0.windowID) }
         let own = newWorkspaceWindows.filter { !carried.contains($0.windowID) }
         // an explicit target (overview pick, dedicated-workspace move) wins
@@ -416,7 +413,19 @@ final class WorkspaceOrchestrator {
             ?? own.first { $0.windowID == remembered }
         let tiled = own.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
             ?? newWorkspaceWindows.first { !stateCache.floatingWindowIDs.contains($0.windowID) }
-        if let best = recalled ?? tiled ?? own.first ?? newWorkspaceWindows.first {
+        let best = recalled ?? tiled ?? own.first ?? newWorkspaceWindows.first
+
+        // retile immediately — no delay between hide and show. the accordion
+        // un-parks the stack already ordered around the focus target: the
+        // engine's own focus lookup still names the displaced workspace's
+        // window here and would front the tree's first window instead.
+        if let best, !stateCache.floatingWindowIDs.contains(best.windowID) {
+            tilingEngine.accordionFrontOverride = best.windowID
+        }
+        tileAllVisibleSpaces()
+        tilingEngine.accordionFrontOverride = nil
+
+        if let best {
             best.focus()
             cursorManager.warpToCenter(of: best)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")

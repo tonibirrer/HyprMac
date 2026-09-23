@@ -373,10 +373,10 @@ struct TilingSettingsView: View {
                     .frame(width: 220)
                 }
                 HyprRow("Side overlap", icon: "arrow.left.and.right",
-                        subtitle: "Visible sliver of the neighboring windows on each side.",
+                        subtitle: "Visible sliver of the neighboring windows on each side. 0 stacks the windows edge to edge.",
                         divider: false) {
                     HStack(spacing: HyprSpacing.sm) {
-                        Slider(value: $config.accordionOverlap, in: 10...200, step: 5)
+                        Slider(value: $config.accordionOverlap, in: 0...200, step: 5)
                             .frame(width: 180)
                         HyprChip("\(Int(config.accordionOverlap)) px")
                             .frame(width: 56, alignment: .trailing)
