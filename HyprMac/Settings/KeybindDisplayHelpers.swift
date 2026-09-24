@@ -76,6 +76,10 @@ extension Keybind {
             return "arrow.up.left.and.arrow.down.right"
         case .toggleTiling:
             return "pause.circle"
+        case .toggleSingleScreen:
+            return "rectangle.on.rectangle.slash"
+        case .toggleAccordion:
+            return "rectangle.stack"
         case .runCommand:
             return "terminal"
         }
@@ -112,6 +116,8 @@ extension Keybind {
         case .moveToScratchpad:             return "Send to Scratchpad"
         case .resizeDirection(let d):       return "Resize \(d.rawValue.capitalized)"
         case .toggleTiling:                 return "Pause / Resume Tiling"
+        case .toggleSingleScreen:           return "Toggle Single Screen"
+        case .toggleAccordion:              return "Toggle Accordion Mode"
         case .runCommand(let label, let cmd): return Keybind.commandDescription(label: label, command: cmd)
         }
     }

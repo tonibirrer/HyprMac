@@ -79,6 +79,10 @@ class UserConfig: ObservableObject {
     @Published var accordionOverlap: CGFloat {
         didSet { if !isReloading { save() } }
     }
+    // single-screen mode (Action.toggleSingleScreen): the disabled-monitor
+    // set to put back when it is switched off; nil = not active. Written
+    // with the monitor file by the disabledMonitors change that follows it.
+    var singleScreenRestore: [String]?
     @Published var showFocusBorder: Bool {
         didSet { persistRuntimeChange() }
     }
@@ -306,6 +310,7 @@ class UserConfig: ObservableObject {
         self.accordionMode = monitorConfig?.accordionMode ?? UserConfigDefaults.accordionMode
         self.accordionMonitor = monitorConfig?.accordionMonitor
         self.accordionOverlap = monitorConfig?.accordionOverlap ?? UserConfigDefaults.accordionOverlap
+        self.singleScreenRestore = monitorConfig?.singleScreenRestore
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
@@ -391,7 +396,8 @@ class UserConfig: ObservableObject {
             linkedMonitors: linkedMonitors,
             accordionMode: accordionMode,
             accordionMonitor: accordionMonitor,
-            accordionOverlap: accordionOverlap))
+            accordionOverlap: accordionOverlap,
+            singleScreenRestore: singleScreenRestore))
     }
 
     private func persistRuntimeChange() {
@@ -454,6 +460,7 @@ class UserConfig: ObservableObject {
         accordionMode = UserConfigDefaults.accordionMode
         accordionMonitor = nil
         accordionOverlap = UserConfigDefaults.accordionOverlap
+        singleScreenRestore = nil
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -564,6 +571,7 @@ class UserConfig: ObservableObject {
             accordionMode = mc.accordionMode ?? UserConfigDefaults.accordionMode
             accordionMonitor = mc.accordionMonitor
             accordionOverlap = mc.accordionOverlap ?? UserConfigDefaults.accordionOverlap
+            singleScreenRestore = mc.singleScreenRestore
         }
         // else keep current values — don't overwrite with synced defaults
 

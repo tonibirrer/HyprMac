@@ -85,6 +85,14 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_P), modifiers: .hypr,
                              action: .toggleTiling))
 
+        // hypr + m: collapse tiling onto one screen (screen sharing) and back
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_M), modifiers: .hypr,
+                             action: .toggleSingleScreen))
+
+        // hypr + a: accordion mode on / off
+        binds.append(Keybind(keyCode: UInt16(kVK_ANSI_A), modifiers: .hypr,
+                             action: .toggleAccordion))
+
         // hypr + f: move focused window to the next empty workspace
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
                              action: .moveToNextEmptyWorkspace))

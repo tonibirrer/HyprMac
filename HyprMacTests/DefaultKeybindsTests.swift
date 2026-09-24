@@ -158,6 +158,23 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(bind.modifiers, .hypr)
     }
 
+    func testScreenSharingTogglesUseHyprMAndHyprA() throws {
+        let single = try XCTUnwrap(Keybind.defaults.first { $0.action == .toggleSingleScreen })
+        XCTAssertEqual(single.keyCode, UInt16(kVK_ANSI_M))
+        XCTAssertEqual(single.modifiers, .hypr)
+        XCTAssertEqual(single.actionDescription, "Toggle Single Screen")
+        XCTAssertEqual(KeybindCategory.from(single.action), .system)
+        let accordion = try XCTUnwrap(Keybind.defaults.first { $0.action == .toggleAccordion })
+        XCTAssertEqual(accordion.keyCode, UInt16(kVK_ANSI_A))
+        XCTAssertEqual(accordion.modifiers, .hypr)
+        XCTAssertEqual(accordion.actionDescription, "Toggle Accordion Mode")
+        // the mode toggles stay reachable while tiling is paused and never autorepeat
+        for action in [Action.toggleSingleScreen, .toggleAccordion] {
+            XCTAssertTrue(HotkeyManager.actionIsAvailable(action, tilingEnabled: false))
+            XCTAssertTrue(HotkeyManager.ignoresAutorepeat(action))
+        }
+    }
+
     func testWorkspaceOverviewUsesHyprO() throws {
         let bind = try XCTUnwrap(Keybind.defaults.first { $0.action == .showWorkspaceOverview })
         XCTAssertEqual(bind.keyCode, UInt16(kVK_ANSI_O))

@@ -357,6 +357,10 @@ class WindowManager {
                 self.config.enabled.toggle()
                 return
             }
+            // screen-sharing toggles: available while paused, like the pause
+            // toggle itself, and handled here because they flip config
+            if action == .toggleSingleScreen { self.toggleSingleScreen(); return }
+            if action == .toggleAccordion { self.toggleAccordion(); return }
             guard self.config.enabled || action == .showKeybinds || action == .showWorkspaceOverview else { return }
             self.suppressions.suppress("mouse-focus", for: 0.15)
             self.handleAction(action)
@@ -1925,6 +1929,49 @@ class WindowManager {
         displayManager.screens
             .filter { !workspaceManager.isMonitorDisabled($0) }
             .map { workspaceManager.workspaceForScreen($0) }
+    }
+
+    // MARK: - screen-sharing toggles
+
+    /// `Action.toggleSingleScreen`: disable every monitor but one so the
+    /// whole desktop lives on the shared screen; press again to put the
+    /// previously enabled monitors back. The kept screen is the accordion
+    /// monitor when connected (built-in by default), so accordion mode —
+    /// if on — takes over in the same press. The disabled-monitor change
+    /// flows through the config coordinator exactly like the Monitors
+    /// settings pane: windows on the disabled screens float, the layout
+    /// reconciles onto the remaining one.
+    private func toggleSingleScreen() {
+        if let restore = config.singleScreenRestore {
+            config.singleScreenRestore = nil
+            config.disabledMonitors = Set(restore)
+            hyprLog(.notice, .lifecycle, "single screen off — disabled monitors restored to \(restore)")
+            return
+        }
+        let screens = displayManager.screens.map {
+            SingleScreenMode.Screen(name: $0.localizedName, isBuiltIn: $0.isBuiltIn,
+                                    isPrimary: $0.frame.origin == .zero)
+        }
+        guard screens.count > 1,
+              let keep = SingleScreenMode.screenToKeep(screens, accordionMonitor: config.accordionMonitor) else {
+            hyprLog(.notice, .lifecycle, "single screen: only one screen connected — nothing to collapse")
+            return
+        }
+        let disabled = SingleScreenMode.disabledMonitors(keeping: keep, screens: screens)
+        config.singleScreenRestore = Array(config.disabledMonitors).sorted()
+        config.disabledMonitors = disabled
+        hyprLog(.notice, .lifecycle, "single screen on — keeping '\(keep.name)', disabled \(disabled.sorted())")
+    }
+
+    /// `Action.toggleAccordion`: flip the machine-local accordion mode. The
+    /// config observer retiles; the layout only changes while a single
+    /// enabled screen is the accordion monitor, which the log points out.
+    private func toggleAccordion() {
+        config.accordionMode.toggle()
+        let enabled = displayManager.screens.filter { !workspaceManager.isMonitorDisabled($0) }
+        if config.accordionMode, !enabled.contains(where: isAccordionScreen) {
+            hyprLog(.notice, .lifecycle, "accordion mode on, but \(enabled.count) screens are enabled — it applies once only the accordion monitor is left (Hypr+M)")
+        }
     }
 
     // MARK: - disabled monitor handling

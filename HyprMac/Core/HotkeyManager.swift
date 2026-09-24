@@ -108,6 +108,7 @@ class HotkeyManager {
     static func actionIsAvailable(_ action: Action, tilingEnabled: Bool) -> Bool {
         tilingEnabled || action == .toggleTiling || action == .showKeybinds
             || action == .showWorkspaceOverview
+            || action == .toggleSingleScreen || action == .toggleAccordion
     }
 
     /// Actions that fire once per physical press. Holding the chord down
@@ -115,7 +116,8 @@ class HotkeyManager {
     /// repeated command spawns a process per autorepeat tick.
     static func ignoresAutorepeat(_ action: Action) -> Bool {
         switch action {
-        case .toggleTiling, .moveToNextEmptyWorkspace, .runCommand:
+        case .toggleTiling, .moveToNextEmptyWorkspace, .runCommand,
+             .toggleSingleScreen, .toggleAccordion:
             return true
         default:
             return false
