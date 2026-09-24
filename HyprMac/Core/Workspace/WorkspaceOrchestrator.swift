@@ -128,8 +128,15 @@ final class WorkspaceOrchestrator {
             rejectTransfer(focused, message: "This window cannot be tiled")
             return
         }
+        // a workspace with nothing on screen is empty, same as the menu bar:
+        // closed-but-app-alive, minimized, and Cmd-H'd windows keep their
+        // assignment but hold no slot here
+        let hidden = { self.stateCache.hiddenWindowIDs }
+        let destinationOccupants = { (workspace: Int) in
+            self.workspaceManager.windowIDs(onWorkspace: workspace).subtracting(hidden())
+        }
         guard let destination = workspaceManager.nextEmptyWorkspace(
-            after: sourceWorkspace, on: initialPhysicalScreen
+            after: sourceWorkspace, on: initialPhysicalScreen, ignoring: hidden()
         ) else {
             rejectTransfer(focused, message: "No empty workspace on this display")
             return
@@ -190,7 +197,7 @@ final class WorkspaceOrchestrator {
             rejectTransfer(focused, message: "Displays changed during the move")
             return
         }
-        guard workspaceManager.windowIDs(onWorkspace: destination).isEmpty,
+        guard destinationOccupants(destination).isEmpty,
               workspaceManager.homeScreenForWorkspace(destination).map({
                   workspaceManager.screenID(for: $0) == workspaceManager.screenID(for: physicalScreen)
               }) == true else {
@@ -232,7 +239,7 @@ final class WorkspaceOrchestrator {
         }
         guard workspaceManager.workspaceFor(focused.windowID) == sourceWorkspace,
               workspaceManager.windowIDs(onWorkspace: sourceWorkspace) == sourceIDs,
-              workspaceManager.windowIDs(onWorkspace: destination).isEmpty,
+              destinationOccupants(destination).isEmpty,
               workspaceManager.homeScreenForWorkspace(destination).map({
                   workspaceManager.screenID(for: $0) == initialScreenID
               }) == true,

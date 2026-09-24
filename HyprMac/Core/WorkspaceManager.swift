@@ -88,15 +88,18 @@ class WorkspaceManager {
     }
 
     /// The next empty workspace owned by `screen`, in anchored numeric order.
-    /// Every assignment reserves a workspace, including floating and hidden
-    /// windows; lifecycle reconciliation is responsible for removing ghosts.
-    func nextEmptyWorkspace(after source: Int, on screen: NSScreen) -> Int? {
+    /// Every assignment reserves a workspace, including floating windows,
+    /// except ids in `ignoring` (the caller's hidden set: closed-but-app-
+    /// alive, minimized, or Cmd-H'd windows that keep a stale assignment).
+    func nextEmptyWorkspace(after source: Int, on screen: NSScreen,
+                            ignoring: Set<CGWindowID> = []) -> Int? {
         let anchored = workspacesAnchoredTo(screen)
         guard workspaceForScreen(screen) == source,
               let sourceIndex = anchored.firstIndex(of: source), anchored.count > 1 else { return nil }
         for offset in 1..<anchored.count {
             let candidate = anchored[(sourceIndex + offset) % anchored.count]
-            if !isWorkspaceVisible(candidate), windowIDs(onWorkspace: candidate).isEmpty { return candidate }
+            if !isWorkspaceVisible(candidate),
+               windowIDs(onWorkspace: candidate).isSubset(of: ignoring) { return candidate }
         }
         return nil
     }
