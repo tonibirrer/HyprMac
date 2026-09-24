@@ -346,3 +346,33 @@ final class FocusBracketDimensionTests: XCTestCase {
         XCTAssertFalse(brackets.isVisible)
     }
 }
+
+// MARK: - accordion side hints on the brackets
+
+final class FocusBracketSideHintTests: XCTestCase {
+
+    func testSideMarksFollowTheHints() {
+        let brackets = FocusBrackets()
+        brackets.primaryScreenHeight = 1000
+        let rect = CGRect(x: 100, y: 100, width: 800, height: 600)
+
+        brackets.show(around: rect, windowID: 1, sides: .init(left: true, right: false))
+        XCTAssertEqual(brackets.currentPathCount(), 4, "corner count is unchanged")
+        XCTAssertEqual(brackets.currentSideMarks().left, true)
+        XCTAssertEqual(brackets.currentSideMarks().right, false)
+
+        brackets.updatePosition(rect, sides: .init(left: false, right: true))
+        XCTAssertEqual(brackets.currentSideMarks().left, false)
+        XCTAssertEqual(brackets.currentSideMarks().right, true)
+
+        // a plain reposition keeps the hints
+        brackets.updatePosition(rect.offsetBy(dx: 10, dy: 0))
+        XCTAssertEqual(brackets.currentSideMarks().right, true)
+
+        // a show without hints (tiling mode) clears them
+        brackets.show(around: rect, windowID: 2)
+        XCTAssertEqual(brackets.currentSideMarks().left, false)
+        XCTAssertEqual(brackets.currentSideMarks().right, false)
+        brackets.hide()
+    }
+}

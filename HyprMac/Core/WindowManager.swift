@@ -1394,7 +1394,8 @@ class WindowManager {
                 radius: config.resolvedFocusBracketRadius,
                 thickness: config.resolvedFocusBracketThickness,
                 length: config.resolvedFocusBracketLength)
-            focusBrackets.show(around: frame, windowID: window.windowID)
+            focusBrackets.show(around: frame, windowID: window.windowID,
+                               sides: accordionSideHints(for: window))
         }
         if config.showFocusBorder, let frame = window.frame {
             focusBorder.accentCGColor = stateCache.floatingWindowIDs.contains(window.windowID)
@@ -1543,7 +1544,20 @@ class WindowManager {
             radius: config.resolvedFocusBracketRadius,
             thickness: config.resolvedFocusBracketThickness,
             length: config.resolvedFocusBracketLength)
-        focusBrackets.show(around: frame, windowID: fid)
+        focusBrackets.show(around: frame, windowID: fid, sides: accordionSideHints(for: window))
+    }
+
+    /// Accordion mode hides every window but the front one, so the
+    /// brackets carry a mark on each side that has tiles behind it —
+    /// the direction Hypr+←/→ will go. Empty off an accordion screen.
+    private func accordionSideHints(for window: HyprWindow) -> FocusBrackets.SideHints {
+        guard config.accordionMode,
+              !stateCache.floatingWindowIDs.contains(window.windowID),
+              let screen = displayManager.screen(for: window),
+              isAccordionScreen(screen) else { return .none }
+        let order = tilingEngine.accordionOrder(onWorkspace: workspaceManager.workspaceForScreen(screen), screen: screen)
+        guard let idx = order.firstIndex(where: { $0.windowID == window.windowID }) else { return .none }
+        return FocusBrackets.SideHints(left: idx > 0, right: idx < order.count - 1)
     }
 
     /// Re-show the focus border on the tracked window after the Hypr key is
@@ -2786,7 +2800,7 @@ class WindowManager {
         // brackets follow the same window if visible (Hypr held during retile)
         if focusBrackets.isVisible, let bid = focusBrackets.trackedWindowID,
            let w = stateCache.cachedWindows[bid], let frame = w.frame {
-            focusBrackets.updatePosition(frame)
+            focusBrackets.updatePosition(frame, sides: accordionSideHints(for: w))
         }
         refreshDimming()
     }
