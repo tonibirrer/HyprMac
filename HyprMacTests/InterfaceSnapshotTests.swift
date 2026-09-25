@@ -57,7 +57,11 @@ final class InterfaceSnapshotTests: XCTestCase {
         try render("permissions-gate-dark",
                    PermissionsGateView(model: PermissionsGateModel(), onQuit: {}),
                    size: CGSize(width: 520, height: 530))
+        // the release variant builds the menu with a sparkle updater; the
+        // debug variant has none, so only render it there
+        #if HYPRMAC_DEBUG_VARIANT
         try render("menu-bar-dark", MenuBarView(appDelegate: AppDelegate()), width: 320)
+        #endif
 
         UserConfig.shared.hyprKey = .tab
         try render("tour-tab-dark", TourView(mode: .firstRun, onDismiss: {}),
