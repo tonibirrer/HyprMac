@@ -111,7 +111,8 @@ struct LayoutSnapshot: Codable, Equatable {
 /// The file is plain JSON on this Mac and holds each tiled window's
 /// raw title (document names, page titles, terminal commands). Nothing
 /// leaves the machine. To clear every snapshot, quit HyprMac and delete
-/// the file; a new one is written on the next save.
+/// the file (and any `.unreadable` copy next to it); a new one is
+/// written on the next save.
 ///
 /// A save only reports success after the atomic write lands; on a
 /// failed write it throws and memory is rolled back to match the disk.
