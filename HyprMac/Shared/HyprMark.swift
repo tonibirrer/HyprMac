@@ -121,6 +121,26 @@ struct HyprLockup: View {
     }
 }
 
+/// The stacked lockup: the mark with "HyprMac" centred underneath, for
+/// square-ish spots like the settings sidebar header.
+struct HyprStackedLockup: View {
+    var markSize: CGFloat = 64
+
+    var body: some View {
+        VStack(spacing: markSize * 0.14) {
+            HyprMark(size: markSize)
+            Text("HyprMac")
+                .font(.system(size: markSize * 0.34, weight: .semibold))
+                .tracking(-0.01 * markSize * 0.34)
+                .foregroundStyle(Color.hyprTextPrimary)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("HyprMac")
+    }
+}
+
 // MARK: - hypr key chip
 
 /// The Hypr modifier as a keycap: the mono word "hypr" in a cyan-tinted
