@@ -1756,6 +1756,8 @@ class WindowManager {
                 rebuilt += 1
             case .exceedsMaxDepth(let depth):
                 shapeFailures.append("ws\(ws) depth \(depth)")
+            case .refusedIncumbents(let ids):
+                shapeFailures.append("ws\(ws) no slot for admitted \(ids)")
             case .rejected(let reason):
                 shapeFailures.append("ws\(ws) \(reason.map { "\($0)" } ?? "superseded")")
             }

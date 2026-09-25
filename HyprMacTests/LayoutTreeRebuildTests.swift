@@ -8,6 +8,8 @@ import Cocoa
 // user-set flags), a leaf without a window must collapse its split the way
 // a close would, windows the snapshot never named must insert around the
 // restored shape, and a refused verification must leave the live tree alone.
+// A rebuild must never drop an admitted window: an incumbent that finds no
+// slot rejects the whole rebuild, a refused newcomer is handed back.
 //
 // runs on a synthetic screen so it executes headless as well as on a real display.
 
@@ -61,7 +63,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: grid,
                                          windows: ids([1, 2, 3, 4]), applyFrames: true, resolve: byID)
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf), grid)
     }
 
@@ -74,7 +76,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let outcome = other.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                         windows: ids([1, 2, 3]), applyFrames: true, resolve: byID)
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertEqual(other.layoutTree(forWorkspace: 1, ref: refOf), saved)
     }
 
@@ -124,7 +126,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                          windows: ids([1, 3]), applyFrames: true, resolve: byID)
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf),
                        .split(override: nil, ratio: 0.6, userSet: true, left: leaf(1), right: leaf(3)))
     }
@@ -133,7 +135,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2))
         let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                          windows: [], applyFrames: true, resolve: byID)
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertNil(engine.layoutTree(forWorkspace: 1, ref: refOf))
     }
 
@@ -143,7 +145,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                          windows: ids([1, 2, 3]), applyFrames: true, resolve: byID)
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 1))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 1, refusedNewcomers: []))
         let root = live()!.root
         XCTAssertEqual(root.splitRatio, 0.7, "restored ratio survives the insert")
         XCTAssertTrue(root.userSetRatio)
@@ -164,7 +166,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
             queue.isEmpty ? nil : queue.removeFirst()
         }
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertEqual(live()!.allWindows.map(\.windowID), [5, 3], "first leaf takes the first window handed out")
     }
 
@@ -172,7 +174,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2))
         let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                          windows: ids([1]), applyFrames: true) { _ in self.windows[1] }
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertEqual(live()!.allWindows.map(\.windowID), [1])
         XCTAssertTrue(live()!.root.isLeaf)
     }
@@ -230,7 +232,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let outcome = refusing.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                            windows: ids([1, 2]), applyFrames: false, resolve: byID)
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertEqual(refusing.layoutTree(forWorkspace: 1, ref: refOf), saved)
     }
 
@@ -252,7 +254,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                          windows: ids([1, 2]), applyFrames: true, resolve: byID)
 
-        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
         XCTAssertNil(engine.existingTree(forWorkspace: 1, screen: other))
         XCTAssertTrue(engine.unverifiedLayouts.isEmpty, "the pruned key takes its mark with it")
         XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf), saved)
@@ -270,6 +272,85 @@ final class LayoutTreeRebuildTests: XCTestCase {
                                windows: ids([1, 2]), applyFrames: true, resolve: byID)
 
         XCTAssertEqual(engine.windowIDs(inTreeForWorkspace: 1, screen: other), [3])
+    }
+
+    // MARK: - admitted windows
+
+    /// 2x2 grid at depth 2 naming windows 1–4.
+    private var grid: LayoutNode {
+        .split(override: .horizontal, ratio: 0.5, userSet: false,
+               left: .split(override: .vertical, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2)),
+               right: .split(override: .vertical, ratio: 0.5, userSet: false, left: leaf(3), right: leaf(4)))
+    }
+
+    func testRefusedIncumbentRejectsRebuildAndKeepsLiveTree() {
+        engine.maxSplitsPerMonitor[screen.localizedName] = 3
+        let admitted = engine.tileWindows(ids([1, 2, 3, 4, 5]), onWorkspace: 1, screen: screen)
+        XCTAssertEqual(admitted.publishedIDs, [1, 2, 3, 4, 5], "precondition: all five admitted")
+        let before = live()!.structuralFingerprint()
+        engine.maxSplitsPerMonitor[screen.localizedName] = 2
+
+        // valid at depth 2, but window 5 has nowhere to go
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: grid,
+                                         windows: ids([1, 2, 3, 4, 5]), applyFrames: true, resolve: byID)
+
+        XCTAssertEqual(outcome, .refusedIncumbents([5]))
+        XCTAssertEqual(live()!.structuralFingerprint(), before)
+        XCTAssertEqual(Set(live()!.allWindows.map(\.windowID)), [1, 2, 3, 4, 5])
+    }
+
+    func testRefusedIncumbentRejectsHiddenRebuildToo() {
+        engine.maxSplitsPerMonitor[screen.localizedName] = 3
+        _ = engine.tileWindows(ids([1, 2, 3, 4, 5]), onWorkspace: 1, screen: screen)
+        let before = live()!.structuralFingerprint()
+        engine.maxSplitsPerMonitor[screen.localizedName] = 2
+
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: grid,
+                                         windows: ids([1, 2, 3, 4, 5]), applyFrames: false, resolve: byID)
+
+        XCTAssertEqual(outcome, .refusedIncumbents([5]))
+        XCTAssertEqual(live()!.structuralFingerprint(), before)
+    }
+
+    func testRefusedNewcomerIsReturnedAndTreePublishes() {
+        engine.maxSplitsPerMonitor[screen.localizedName] = 2
+        _ = engine.tileWindows(ids([1, 2, 3, 4]), onWorkspace: 1, screen: screen)
+
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: grid,
+                                         windows: ids([1, 2, 3, 4, 5]), applyFrames: true, resolve: byID)
+
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: [5]))
+        XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf), grid)
+    }
+
+    func testIncumbentTakesTheFreeSlotBeforeANewcomer() {
+        engine.maxSplitsPerMonitor[screen.localizedName] = 2
+        _ = engine.tileWindows(ids([1, 2, 3, 4]), onWorkspace: 1, screen: screen)
+        // one free slot: leaf 3 at depth 1 can still split
+        let saved = LayoutNode.split(
+            override: .horizontal, ratio: 0.5, userSet: false,
+            left: .split(override: .vertical, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2)),
+            right: leaf(3))
+
+        // newcomer 6 listed first; incumbent 4 must still win the slot
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
+                                         windows: ids([6, 1, 2, 3, 4]), applyFrames: true, resolve: byID)
+
+        XCTAssertEqual(outcome, .rebuilt(inserted: 1, refusedNewcomers: [6]))
+        XCTAssertEqual(Set(live()!.allWindows.map(\.windowID)), [1, 2, 3, 4])
+    }
+
+    func testIncumbentLeftOutOfWindowsIsNotARefusal() {
+        // the caller's window list is authoritative, as in tileWindows: a
+        // window no longer on the workspace leaves the tree, it is not refused
+        _ = engine.tileWindows(ids([1, 2, 3]), onWorkspace: 1, screen: screen)
+        let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2))
+
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
+                                         windows: ids([1, 2]), applyFrames: true, resolve: byID)
+
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
+        XCTAssertEqual(live()!.allWindows.map(\.windowID), [1, 2])
     }
 }
 

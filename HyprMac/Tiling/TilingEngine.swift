@@ -411,9 +411,15 @@ class TilingEngine {
     enum LayoutRebuildOutcome: Equatable {
         /// Tree published. `inserted` counts live windows the snapshot did
         /// not name that were smart-inserted around the restored shape.
-        case rebuilt(inserted: Int)
+        /// `refusedNewcomers` found no fitting slot and are in no tree; none
+        /// of them was admitted on the workspace before, so the caller hands
+        /// them to admission recovery as it would after an ordinary tile.
+        case rebuilt(inserted: Int, refusedNewcomers: [CGWindowID])
         /// A saved leaf sits deeper than the screen allows; live tree untouched.
         case exceedsMaxDepth(Int)
+        /// Windows already admitted on the workspace would have no slot in
+        /// the rebuilt tree; live tree untouched, nothing written.
+        case refusedIncumbents([CGWindowID])
         /// Frame verification refused the shape (or a newer layout
         /// superseded it, `nil`); live tree untouched.
         case rejected(FrameSizingFailure?)
@@ -427,8 +433,14 @@ class TilingEngine {
     /// `windows`, a floater, or a window already placed collapses that
     /// leaf's split exactly as closing it would. Every window in
     /// `windows` the snapshot did not name is smart-inserted around the
-    /// restored shape. Ratios, user-set flags and overrides come through
-    /// verbatim — nothing is reset.
+    /// restored shape, incumbents before newcomers. Ratios, user-set flags
+    /// and overrides come through verbatim — nothing is reset.
+    ///
+    /// An incumbent (admitted on the workspace, or in one of its trees)
+    /// that finds no slot rejects the rebuild with `.refusedIncumbents`
+    /// before anything is written, as `tileWindows` refuses to publish a
+    /// subset. A newcomer that finds none is left out and reported in
+    /// `.rebuilt(refusedNewcomers:)`.
     ///
     /// With `applyFrames` the layout runs the same verified sizing as
     /// `tileWindows` and publishes only on acceptance. Pass `false` for a
@@ -463,17 +475,29 @@ class TilingEngine {
         }
 
         // windows the snapshot never named take a slot around the restored
-        // shape; one that finds no fitting slot stays where it is, as an
-        // ordinary tile pass leaves a refused newcomer.
+        // shape, incumbents first as in tileWindows. a refused newcomer stays
+        // where it is and goes back to the caller; a refused incumbent
+        // rejects the rebuild, since publishing would drop it from the tree.
+        var incumbents = admittedWindowIDs[workspace, default: []]
+        for (k, t) in trees where k.workspace == workspace {
+            incumbents.formUnion(t.allWindows.map(\.windowID))
+        }
+        let unnamed = tileable.filter { !placed.contains($0.windowID) }
         var insertedIDs: [CGWindowID] = []
-        var refused = 0
-        for w in tileable where !placed.contains(w.windowID) {
+        var refusedIDs: [CGWindowID] = []
+        for w in unnamed.filter({ incumbents.contains($0.windowID) })
+                 + unnamed.filter({ !incumbents.contains($0.windowID) }) {
             if smartInsertFitting(w, into: candidate, maxDepth: limit, rect: rect) {
                 insertedIDs.append(w.windowID)
             } else {
-                refused += 1
+                refusedIDs.append(w.windowID)
                 hyprLog(.notice, .tiling, "layout rebuild: no fitting tile slot: wid=\(w.windowID) ws\(workspace) — staying in place")
             }
+        }
+        let refusedIncumbents = refusedIDs.filter { incumbents.contains($0) }
+        guard refusedIncumbents.isEmpty else {
+            hyprLog(.notice, .lifecycle, "layout rebuild ws\(workspace): no slot for admitted \(refusedIncumbents) — kept live tree")
+            return .refusedIncumbents(refusedIncumbents.sorted())
         }
 
         if applyFrames {
@@ -492,8 +516,8 @@ class TilingEngine {
             trees.removeValue(forKey: other)
             unverified.removeValue(forKey: other)
         }
-        hyprLog(.debug, .lifecycle, "layout rebuild ws\(workspace): \(placed.count) placed, \(insertedIDs.count) inserted, \(refused) refused, frames \(applyFrames ? "verified" : "deferred")")
-        return .rebuilt(inserted: insertedIDs.count)
+        hyprLog(.debug, .lifecycle, "layout rebuild ws\(workspace): \(placed.count) placed, \(insertedIDs.count) inserted, \(refusedIDs.count) refused, frames \(applyFrames ? "verified" : "deferred")")
+        return .rebuilt(inserted: insertedIDs.count, refusedNewcomers: refusedIDs)
     }
 
     private static func build(_ node: LayoutNode, resolve: (SavedWindowRef) -> HyprWindow?) -> BSPNode? {
