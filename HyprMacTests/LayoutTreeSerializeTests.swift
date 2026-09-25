@@ -7,19 +7,18 @@ import Cocoa
 // Node knobs (ratio, user-set flag, override) must come through
 // verbatim, a computed direction must stay nil, and a window the ref
 // closure declines must collapse its split like a close would.
+// runs on a synthetic screen so it executes headless as well as on a real display.
 
 final class LayoutTreeSerializeTests: XCTestCase {
 
     private var engine: TilingEngine!
     private var screen: NSScreen!
 
-    override func setUpWithError() throws {
-        engine = TilingEngine(displayManager: DisplayManager(),
+    override func setUp() {
+        screen = SerializeTestScreen()
+        let screens: [NSScreen] = [screen]
+        engine = TilingEngine(displayManager: DisplayManager(screenSource: { screens }),
                               frameSizingIOFactory: acceptingFrameSizingIOFactory())
-        guard let main = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("no NSScreen available — test requires a display")
-        }
-        screen = main
     }
 
     private func ref(_ window: HyprWindow) -> SavedWindowRef? {
@@ -89,4 +88,9 @@ final class LayoutTreeSerializeTests: XCTestCase {
         tile([1, 2])
         XCTAssertNil(engine.layoutTree(forWorkspace: 2, ref: ref))
     }
+}
+
+private final class SerializeTestScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 2400, height: 1600) }
+    override var visibleFrame: NSRect { frame }
 }

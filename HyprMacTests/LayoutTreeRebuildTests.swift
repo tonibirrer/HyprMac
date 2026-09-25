@@ -8,6 +8,8 @@ import Cocoa
 // user-set flags), a leaf without a window must collapse its split the way
 // a close would, windows the snapshot never named must insert around the
 // restored shape, and a refused verification must leave the live tree alone.
+//
+// runs on a synthetic screen so it executes headless as well as on a real display.
 
 final class LayoutTreeRebuildTests: XCTestCase {
 
@@ -15,17 +17,18 @@ final class LayoutTreeRebuildTests: XCTestCase {
     private var screen: NSScreen!
     private var windows: [CGWindowID: HyprWindow] = [:]
 
-    override func setUpWithError() throws {
-        guard let main = NSScreen.main ?? NSScreen.screens.first else {
-            throw XCTSkip("no NSScreen available — test requires a display")
-        }
-        screen = main
+    private var displayManager: DisplayManager!
+
+    override func setUp() {
+        screen = RebuildTestScreen()
+        let screens: [NSScreen] = [screen]
+        displayManager = DisplayManager(screenSource: { screens })
         engine = makeEngine(acceptingFrameSizingIOFactory())
         windows = Dictionary(uniqueKeysWithValues: (1...6).map { ($0, makeWindow(id: $0)) })
     }
 
     private func makeEngine(_ io: @escaping ([CGWindowID: HyprWindow], @escaping () -> UInt64) -> FrameSizingIO) -> TilingEngine {
-        TilingEngine(displayManager: DisplayManager(), frameSizingIOFactory: io)
+        TilingEngine(displayManager: displayManager, frameSizingIOFactory: io)
     }
 
     // refs are keyed on window id so a snapshot can be written by hand
@@ -144,7 +147,11 @@ final class LayoutTreeRebuildTests: XCTestCase {
         let root = live()!.root
         XCTAssertEqual(root.splitRatio, 0.7, "restored ratio survives the insert")
         XCTAssertTrue(root.userSetRatio)
-        XCTAssertEqual(live()!.allWindows.map(\.windowID), [1, 2, 3])
+        // which side takes window 3 is smart insert's call and depends on the
+        // slot sizes; the restored split must still separate 1 from 2.
+        XCTAssertEqual(Set(live()!.allWindows.map(\.windowID)), [1, 2, 3])
+        XCTAssertTrue(root.left?.allWindows().contains { $0.windowID == 1 } ?? false)
+        XCTAssertTrue(root.right?.allWindows().contains { $0.windowID == 2 } ?? false)
     }
 
     func testDuplicateRefsResolveInLeafOrder() {
@@ -228,12 +235,41 @@ final class LayoutTreeRebuildTests: XCTestCase {
     }
 
     func testEmptyTreeOnOtherScreenForSameWorkspaceIsPruned() {
-        _ = engine.prepareTileLayout(ids([1, 2]), onWorkspace: 1, screen: screen)
+        let other = RebuildOtherScreen()
+        let screens: [NSScreen] = [screen, other]
+        displayManager = DisplayManager(screenSource: { screens })
+        engine = makeEngine(acceptingFrameSizingIOFactory())
+
+        // ws1 used to live on the other screen; its last window left, the tree stayed
+        _ = engine.prepareTileLayout(ids([3]), onWorkspace: 1, screen: other)
+        _ = engine.prepareTileLayout([], onWorkspace: 1, screen: other)
+        engine.markUnverifiedGeometry(forWorkspace: 1, screen: other, reason: "test")
+        XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: other)?.allWindows.count, 0,
+                       "precondition: an empty ws1 tree on the other screen")
+        XCTAssertEqual(engine.unverifiedLayouts.count, 1)
+
+        let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2))
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
+                                         windows: ids([1, 2]), applyFrames: true, resolve: byID)
+
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0))
+        XCTAssertNil(engine.existingTree(forWorkspace: 1, screen: other))
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty, "the pruned key takes its mark with it")
+        XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf), saved)
+    }
+
+    func testNonEmptyTreeOnOtherScreenIsKept() {
+        let other = RebuildOtherScreen()
+        let screens: [NSScreen] = [screen, other]
+        displayManager = DisplayManager(screenSource: { screens })
+        engine = makeEngine(acceptingFrameSizingIOFactory())
+        _ = engine.prepareTileLayout(ids([3]), onWorkspace: 1, screen: other)
+
         let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2))
         _ = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
                                windows: ids([1, 2]), applyFrames: true, resolve: byID)
-        XCTAssertNotNil(live())
-        XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf), saved)
+
+        XCTAssertEqual(engine.windowIDs(inTreeForWorkspace: 1, screen: other), [3])
     }
 }
 
@@ -250,4 +286,14 @@ private func refusingWritesFrameSizingIOFactory()
             now: { 0 }, sleep: { _ in }, currentGeneration: generation
         )
     }
+}
+
+private final class RebuildTestScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 2400, height: 1600) }
+    override var visibleFrame: NSRect { frame }
+}
+
+private final class RebuildOtherScreen: NSScreen {
+    override var frame: NSRect { NSRect(x: 2400, y: 0, width: 1920, height: 1080) }
+    override var visibleFrame: NSRect { frame }
 }
