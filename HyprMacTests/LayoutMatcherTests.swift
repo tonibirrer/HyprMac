@@ -92,6 +92,48 @@ final class LayoutMatcherTests: XCTestCase {
         XCTAssertNil(plan.workspaceByWindow[2])
     }
 
+    func testEarlierMissingLeafDoesNotStealLaterExactTitle() {
+        // saved: missing.txt on ws1, present.txt on ws2; only present.txt is
+        // alive, sitting on ws1. it must go to its own leaf on ws2.
+        let missing = ref("com.ed", "missing.txt")
+        let present = ref("com.ed", "present.txt")
+        let plan = LayoutMatcher.plan(
+            snapshot([leaf(1, missing), leaf(2, present)]),
+            candidates: [candidate(5, "com.ed", "present.txt", ws: 1)])
+        XCTAssertEqual(plan.workspaceByWindow, [5: 2])
+        XCTAssertEqual(plan.windowsByRef[2]?[present], [5])
+        XCTAssertNil(plan.windowsByRef[1])
+        XCTAssertEqual(plan.unmatchedRefs, [missing])
+    }
+
+    func testExactTitlesReservedBeforeFallbackWithDuplicates() {
+        // two zsh leaves on ws2 plus an earlier untitled-match leaf on ws1.
+        // the zsh windows must stay with the zsh leaves, one each; the
+        // other terminal falls back to the ws1 leaf.
+        let notes = ref("com.t", "notes")
+        let zsh = ref("com.t", "zsh")
+        let tree = LayoutNode.split(override: nil, ratio: 0.5, userSet: false,
+                                    left: .leaf(zsh), right: .leaf(zsh))
+        let plan = LayoutMatcher.plan(
+            snapshot([leaf(1, notes), WorkspaceLayout(workspace: 2, root: tree)]),
+            candidates: [candidate(1, "com.t", "zsh", ws: 1),
+                         candidate(2, "com.t", "zsh", ws: 1),
+                         candidate(3, "com.t", "vim", ws: 2)])
+        XCTAssertEqual(plan.workspaceByWindow, [1: 2, 2: 2, 3: 1])
+        XCTAssertEqual(plan.windowsByRef[2]?[zsh], [1, 2])
+        XCTAssertEqual(plan.windowsByRef[1]?[notes], [3])
+        XCTAssertTrue(plan.unmatchedRefs.isEmpty)
+    }
+
+    func testFallbackStillPrefersLeafWorkspace() {
+        let plan = LayoutMatcher.plan(
+            snapshot([leaf(1, ref("com.t", "gone")), leaf(2, ref("com.t", "A"))]),
+            candidates: [candidate(4, "com.t", "A", ws: 2),
+                         candidate(8, "com.t", "X", ws: 2),
+                         candidate(6, "com.t", "Y", ws: 1)])
+        XCTAssertEqual(plan.workspaceByWindow, [4: 2, 6: 1])
+    }
+
     func testEmptySnapshotProducesEmptyPlan() {
         let plan = LayoutMatcher.plan(snapshot([]), candidates: [candidate(1, "com.t", "A")])
         XCTAssertEqual(plan, LayoutMatcher.Plan())

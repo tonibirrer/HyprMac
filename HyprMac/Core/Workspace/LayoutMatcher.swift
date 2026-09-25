@@ -27,33 +27,47 @@ enum LayoutMatcher {
         var unmatchedRefs: [SavedWindowRef] = []
     }
 
-    /// Greedy assignment in leaf order: each leaf takes the best unclaimed
-    /// candidate with the same bundle ID. Score: +10 for an exact,
-    /// non-empty title match; +5 when the window already sits on the
-    /// leaf's workspace. Ties go to the lowest window ID so a plan is
+    /// Two passes over the leaves, each greedy in leaf order. The first
+    /// pass only pairs exact, non-empty title matches, so a missing
+    /// earlier leaf can't take a window a later leaf names exactly. The
+    /// second pass gives each remaining leaf the best unclaimed window
+    /// with the same bundle ID. Within a pass the window already on the
+    /// leaf's workspace wins, then the lowest window ID, so a plan is
     /// deterministic.
     static func plan(_ snapshot: LayoutSnapshot, candidates: [Candidate]) -> Plan {
-        var plan = Plan()
+        let leaves: [(workspace: Int, ref: SavedWindowRef)] = snapshot.workspaces.flatMap { layout in
+            layout.root.leaves.map { (layout.workspace, $0) }
+        }
+        var pick = [CGWindowID?](repeating: nil, count: leaves.count)
         var claimed = Set<CGWindowID>()
 
-        for layout in snapshot.workspaces {
-            for ref in layout.root.leaves {
-                var best: (id: CGWindowID, score: Int)?
-                for c in candidates where !claimed.contains(c.windowID) && c.bundleID == ref.bundleID {
-                    var score = 1
-                    if !ref.title.isEmpty && c.title == ref.title { score += 10 }
-                    if c.workspace == layout.workspace { score += 5 }
-                    if let b = best, !(score > b.score || (score == b.score && c.windowID < b.id)) { continue }
-                    best = (c.windowID, score)
-                }
-                guard let pick = best else {
-                    plan.unmatchedRefs.append(ref)
-                    continue
-                }
-                claimed.insert(pick.id)
-                plan.workspaceByWindow[pick.id] = layout.workspace
-                plan.windowsByRef[layout.workspace, default: [:]][ref, default: []].append(pick.id)
+        func claim(_ i: Int, exactOnly: Bool) {
+            let (workspace, ref) = leaves[i]
+            var best: (id: CGWindowID, score: Int)?
+            for c in candidates where !claimed.contains(c.windowID) && c.bundleID == ref.bundleID {
+                let exact = !ref.title.isEmpty && c.title == ref.title
+                if exactOnly && !exact { continue }
+                let score = (exact ? 10 : 0) + (c.workspace == workspace ? 5 : 0)
+                if let b = best, !(score > b.score || (score == b.score && c.windowID < b.id)) { continue }
+                best = (c.windowID, score)
             }
+            guard let id = best?.id else { return }
+            claimed.insert(id)
+            pick[i] = id
+        }
+
+        for i in leaves.indices where !leaves[i].ref.title.isEmpty { claim(i, exactOnly: true) }
+        for i in leaves.indices where pick[i] == nil { claim(i, exactOnly: false) }
+
+        // assemble in leaf order so windowsByRef keeps leaf order
+        var plan = Plan()
+        for (i, leaf) in leaves.enumerated() {
+            guard let id = pick[i] else {
+                plan.unmatchedRefs.append(leaf.ref)
+                continue
+            }
+            plan.workspaceByWindow[id] = leaf.workspace
+            plan.windowsByRef[leaf.workspace, default: [:]][leaf.ref, default: []].append(id)
         }
         return plan
     }
