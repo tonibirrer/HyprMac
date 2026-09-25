@@ -1723,7 +1723,7 @@ class WindowManager {
                 return (w, ws)
             }
             .sorted { $0.window.windowID < $1.window.windowID }
-        let moved = workspaceOrchestrator.moveWindows(moves)
+        let moved = workspaceOrchestrator.moveWindows(moves).moved.count
 
         // shape pass: rebuild each saved workspace's tree around the
         // windows now on it. the engine is the only thing that touches

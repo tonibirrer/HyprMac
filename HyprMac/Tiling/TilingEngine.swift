@@ -2558,6 +2558,21 @@ class TilingEngine {
         withoutMinimaBypass { fitWindows(windows, onWorkspace: workspace, screen: screen) }
     }
 
+    /// `admissionOutlook` for a whole projected membership. `windows` is
+    /// everything the workspace would tile once a batch lands, `incoming`
+    /// the ones arriving. Windows leaving drop out of the candidate first,
+    /// so a full workspace trading one window for another still fits. The
+    /// verdict carries no refusal facts; a batch only needs the verdict.
+    func projectedAdmissionOutlook(_ windows: [HyprWindow], incoming: Set<CGWindowID>,
+                                   onWorkspace workspace: Int, screen: NSScreen) -> AdmissionOutlook {
+        if canFitWindows(windows, onWorkspace: workspace, screen: screen) { return .fits }
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let bypassed = withRevalidationBypass(incoming: incoming, key: key) {
+            fitWindows(windows, onWorkspace: workspace, screen: screen)
+        }
+        return bypassed ? .revalidatable([]) : .refused([])
+    }
+
     private func fitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
         let ids = Set(windows.map(\.windowID))
         guard ids.count == windows.count else { return false }

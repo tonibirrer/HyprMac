@@ -651,98 +651,287 @@ final class WorkspaceOrchestrator {
 
     // MARK: - batch move (layout restore)
 
-    /// Batch form of `moveToWorkspace` for layout restore. Each window
-    /// takes the same path — admission decided the same way, drop from
-    /// the source tree, reassign, park or place — under one suppression
-    /// window and one final retile, with none of the per-window focus,
-    /// warp, beep, or error flash. Windows on disabled monitors are left
-    /// alone; a window its destination refuses is skipped and logged.
+    /// What `moveWindows` did with each window it was asked to move. A
+    /// window already on its destination appears in neither map.
+    struct BatchMoveResult {
+        enum Refusal: Equatable {
+            /// the window stands on a disabled monitor; those are left alone
+            case sourceMonitorDisabled
+            /// the destination has no enabled home monitor
+            case destinationMonitorDisabled
+            /// workspace 0 belongs to the scratchpad; a batch never touches it
+            case scratchpad
+            /// the destination would end the batch over its tile count
+            case full(tiled: Int, capacity: Int)
+            /// the destination's projected tree has no slot for the arrivals
+            case wontFit
+            /// the destination is on screen and refused the verified layout
+            case sizingRefused
+        }
+
+        /// window → the workspace it now belongs to
+        var moved: [CGWindowID: Int] = [:]
+        var refused: [CGWindowID: Refusal] = [:]
+
+        var isComplete: Bool { refused.isEmpty }
+    }
+
+    private struct PlannedMove {
+        let window: HyprWindow
+        let source: Int?
+        let destination: Int
+        let tiled: Bool
+        let sourceScreen: NSScreen
+        let targetScreen: NSScreen
+        let targetVisible: Bool
+        var id: CGWindowID { window.windowID }
+    }
+
+    /// Batch form of `moveToWorkspace` for layout restore.
     ///
-    /// - Returns: how many windows actually moved.
+    /// Every destination is judged on the membership it will have once the
+    /// whole batch lands — occupants, minus the windows leaving it, plus
+    /// the ones arriving — so two full workspaces can trade windows.
+    /// Occupancy counts the way admission does (a closed-but-alive ghost
+    /// holds no slot, a minimized or Cmd-H'd window still does), and the
+    /// fit uses the same outlook `moveToWorkspace` does: a refusal no
+    /// attempt can change refuses, a visible destination refused on
+    /// learned bounds alone gets its one attempt, a hidden one keeps a
+    /// marker.
+    ///
+    /// Refusal is per destination: a workspace takes all of its arrivals
+    /// or none. Which arrival to drop from an over-full workspace would be
+    /// an arbitrary pick, and one stuck workspace should not hold back
+    /// unrelated ones. A refused group keeps its windows where they are,
+    /// which can overfill a workspace they were due to leave, so the check
+    /// runs until nothing new is refused.
+    ///
+    /// Visible destinations are laid out and verified before any
+    /// assignment changes. A refusal there refuses that group and the rest
+    /// is settled again; a destination already laid out for a plan that
+    /// has since shrunk is laid out again for what is left. Nothing is
+    /// reassigned until every visible destination has accepted, so no
+    /// window ends up half-moved or in two trees.
+    ///
+    /// Floaters never enter a tree and never count toward capacity; they
+    /// move unless their own window is off limits. Windows on disabled
+    /// monitors stay put. One suppression window, one final retile, no
+    /// per-window focus, warp, beep, or flash.
     @discardableResult
-    func moveWindows(_ moves: [(window: HyprWindow, workspace: Int)]) -> Int {
-        guard !moves.isEmpty else { return 0 }
+    func moveWindows(_ moves: [(window: HyprWindow, workspace: Int)]) -> BatchMoveResult {
+        var result = BatchMoveResult()
+        guard !moves.isEmpty else { return result }
         suppressions.suppress("workspace-transition", for: 1.5)
         suppressions.suppress("activation-switch", for: 0.5)
         suppressions.suppress("mouse-focus", for: 0.15)
         tilingEngine.primeMinimumSizes(moves.map(\.window))
 
-        var moved = 0
-        for (window, number) in moves {
-            guard let screen = displayManager.screen(for: window) ?? displayManager.screens.first,
-                  !workspaceManager.isMonitorDisabled(screen) else { continue }
-            let currentWorkspace = workspaceManager.workspaceFor(window.windowID)
-            if currentWorkspace == number { continue }
-            let isFloating = stateCache.floatingWindowIDs.contains(window.windowID)
-            let targetScreen = workspaceManager.homeScreenForWorkspace(number) ?? screen
-            let targetVisible = workspaceManager.screenForWorkspace(number) != nil
-
-            if !isFloating {
-                // same admission decision as moveToWorkspace, same
-                // consequences: a hidden destination full by count or a
-                // refusal no attempt can change skips the window; a
-                // visible destination that refused on learned bounds alone
-                // gets its one attempt now; a hidden one keeps a marker.
-                if let reason = capacityRefusal(for: window, movingTo: number, on: targetScreen,
-                                                targetVisible: targetVisible) {
-                    hyprLog(.notice, .workspace, "moveWindows: \(window.windowID) → ws\(number) skipped: \(reason)")
-                    continue
-                }
-                let outlook = tilingEngine.admissionOutlook(window, onWorkspace: number, screen: targetScreen)
-                switch MinimaRevalidation.decide(outlook, destinationVisible: targetVisible) {
-                case .refuse:
-                    hyprLog(.notice, .workspace, "moveWindows: \(window.windowID) → ws\(number) skipped: won't fit")
-                    continue
-                case .revalidateHere:
-                    guard revalidateVisibleDestination(window, workspace: number, screen: targetScreen,
-                                                       from: screen) else {
-                        hyprLog(.notice, .workspace, "moveWindows: \(window.windowID) → ws\(number) skipped: revalidation refused")
-                        continue
-                    }
-                case .parkForReveal:
-                    revalidation.park(window.windowID, toWorkspace: number, screen: targetScreen,
-                                      sourceWorkspace: currentWorkspace, sourceScreen: screen)
-                case .admit:
-                    break
-                }
+        var plans: [PlannedMove] = []
+        var seen: Set<CGWindowID> = []
+        for (window, number) in moves where seen.insert(window.windowID).inserted {
+            let id = window.windowID
+            let source = workspaceManager.workspaceFor(id)
+            if source == number { continue }
+            if number == TilingEngine.scratchpadWorkspace || source == TilingEngine.scratchpadWorkspace
+                || isScratchpadWindow(id) {
+                result.refused[id] = .scratchpad
+                continue
             }
-
-            if !isFloating, let cw = currentWorkspace {
-                tilingEngine.removeWindow(window, fromWorkspace: cw)
+            // a parked window stands on no screen, which is not a disabled one
+            let physical = displayManager.screen(for: window)
+            if let physical, workspaceManager.isMonitorDisabled(physical) {
+                result.refused[id] = .sourceMonitorDisabled
+                continue
             }
-            workspaceManager.moveWindow(window.windowID, toWorkspace: number)
-            if targetVisible {
-                if isFloating { carryFloaterToScreen(window, targetScreen) }
-            } else {
-                if isFloating { workspaceManager.saveFloatingFrame(window) }
-                workspaceManager.hideInCorner(window, on: targetScreen)
+            guard let targetScreen = workspaceManager.homeScreenForWorkspace(number),
+                  !workspaceManager.isMonitorDisabled(targetScreen) else {
+                result.refused[id] = .destinationMonitorDisabled
+                continue
             }
-            hyprLog(.debug, .workspace, "moveWindows: \(window.windowID) ws\(currentWorkspace.map(String.init) ?? "none") → ws\(number)")
-            moved += 1
+            plans.append(PlannedMove(
+                window: window, source: source, destination: number,
+                tiled: !stateCache.floatingWindowIDs.contains(id),
+                sourceScreen: physical ?? source.flatMap(workspaceManager.homeScreenForWorkspace) ?? targetScreen,
+                targetScreen: targetScreen,
+                targetVisible: workspaceManager.screenForWorkspace(number) != nil))
         }
 
-        if moved > 0 {
+        // the windows a retile would lay out, plus the batch's own
+        var known: [CGWindowID: HyprWindow] = [:]
+        for window in allWindows() {
+            if stateCache.floatingWindowIDs.contains(window.windowID) { window.isFloating = true }
+            known[window.windowID] = window
+        }
+        for plan in plans { known[plan.id] = plan.window }
+
+        var refusedGroups: [Int: BatchMoveResult.Refusal] = [:]
+        // visible destinations this batch has republished, with what they now hold
+        var laidOut: [Int: (screen: NSScreen, ids: Set<CGWindowID>)] = [:]
+        // arrivals some layout pulled onto a visible screen
+        var attempted: Set<CGWindowID> = []
+        var accepted: [PlannedMove] = []
+        var outlooks: [Int: TilingEngine.AdmissionOutlook] = [:]
+        while true {
+            (accepted, outlooks) = settleBatch(plans, refusing: &refusedGroups, known: known)
+            guard let failed = layOutVisibleDestinations(accepted, outlooks: outlooks, known: known,
+                                                         laidOut: &laidOut, attempted: &attempted) else { break }
+            refusedGroups[failed] = .sizingRefused
+        }
+
+        for plan in accepted {
+            revalidation.cancel(plan.id, reason: "moved again")
+            if plan.tiled, let source = plan.source {
+                // membership only: the one retile below lays the source out
+                tilingEngine.removeWindowMembershipOnly(plan.window, fromWorkspace: source)
+            }
+            workspaceManager.moveWindow(plan.id, toWorkspace: plan.destination)
+            if plan.targetVisible {
+                // tiled arrivals already hold their verified slot
+                if !plan.tiled { carryFloaterToScreen(plan.window, plan.targetScreen) }
+            } else {
+                if !plan.tiled { workspaceManager.saveFloatingFrame(plan.window) }
+                workspaceManager.hideInCorner(plan.window, on: plan.targetScreen)
+                if plan.tiled, case .revalidatable = outlooks[plan.destination] {
+                    revalidation.park(plan.id, toWorkspace: plan.destination, screen: plan.targetScreen,
+                                      sourceWorkspace: plan.source, sourceScreen: plan.sourceScreen)
+                }
+            }
+            hyprLog(.debug, .workspace, "moveWindows: \(plan.id) ws\(plan.source.map(String.init) ?? "none") → ws\(plan.destination)")
+            result.moved[plan.id] = plan.destination
+        }
+
+        for plan in plans where result.moved[plan.id] == nil {
+            guard let reason = refusedGroups[plan.destination] else { continue }
+            result.refused[plan.id] = reason
+            // a refused layout's rollback may not have put it back in the corner
+            if attempted.contains(plan.id), let source = plan.source,
+               !workspaceManager.isWorkspaceVisible(source) {
+                workspaceManager.hideInCorner(plan.window, on: plan.sourceScreen)
+            }
+        }
+        for (id, reason) in result.refused.sorted(by: { $0.key < $1.key }) {
+            hyprLog(.notice, .workspace, "moveWindows: \(id) skipped: \(reason)")
+        }
+
+        if !result.moved.isEmpty || !laidOut.isEmpty {
             tileAllVisibleSpaces()
+        }
+        if !result.moved.isEmpty {
             NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
         }
-        return moved
+        return result
     }
 
-    /// The structural full-by-count check `moveToWorkspace` applies to a
-    /// hidden destination, as the reason to log, or `nil` when the
-    /// workspace has room. Occupancy counts the way admission does: a
-    /// closed-but-alive ghost holds no slot, a minimized or Cmd-H'd
-    /// window still does.
-    private func capacityRefusal(for window: HyprWindow, movingTo number: Int, on targetScreen: NSScreen,
-                                 targetVisible: Bool) -> String? {
-        guard !targetVisible else { return nil }
+    /// Refuse destination groups until every remaining destination fits
+    /// its projected membership. Returns the moves still standing and the
+    /// outlook of each destination they tile into.
+    private func settleBatch(_ plans: [PlannedMove],
+                             refusing refused: inout [Int: BatchMoveResult.Refusal],
+                             known: [CGWindowID: HyprWindow])
+        -> ([PlannedMove], [Int: TilingEngine.AdmissionOutlook]) {
+        while true {
+            let accepted = plans.filter { !$0.tiled || refused[$0.destination] == nil }
+            var outlooks: [Int: TilingEngine.AdmissionOutlook] = [:]
+            var changed = false
+            for workspace in Set(accepted.filter(\.tiled).map(\.destination)).sorted() {
+                let screen = accepted.first { $0.destination == workspace }!.targetScreen
+                let ids = projectedTiledIDs(workspace, accepted)
+                let capacity = RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: screen))
+                if ids.count > capacity {
+                    refused[workspace] = .full(tiled: ids.count, capacity: capacity)
+                    changed = true
+                    continue
+                }
+                let arriving = Set(accepted.filter { $0.tiled && $0.destination == workspace }.map(\.id))
+                let outlook = tilingEngine.projectedAdmissionOutlook(
+                    ids.sorted().compactMap { known[$0] }, incoming: arriving,
+                    onWorkspace: workspace, screen: screen)
+                if case .refused = outlook {
+                    refused[workspace] = .wontFit
+                    changed = true
+                    continue
+                }
+                outlooks[workspace] = outlook
+            }
+            if !changed { return (accepted, outlooks) }
+        }
+    }
+
+    /// What `workspace` tiles once `accepted` lands, counted the way
+    /// admission counts: a closed-but-alive ghost holds no slot, a
+    /// minimized or Cmd-H'd window still does.
+    private func projectedTiledIDs(_ workspace: Int, _ accepted: [PlannedMove]) -> Set<CGWindowID> {
         let excluded = ActionDispatcher.admissionExclusions(
             floatingWindowIDs: stateCache.floatingWindowIDs,
             hiddenWindowIDs: stateCache.hiddenWindowIDs,
             reservedHiddenWindowIDs: stateCache.reservedHiddenWindowIDs)
-        let tiledCount = workspaceManager.windowIDs(onWorkspace: number).subtracting(excluded).count
-        let maxWindows = RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: targetScreen))
-        return tiledCount >= maxWindows ? "workspace full (\(tiledCount)/\(maxWindows))" : nil
+        let leaving = Set(accepted.filter { $0.source == workspace }.map(\.id))
+        let arriving = Set(accepted.filter { $0.tiled && $0.destination == workspace }.map(\.id))
+        return workspaceManager.windowIDs(onWorkspace: workspace)
+            .subtracting(excluded).subtracting(leaving).union(arriving)
+    }
+
+    /// Lay every visible destination out for its projected membership
+    /// before any assignment changes. Also lays out again any destination
+    /// an earlier round republished whose plan has since changed, which is
+    /// how a refused group's arrivals leave a screen they were tried on.
+    ///
+    /// - Returns: the first destination that refused its arrivals, or nil
+    ///   when every one accepted.
+    private func layOutVisibleDestinations(_ accepted: [PlannedMove],
+                                           outlooks: [Int: TilingEngine.AdmissionOutlook],
+                                           known: [CGWindowID: HyprWindow],
+                                           laidOut: inout [Int: (screen: NSScreen, ids: Set<CGWindowID>)],
+                                           attempted: inout Set<CGWindowID>) -> Int? {
+        var screens: [Int: NSScreen] = laidOut.mapValues(\.screen)
+        for plan in accepted where plan.tiled && plan.targetVisible {
+            screens[plan.destination] = plan.targetScreen
+        }
+        for (workspace, screen) in screens.sorted(by: { $0.key < $1.key }) {
+            let ids = projectedTiledIDs(workspace, accepted)
+            if laidOut[workspace]?.ids == ids { continue }
+            let arrivals = accepted.filter { $0.tiled && $0.destination == workspace }
+            let arriving = Set(arrivals.map(\.id))
+            let windows = ids.sorted().compactMap { known[$0] }
+            // the rollback has to reach back to wherever the arrivals stand
+            let reach = arrivals.map { displayManager.cgRect(for: $0.sourceScreen) }.reduce(nil) {
+                (union: CGRect?, rect: CGRect) in union.map { $0.union(rect) } ?? rect
+            }
+            attempted.formUnion(arriving)
+            let layout: TilingEngine.AdmissionResult
+            if case .revalidatable = outlooks[workspace] {
+                layout = tilingEngine.revalidateAdmission(windows, incoming: arriving, onWorkspace: workspace,
+                                                          screen: screen, restorationReach: reach)
+            } else {
+                layout = tilingEngine.tileWindows(windows, onWorkspace: workspace, screen: screen,
+                                                  alsoRestoringWithin: reach)
+            }
+            if layout.published && arriving.isSubset(of: layout.publishedIDs) {
+                laidOut[workspace] = (screen, ids)
+                continue
+            }
+            if arriving.isEmpty {
+                // putting a destination back refused. an earlier round's
+                // arrival would stay in this tree while it stays assigned
+                // elsewhere, so drop it by membership; the final retile
+                // lays out what is left
+                hyprLog(.notice, .workspace, "moveWindows: ws\(workspace) relayout refused"
+                        + " \(layout.failure.map { "\($0)" } ?? "")")
+                let strays = tilingEngine.existingTree(forWorkspace: workspace, screen: screen)?
+                    .allWindows.filter { !ids.contains($0.windowID) } ?? []
+                for window in strays {
+                    tilingEngine.removeWindowMembershipOnly(window, fromWorkspace: workspace)
+                }
+                laidOut[workspace] = (screen, ids)
+                continue
+            }
+            hyprLog(.notice, .workspace, "moveWindows: ws\(workspace) refused its arrivals"
+                    + " [\(arriving.sorted().map(String.init).joined(separator: ", "))]"
+                    + " \(layout.failure.map { "\($0)" } ?? "no slot")")
+            // the live tree still holds whatever the last accepted round left
+            return workspace
+        }
+        return nil
     }
 
     // MARK: - move window to adjacent monitor
