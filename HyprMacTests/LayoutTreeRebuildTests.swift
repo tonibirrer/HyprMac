@@ -236,6 +236,33 @@ final class LayoutTreeRebuildTests: XCTestCase {
         XCTAssertEqual(refusing.layoutTree(forWorkspace: 1, ref: refOf), saved)
     }
 
+    func testHiddenRebuildMarksGeometryUnverifiedUntilShown() {
+        let saved = LayoutNode.split(override: .vertical, ratio: 0.7, userSet: true, left: leaf(1), right: leaf(2))
+
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
+                                         windows: ids([1, 2]), applyFrames: false, resolve: byID)
+
+        XCTAssertEqual(outcome, .rebuilt(inserted: 0, refusedNewcomers: []))
+        XCTAssertEqual(engine.unverifiedLayouts.map(\.workspace), [1])
+        XCTAssertEqual(engine.unverifiedGeometryWindowIDs, [1, 2])
+        XCTAssertNil(engine.intendedTileRects()[1], "parked frames are not the tree's frames")
+
+        // the ordinary show path: an accepted tile clears the mark and keeps the shape
+        let shown = engine.tileWindows(ids([1, 2]), onWorkspace: 1, screen: screen)
+
+        XCTAssertNil(shown.failure)
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty)
+        XCTAssertNotNil(engine.intendedTileRects()[1])
+        XCTAssertEqual(engine.layoutTree(forWorkspace: 1, ref: refOf), saved)
+    }
+
+    func testVisibleRebuildLeavesNoUnverifiedMark() {
+        let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(1), right: leaf(2))
+        _ = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
+                               windows: ids([1, 2]), applyFrames: true, resolve: byID)
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty)
+    }
+
     func testEmptyTreeOnOtherScreenForSameWorkspaceIsPruned() {
         let other = RebuildOtherScreen()
         let screens: [NSScreen] = [screen, other]
@@ -310,6 +337,7 @@ final class LayoutTreeRebuildTests: XCTestCase {
 
         XCTAssertEqual(outcome, .refusedIncumbents([5]))
         XCTAssertEqual(live()!.structuralFingerprint(), before)
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty, "nothing was published, nothing to verify")
     }
 
     func testRefusedNewcomerIsReturnedAndTreePublishes() {

@@ -445,7 +445,8 @@ class TilingEngine {
     /// With `applyFrames` the layout runs the same verified sizing as
     /// `tileWindows` and publishes only on acceptance. Pass `false` for a
     /// hidden workspace: its windows are parked, so the shape is
-    /// published unverified and the next show verifies it.
+    /// published with the key marked unverified, and the next accepted
+    /// tile (the show) clears the mark.
     func rebuildTree(forWorkspace workspace: Int, screen: NSScreen, from root: LayoutNode,
                      windows: [HyprWindow], applyFrames: Bool,
                      resolve: (SavedWindowRef) -> HyprWindow?) -> LayoutRebuildOutcome {
@@ -512,6 +513,11 @@ class TilingEngine {
         }
 
         if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+        if !applyFrames {
+            // parked windows: the tree speaks for nothing on screen until a show verifies it
+            mark(key, windowIDs: Set(candidate.allWindows.map(\.windowID)),
+                 insertedIDs: Set(insertedIDs), restored: false)
+        }
         for (other, t) in trees where other.workspace == workspace && other != key && t.allWindows.isEmpty {
             trees.removeValue(forKey: other)
             unverified.removeValue(forKey: other)

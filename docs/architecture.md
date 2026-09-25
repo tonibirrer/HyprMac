@@ -194,7 +194,8 @@ find no slot rejects the rebuild and the live tree stays; a newcomer
 that finds none is left out and handed back to the caller. Visible
 workspaces go through the same verified sizing as any tile and publish
 only on acceptance; a hidden workspace's windows are parked, so its
-shape is published unverified and verified on the next show. The Settings monitor toggle reuses the
+shape is published with the key marked unverified, and the accepted
+tile on its next show clears the mark. The Settings monitor toggle reuses the
 reconcile under an unchanged key and does not restore.
 
 ## Threading
