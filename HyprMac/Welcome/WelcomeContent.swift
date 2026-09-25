@@ -26,14 +26,19 @@ enum WhatsNewFeatures {
     // update this before each release — see CLAUDE.md instructions
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "bolt",
-            title: "An Instant Workspace Indicator",
-            description: "The workspace flash now appears the moment you press the shortcut, before HyprMac rearranges any windows, instead of trailing the switch."
+            icon: "paintpalette",
+            title: "A New Look",
+            description: "HyprMac has a new icon and logo. Settings got a cleanup too: a calmer Keys panel, and shortcuts now show the Hypr key as hypr."
         ),
         WhatsNewFeature(
-            icon: "rectangle.and.text.magnifyingglass",
-            title: "A Cleaner Workspace Flash",
-            description: "The indicator shows just the workspace number. The display name no longer appears under it on any monitor setup."
+            icon: "rectangle.portrait.and.arrow.forward",
+            title: "Hypr+F Finds the Empty Workspace",
+            description: "Minimized, hidden, and closed-but-running windows no longer make Hypr+F skip a workspace that looks empty."
+        ),
+        WhatsNewFeature(
+            icon: "capslock",
+            title: "A Caps Lock Reminder",
+            description: "If Caps Lock is your Hypr key, it has to stay on \"⇪ Caps Lock\" in System Settings → Keyboard → Modifier Keys. Onboarding and Settings → Keys now say so, with a button that opens the pane."
         ),
     ]
 }
