@@ -27,7 +27,7 @@ struct MenuBarView: View {
             actions
         }
         .padding(HyprSpacing.md)
-        .frame(width: 280)
+        .frame(width: 320)
         .background(Color.hyprBackground)
     }
 
@@ -35,11 +35,8 @@ struct MenuBarView: View {
 
     private var header: some View {
         HStack(spacing: HyprSpacing.sm) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("HYPRMAC")
-                    .font(.hyprMono)
-                    .kerning(2)
-                    .foregroundStyle(Color.hyprTextPrimary)
+            VStack(alignment: .leading, spacing: 4) {
+                HyprLockup(markSize: 18)
                 Text(config.enabled ? "Tiling active" : "Tiling paused")
                     .font(.hyprMonoXs)
                     .foregroundStyle(config.enabled ? Color.hyprCyan : Color.hyprTextTertiary)
@@ -123,18 +120,15 @@ struct MenuBarView: View {
             MenuBarRow("Keybinds", icon: "keyboard") {
                 appDelegate.windowManager?.handleAction(.showKeybinds)
             } trailing: {
-                HStack(spacing: 3) {
-                    KeyChip("HYPR")
-                    KeyChip("K")
+                if let binding = config.keybinds.first(where: { $0.action == .showKeybinds }) {
+                    KeybadgeView(bind: binding, fontSize: 11)
                 }
             }
             MenuBarRow("Workspace overview", icon: "rectangle.grid.3x2") {
                 appDelegate.windowManager?.handleAction(.showWorkspaceOverview)
             } trailing: {
                 if let binding = config.keybinds.first(where: { $0.action == .showWorkspaceOverview }) {
-                    HStack(spacing: 3) {
-                        ForEach(binding.badgeLabels(), id: \.self) { KeyChip($0) }
-                    }
+                    KeybadgeView(bind: binding, fontSize: 11)
                 }
             }
             MenuBarRow("Settings…", icon: "gearshape") {
@@ -207,6 +201,8 @@ private struct MenuBarRow<Trailing: View>: View {
                 Text(label)
                     .font(.hyprBody)
                     .foregroundStyle(destructive ? Color.red.opacity(0.95) : Color.hyprTextPrimary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
                 Spacer()
                 if let shortcut {
                     Text(shortcut)

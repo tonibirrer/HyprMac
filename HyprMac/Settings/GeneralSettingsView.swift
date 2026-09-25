@@ -35,12 +35,16 @@ struct GeneralSettingsView: View {
         HyprPanel("Status",
                   footer: accessibilityGranted ? nil : "Accessibility permission is required for HyprMac to function. Open System Settings to grant it.") {
             HyprRow("HyprMac", icon: "bolt.fill") {
-                if config.enabled {
-                    HyprAccentBadge("ACTIVE", icon: "checkmark")
+                // the toggle style carries its own spacer; keep the badge beside it
+                HStack(spacing: 0) {
+                    if config.enabled {
+                        HyprAccentBadge("ACTIVE", icon: "checkmark")
+                    }
+                    Toggle("", isOn: $config.enabled)
+                        .toggleStyle(HyprToggleStyle())
+                        .labelsHidden()
                 }
-                Toggle("", isOn: $config.enabled)
-                    .toggleStyle(HyprToggleStyle())
-                    .labelsHidden()
+                .fixedSize()
             }
             HyprRow(accessibilityGranted ? "Accessibility granted" : "Accessibility required",
                     icon: accessibilityGranted ? "checkmark.shield" : "exclamationmark.shield",

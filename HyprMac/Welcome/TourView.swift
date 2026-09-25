@@ -1,13 +1,13 @@
 // Single Tour shell that renders both the first-run walkthrough and
 // the post-update "What's New" page. Styled on-system with Hypr tokens
-// (mockups 1k / 1l): solid dark chassis, cyan accents, mono wordmark.
+// (mockups 1k / 1l): solid dark chassis, cyan accents, brand lockup.
 
 import SwiftUI
 
 // MARK: - shell
 
-/// 520×440 shell shared by the tutorial and what's-new. Header (icon +
-/// wordmark + right slot) · content page · footer. Mode picks the page
+/// 520×440 shell shared by the tutorial and what's-new. Header (lockup +
+/// right slot) · content page · footer. Mode picks the page
 /// set and footer.
 struct TourView: View {
     let mode: WelcomeMode
@@ -34,18 +34,7 @@ struct TourView: View {
 
     private var header: some View {
         HStack {
-            HStack(spacing: 10) {
-                if let icon = NSApp.applicationIconImage {
-                    Image(nsImage: icon)
-                        .resizable()
-                        .frame(width: 30, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
-                Text(mode == .firstRun ? "HYPRMAC TUTORIAL" : "HYPRMAC")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .tracking(1.5)
-                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.7))
-            }
+            HyprLockup(markSize: 20)
             Spacer()
             headerSlot
         }
@@ -58,7 +47,7 @@ struct TourView: View {
         switch mode {
         case .firstRun:
             // tutorial page counter
-            Text("\(page + 1) / \(pageCount)")
+            Text("Tutorial · \(page + 1) / \(pageCount)")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color.hyprTextPrimary.opacity(0.35))
         case .whatsNew:
@@ -291,7 +280,7 @@ private struct TourHeroPage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 48)
+        .padding(.horizontal, 32)
         // observe dispatched actions; flip on any focusDirection
         .onReceive(NotificationCenter.default.publisher(for: .hyprMacActionDispatched)) { note in
             if note.userInfo?["action"] as? String == "focusDirection" {
@@ -300,11 +289,11 @@ private struct TourHeroPage: View {
         }
     }
 
-    // one-line reminder: macOS can hide the Hypr key before HyprMac sees it
+    // compact reminder: macOS can hide the Hypr key before HyprMac sees it
     private func modifierKeysNote(_ guidance: HyprKeySystemGuidance) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(spacing: 10) {
             Image(systemName: "keyboard")
-                .font(.system(size: 11.5))
+                .font(.system(size: 12))
                 .foregroundStyle(Color.hyprCyan)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
@@ -313,26 +302,43 @@ private struct TourHeroPage: View {
                     .foregroundStyle(Color.hyprTextPrimary.opacity(0.75))
                 // the path in words, in case the deep link only lands on the Keyboard pane
                 Text(HyprKeySystemGuidance.settingsPath)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.5))
+                    .font(.system(size: 10))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.45))
             }
-            .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
-            Button(HyprKeySystemGuidance.openButtonTitle) {
+            Spacer(minLength: 8)
+            Button("Open…") {
                 HyprKeySystemGuidance.openKeyboardSettings()
             }
-            .buttonStyle(.bordered)
             .controlSize(.small)
+            .fixedSize()
+            .accessibilityLabel(HyprKeySystemGuidance.openButtonTitle)
         }
-        .frame(maxWidth: 430)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: 456)
+        .background(
+            RoundedRectangle(cornerRadius: HyprRadius.md + 3, style: .continuous)
+                .fill(Color.hyprSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HyprRadius.md + 3, style: .continuous)
+                .strokeBorder(Color.hyprTextPrimary.opacity(0.08), lineWidth: 1)
+        )
+        .help(guidance.detail)
     }
 
     // 150×58 rounded key with cyan border + 3pt bottom edge + soft glow
     private var keycap: some View {
         HStack(spacing: 8) {
-            Text(config.hyprKey.badgeLabel)
-                .font(.system(size: 16, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.hyprCyan)
+            // skip the glyph when it would just repeat the name ("Tab TAB")
+            if config.hyprKey.badgeLabel.lowercased() != config.hyprKey.displayName.lowercased() {
+                Text(config.hyprKey.badgeLabel)
+                    .font(.system(size: 16, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color.hyprCyan)
+            }
             Text(config.hyprKey.displayName.uppercased())
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .tracking(1)
@@ -383,11 +389,11 @@ private struct TourHeroPage: View {
                 )
             } else {
                 HStack(spacing: 8) {
-                    if let focusChord {
+                    if let focusBind {
                         Text("Try it now")
                             .font(.system(size: 11))
                             .foregroundStyle(Color.hyprTextPrimary.opacity(0.6))
-                        MiniKey(focusChord)
+                        KeybadgeView(bind: focusBind, fontSize: 10)
                     } else {
                         Text("Add Focus Right in Settings → Keys to try it here.")
                             .font(.system(size: 11))
@@ -411,9 +417,9 @@ private struct TourHeroPage: View {
         }
     }
 
-    private var focusChord: String? {
-        WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey) {
-            if case .focusDirection(.right) = $0 { return true }
+    private var focusBind: Keybind? {
+        config.keybinds.first {
+            if case .focusDirection(.right) = $0.action { return true }
             return false
         }
     }
@@ -457,28 +463,6 @@ private struct TourWindowPage: View {
         default:
             return "Add floating-window shortcuts in Settings → Keys."
         }
-    }
-}
-
-// small cyan key chip used inside the try-it pill
-private struct MiniKey: View {
-    let label: String
-    init(_ label: String) { self.label = label }
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
-            .foregroundStyle(Color.hyprCyan)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
-                    .fill(Color.hyprCyan.opacity(0.12))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
-                    .strokeBorder(Color.hyprCyan.opacity(0.35), lineWidth: 1)
-            )
     }
 }
 
@@ -674,10 +658,10 @@ private struct TourFinishPage: View {
                 .foregroundStyle(Color.hyprTextPrimary)
 
             Group {
-                if let keymapChord {
+                if let keymapBind {
                     HStack(spacing: 6) {
                         Text("Press")
-                        KeyChip(keymapChord)
+                        KeybadgeView(bind: keymapBind, fontSize: 12)
                         Text("anytime")
                     }
                 } else {
@@ -706,11 +690,8 @@ private struct TourFinishPage: View {
         .padding(.horizontal, 48)
     }
 
-    private var keymapChord: String? {
-        WelcomeContent.chord(in: config.keybinds, hyprKey: config.hyprKey, matching: {
-            if case .showKeybinds = $0 { return true }
-            return false
-        })
+    private var keymapBind: Keybind? {
+        config.keybinds.first { $0.action == .showKeybinds }
     }
 
     private var pauseInstruction: String {

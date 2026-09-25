@@ -39,8 +39,10 @@ struct HyprKeySystemGuidance: Equatable {
     static let openButtonTitle = "Open Keyboard Settings"
 
     var title: String {
-        "Keep \(keyName) set to \"\(requiredAction)\" in macOS Modifier Keys."
+        "Keep \(keyName) set to \"\(requiredAction)\" in Modifier Keys on each keyboard."
     }
+
+    static let cannotCheckNote = "HyprMac can't check it."
 
     var detail: String {
         "Check \(Self.settingsPath) for each keyboard you use. \"No Action\" or any other choice hides \(keyName) from HyprMac. HyprMac can't check it for you."

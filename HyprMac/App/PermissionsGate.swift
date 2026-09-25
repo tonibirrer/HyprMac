@@ -129,10 +129,9 @@ struct ModifierKeysCheckRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(guidance.title)
+                    Text("Modifier Keys")
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundStyle(Color.hyprTextPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
                     Text("CHECK")
                         .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                         .tracking(0.5)
@@ -141,12 +140,13 @@ struct ModifierKeysCheckRow: View {
                         .padding(.vertical, 1.5)
                         .background(Capsule().fill(Color.hyprTextTertiary.opacity(0.12)))
                 }
-                Text(guidance.detail)
+                Text("\(guidance.title) \(HyprKeySystemGuidance.cannotCheckNote)")
                     .font(.system(size: 11))
                     .lineSpacing(2)
                     .foregroundStyle(Color.hyprTextPrimary.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .help(guidance.detail)
 
             Spacer(minLength: 8)
 
@@ -205,20 +205,11 @@ struct PermissionsGateView: View {
         }
     }
 
-    // MARK: header — icon + wordmark
+    // MARK: header — lockup
 
     private var header: some View {
-        HStack(spacing: 10) {
-            if let icon = NSApp.applicationIconImage {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 30, height: 30)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            Text("HYPRMAC")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .tracking(1.5)
-                .foregroundStyle(Color.hyprTextPrimary.opacity(0.7))
+        HStack {
+            HyprLockup(markSize: 20)
             Spacer()
         }
         .padding(.horizontal, 20)

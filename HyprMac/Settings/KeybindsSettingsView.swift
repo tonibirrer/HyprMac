@@ -53,16 +53,23 @@ struct KeybindsSettingsView: View {
             }
 
             if search.trimmingCharacters(in: .whitespaces).isEmpty
-                || "Swap tiles by dragging HYPR mouse".localizedCaseInsensitiveContains(search.trimmingCharacters(in: .whitespaces)) {
-                HyprPanel("Mouse", footer: "Hold HYPR and drag a tiled window by its title bar onto another tile in the same workspace.") {
-                    HStack {
-                        Text("Swap tiles by dragging")
-                        Spacer()
-                        Text("HYPR + drag")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                || "Swap tiles by dragging hypr mouse".localizedCaseInsensitiveContains(search.trimmingCharacters(in: .whitespaces)) {
+                HyprPanel("Mouse", footer: "Hold hypr and drag a tiled window by its title bar onto another tile in the same workspace.") {
+                    HStack(spacing: HyprSpacing.md) {
+                        Image(systemName: "hand.draw")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.hyprTextSecondary)
+                            .frame(width: 16)
+                        Text("Swap tiles by dragging")
+                            .font(.hyprBody)
+                        Spacer()
+                        HStack(spacing: 3) {
+                            HyprKeyChip()
+                            KeyChip("drag")
+                        }
                     }
-                    .padding(.vertical, HyprSpacing.sm)
+                    .padding(.horizontal, HyprSpacing.md)
+                    .padding(.vertical, HyprSpacing.sm + 1)
                 }
             }
 
@@ -130,26 +137,45 @@ struct KeybindsSettingsView: View {
         }
     }
 
+    // hand-rolled disclosure so the chevron sits in the icon column and the
+    // summary chips line up with the rows below
     private func workspaceDisclosure(id: String, title: String, binds: [Keybind]) -> some View {
-        DisclosureGroup(isExpanded: Binding(
-            get: { expandedWorkspaceFamilies.contains(id) },
-            set: { expanded in
-                if expanded { expandedWorkspaceFamilies.insert(id) }
-                else { expandedWorkspaceFamilies.remove(id) }
+        let expanded = expandedWorkspaceFamilies.contains(id)
+        return VStack(spacing: 0) {
+            Button {
+                withAnimation(HyprMotion.snap) {
+                    if expanded { expandedWorkspaceFamilies.remove(id) }
+                    else { expandedWorkspaceFamilies.insert(id) }
+                }
+            } label: {
+                HStack(spacing: HyprSpacing.md) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.hyprTextSecondary)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .frame(width: 16)
+                    Text(title)
+                        .font(.hyprBody)
+                        .foregroundStyle(Color.hyprTextPrimary)
+                    Spacer()
+                    workspaceSummaryChord(for: binds[0])
+                }
+                .padding(.horizontal, HyprSpacing.md)
+                .padding(.vertical, HyprSpacing.sm + 1)
+                .contentShape(Rectangle())
             }
-        )) {
-            bindRows(binds)
-                .padding(.leading, HyprSpacing.md)
-        } label: {
-            HStack {
-                Text(title)
-                    .font(.hyprBody)
-                Spacer()
-                Text(workspaceSummaryChord(for: binds[0]))
-                    .font(.hyprMonoSm)
-                    .foregroundStyle(Color.hyprTextSecondary)
+            .buttonStyle(.plain)
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+            if expanded {
+                bindRows(binds)
+                    .padding(.leading, HyprSpacing.md + 16)
             }
-            .padding(.vertical, HyprSpacing.xs)
+
+            Rectangle()
+                .fill(Color.hyprSeparator)
+                .frame(height: 0.5)
+                .padding(.leading, HyprSpacing.md + 16 + HyprSpacing.md)
         }
     }
 
@@ -172,15 +198,15 @@ struct KeybindsSettingsView: View {
         return family.map { $0.1 }
     }
 
-    private func workspaceSummaryChord(for bind: Keybind) -> String {
-        var parts: [String] = []
-        if bind.modifiers.contains(.hypr) { parts.append("HYPR") }
-        if bind.modifiers.contains(.command) { parts.append("⌘") }
-        if bind.modifiers.contains(.shift) { parts.append("⇧") }
-        if bind.modifiers.contains(.option) { parts.append("⌥") }
-        if bind.modifiers.contains(.control) { parts.append("⌃") }
-        parts.append("N")
-        return parts.joined(separator: "+")
+    // same chips as the rows, with N standing in for the number key
+    private func workspaceSummaryChord(for bind: Keybind) -> some View {
+        let labels = Keybind(keyCode: bind.keyCode, modifiers: bind.modifiers.subtracting(.hypr),
+                             action: bind.action).badgeLabels().dropLast()
+        return HStack(spacing: 3) {
+            if bind.modifiers.contains(.hypr) { HyprKeyChip() }
+            ForEach(Array(labels.enumerated()), id: \.offset) { _, label in KeyChip(label) }
+            KeyChip("N")
+        }
     }
 
     // MARK: header — search + add
@@ -237,81 +263,45 @@ struct KeybindsSettingsView: View {
 
     // MARK: hypr hero
 
-    // ⇪ and the other single-glyph badges get the full 30pt; "Tab"/"F13" need less
-    private var keycapFontSize: CGFloat {
-        config.hyprKey.badgeLabel.count > 2 ? 15 : 30
-    }
-
     private var hyprHeroPanel: some View {
-        HStack(spacing: HyprSpacing.lg - 2) {
-            // 52×52 keycap glyph with a brighter bottom bevel
-            Text(config.hyprKey.badgeLabel)
-                .font(.system(size: keycapFontSize, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color.hyprCyan)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .offset(y: config.hyprKey == .capsLock ? -3 : 0)
-                .frame(width: 52, height: 52)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(Color.hyprSurfaceElevated)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(
-                            LinearGradient(
-                                colors: [Color.hyprSeparator, Color.hyprTextPrimary.opacity(0.22)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 1
-                        )
-                )
+        VStack(spacing: 0) {
+            HStack(spacing: HyprSpacing.md) {
+                HyprMark(size: 40)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Hypr key")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.hyprTextPrimary)
-                Text("Hold HYPR while pressing a shortcut key.")
-                    .font(.hyprCaption)
-                    .foregroundStyle(Color.hyprTextSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Shortcuts call it HYPR. Workspace 10 uses the 0 key.")
-                    .font(.hyprCaption)
-                    .foregroundStyle(Color.hyprTextTertiary)
-
-                if let guidance = HyprKeySystemGuidance.forKey(config.hyprKey) {
-                    HStack(alignment: .firstTextBaseline, spacing: HyprSpacing.xs) {
-                        Text(guidance.title)
-                            .font(.hyprCaption)
-                            .foregroundStyle(Color.hyprTextSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button(HyprKeySystemGuidance.openButtonTitle) {
-                            HyprKeySystemGuidance.openKeyboardSettings()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("Hypr key")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.hyprTextPrimary)
+                        HyprKeyChip(fontSize: 10)
                     }
-                    .padding(.top, 2)
-                    Text(guidance.detail)
+                    Text("Hold it, then press a shortcut key.")
                         .font(.hyprCaption)
-                        .foregroundStyle(Color.hyprTextTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(Color.hyprTextSecondary)
                 }
-            }
 
-            Spacer(minLength: HyprSpacing.sm)
+                Spacer(minLength: HyprSpacing.sm)
 
-            Picker("", selection: $config.hyprKey) {
-                ForEach(HyprKey.allCases) { key in
-                    Text(key.displayName).tag(key)
+                Picker("", selection: $config.hyprKey) {
+                    ForEach(HyprKey.allCases) { key in
+                        Text(key.displayName).tag(key)
+                    }
                 }
+                .labelsHidden()
+                .frame(width: 150)
             }
-            .labelsHidden()
-            .frame(width: 150)
+            .padding(.horizontal, HyprSpacing.lg)
+            .padding(.vertical, HyprSpacing.md)
+
+            if let guidance = HyprKeySystemGuidance.forKey(config.hyprKey) {
+                Rectangle()
+                    .fill(Color.hyprCyan.opacity(0.18))
+                    .frame(height: 0.5)
+                modifierKeysReminder(guidance)
+                    .padding(.horizontal, HyprSpacing.lg)
+                    .padding(.vertical, HyprSpacing.sm)
+            }
         }
-        .padding(.horizontal, HyprSpacing.lg)
-        .padding(.vertical, HyprSpacing.md + 2)
         .background(
             RoundedRectangle(cornerRadius: HyprRadius.lg, style: .continuous)
                 .fill(
@@ -326,6 +316,52 @@ struct KeybindsSettingsView: View {
             RoundedRectangle(cornerRadius: HyprRadius.lg, style: .continuous)
                 .strokeBorder(Color.hyprCyan.opacity(0.22), lineWidth: 1)
         )
+    }
+
+    // one line + button; the full explanation sits behind the info button
+    private func modifierKeysReminder(_ guidance: HyprKeySystemGuidance) -> some View {
+        HStack(spacing: HyprSpacing.sm) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.hyprTextSecondary)
+                .frame(width: 40)
+                .accessibilityHidden(true)
+            Text(guidance.title)
+                .font(.hyprCaption)
+                .foregroundStyle(Color.hyprTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: HyprSpacing.sm)
+            GuidanceInfoButton(detail: guidance.detail)
+            Button(HyprKeySystemGuidance.openButtonTitle + "…") {
+                HyprKeySystemGuidance.openKeyboardSettings()
+            }
+            .controlSize(.small)
+            .fixedSize()
+        }
+        .help(guidance.detail)
+    }
+}
+
+// info icon that shows the full modifier keys note in a popover
+private struct GuidanceInfoButton: View {
+    let detail: String
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing.toggle() } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.hyprTextTertiary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("More about Modifier Keys")
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            Text(detail)
+                .font(.hyprCaption)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 260, alignment: .leading)
+                .padding(HyprSpacing.md)
+        }
     }
 }
 
@@ -357,6 +393,7 @@ private struct KeybindRow: View {
                 HStack(spacing: 5) {
                     Text(rowTitle)
                         .font(.hyprBody)
+                        .lineLimit(1)
                         .foregroundStyle(Color.hyprTextPrimary)
                     if bind.touchesFloatingLayer {
                         Text("◇")

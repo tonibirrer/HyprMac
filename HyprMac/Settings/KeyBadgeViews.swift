@@ -4,28 +4,43 @@
 import SwiftUI
 
 /// Renders a keybind's chord as a row of chip-styled key badges
-/// (Hypr, modifiers, key).
+/// (Hypr, modifiers, key). The Hypr modifier is always the "hypr" chip,
+/// whatever physical key the user picked.
 struct KeybadgeView: View {
-    @ObservedObject var config = UserConfig.shared
     let bind: Keybind
+    var fontSize: CGFloat = 13
+
+    private var otherLabels: [String] {
+        let labels = bind.badgeLabels()
+        return bind.modifiers.contains(.hypr) ? Array(labels.dropFirst()) : labels
+    }
 
     var body: some View {
         HStack(spacing: 3) {
-            ForEach(Array(bind.badgeLabels(hyprLabel: config.hyprKey.badgeLabel).enumerated()), id: \.offset) { _, label in
-                KeyChip(label)
+            if bind.modifiers.contains(.hypr) { HyprKeyChip(fontSize: fontSize) }
+            ForEach(Array(otherLabels.enumerated()), id: \.offset) { _, label in
+                KeyChip(label, fontSize: fontSize)
             }
         }
+        // chips never wrap; the row title gives way instead
+        .fixedSize()
     }
 }
 
 /// Single chip-styled key label rendered inside `KeybadgeView`.
 struct KeyChip: View {
     let label: String
-    init(_ label: String) { self.label = label }
+    var fontSize: CGFloat = 13
+    init(_ label: String, fontSize: CGFloat = 13) {
+        self.label = label
+        self.fontSize = fontSize
+    }
 
     var body: some View {
         Text(label)
-            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .frame(minWidth: 28)

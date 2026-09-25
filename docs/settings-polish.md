@@ -176,3 +176,21 @@ In its place I added `HyprKeySystemGuidance`, a pure model that returns the requ
 Validation: the tests were written first and failed to compile, as recorded. After implementation, 9 focused guidance tests passed, `WelcomeContentTests` passed, and the full isolated suite passed **881 tests, 23 skipped, zero failures** — the 872-test baseline plus the 9 new ones. The real `HyprMac.xcodeproj` built clean in Debug, and the signed universal Debug build passed. `project.pbxproj` was regenerated with `xcodegen generate` to pick up the new source file.
 
 One note on the harness: a full run leaves `focusBorderColorHex` set to `123456` in its isolated home, so the next run of `ConfigUpdateCoordinatorTests` sees no change and two tests fail. I reproduced this at `46c2496` with no changes of my own, so it predates this work. Deleting the isolated home's `config.json` clears it. Logs: `build/guidance/red.log`, `build/guidance/green.log`, `build/guidance/welcome.log`, `build/guidance/full-tests.log`, `build/guidance/xcode-debug-build.log`, and `build/guidance/signed-debug-build.log`.
+
+## Brand mark and hypr chips
+
+Zach flagged the Settings → Keys Hypr panel as cluttered, with a truncated "Open Keyboard…" button and the old cyan caps-lock keycap. The panel now shows the brand mark, a title, one line, and the key picker. The Modifier Keys reminder is one row under it: a single sentence, an info button whose popover holds the full explanation, and a fully visible "Open Keyboard Settings…" button. It still hides when the chosen key isn't in that pane. The permissions gate row is titled "Modifier Keys" and uses the same short sentence plus "HyprMac can't check it."
+
+`HyprMac/Shared/HyprMark.swift` draws the mark in SwiftUI from the brand kit's `hyprmac-mark-h` geometry, so it needs no asset and stays sharp at any size. `HyprLockup` (mark plus "HyprMac" in SF Pro Semibold, caps as tall as the key) replaces the mono "HYPRMAC" wordmark in the Settings sidebar, the menu, the tutorial and What's New header, and the permissions gate.
+
+The Hypr modifier now renders as a cyan "hypr" keycap everywhere a chord is drawn as chips: keybind rows, the recorder, workspace family summaries, the mouse gesture row, the menu, and the tutorial. The Hypr+K overlay keeps its own HYPR style. Chips never wrap; the row title truncates instead. Workspace families use a custom disclosure row so their chips line up with the rows below. The menu is 320 points wide so "Workspace overview" fits next to its chord.
+
+Smaller fixes: the ACTIVE badge sits next to its toggle, the corner color well no longer overflows its row, recorder pills share one height, and the tutorial's Tab keycap no longer reads "Tab TAB".
+
+`HyprMacTests/InterfaceSnapshotTests.swift` renders these views offscreen at 2x. It is skipped unless `HYPRMAC_RENDER_UI` names an output directory, and it restores the isolated config's Hypr key and keybinds afterwards:
+
+```
+HYPRMAC_RENDER_UI=/tmp/ui-shots ./scripts/test-isolated.sh --debug-variant InterfaceSnapshotTests
+```
+
+Validation: the full isolated suite passed twice in a row, 1021 tests, 27 skipped, zero failures. Visual acceptance on the MacBook is still Zach's.

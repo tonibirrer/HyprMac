@@ -43,14 +43,13 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(spacing: 0) {
             // header
-            VStack(alignment: .leading, spacing: 4) {
-                Text("HYPRMAC")
-                    .font(.hyprMono)
-                    .kerning(2)
-                    .foregroundStyle(Color.hyprTextPrimary)
+            VStack(alignment: .leading, spacing: 6) {
+                HyprLockup(markSize: 22)
+                // indented to sit under the wordmark
                 Text("v\(appVersion)")
                     .font(.hyprMonoXs)
                     .foregroundStyle(Color.hyprTextTertiary)
+                    .padding(.leading, 22 * 1.22)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, HyprSpacing.lg)
