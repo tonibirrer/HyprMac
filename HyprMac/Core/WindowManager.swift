@@ -1666,8 +1666,8 @@ class WindowManager {
     /// (default: the current topology). Floaters, scratchpad members, and
     /// windows without a workspace are in no tree, so they are never saved.
     ///
-    /// - Returns: `false` when nothing was saved — no tiled windows, or an
-    ///   automatic save yielding to a manual snapshot.
+    /// - Returns: `false` when nothing was saved — no tiled windows, an
+    ///   automatic save yielding to a manual snapshot, or a failed write.
     @discardableResult
     private func saveLayoutSnapshot(manual: Bool, displayKey: String? = nil) -> Bool {
         let key = displayKey ?? LayoutSnapshotStore.displayKey(screens: displayManager.screens)
@@ -1679,11 +1679,14 @@ class WindowManager {
             hyprLog(.debug, .lifecycle, "layout save skipped — no tiled windows for '\(key)'")
             return false
         }
-        let saved = layoutStore.save(displayKey: key, workspaces: workspaces, manual: manual)
-        if manual {
-            flashLayoutMessage("Layout saved")
+        do {
+            let saved = try layoutStore.save(displayKey: key, workspaces: workspaces, manual: manual)
+            if manual { flashLayoutMessage("Layout saved") }
+            return saved
+        } catch {
+            if manual { flashLayoutMessage("Couldn't save layout") }
+            return false
         }
-        return saved
     }
 
     /// Bring back the saved layout for the current topology: windows go

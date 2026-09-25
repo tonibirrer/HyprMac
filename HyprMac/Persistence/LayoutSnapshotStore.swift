@@ -103,6 +103,22 @@ struct LayoutSnapshot: Codable, Equatable {
 /// shared instance uses
 /// `~/Library/Application Support/HyprMac/layout-snapshots.json`.
 ///
+/// Display keys are monitor name plus size only. Two setups with the
+/// same monitors at the same sizes share one key, whatever their
+/// arrangement or position, and so do two physical monitors of the
+/// same model. They save over and restore from the same snapshot.
+///
+/// The file is plain JSON on this Mac and holds each tiled window's
+/// raw title (document names, page titles, terminal commands). Nothing
+/// leaves the machine. To clear every snapshot, quit HyprMac and delete
+/// the file; a new one is written on the next save.
+///
+/// A save only reports success after the atomic write lands; on a
+/// failed write it throws and memory is rolled back to match the disk.
+/// Entries this build can't read (a newer schema) are kept verbatim
+/// when the file is rewritten. A file that can't be parsed at all is
+/// moved aside to `layout-snapshots.json.unreadable` on load.
+///
 /// Threading: main-thread only.
 final class LayoutSnapshotStore {
 
@@ -118,6 +134,9 @@ final class LayoutSnapshotStore {
 
     /// Every snapshot on disk, keyed by display fingerprint.
     private(set) var snapshots: [String: LayoutSnapshot] = [:]
+
+    /// Raw JSON of entries this build can't decode, written back as-is.
+    private var unreadable: [String: Any] = [:]
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -140,22 +159,33 @@ final class LayoutSnapshotStore {
     /// Store `workspaces` under `displayKey`. An automatic save never
     /// replaces a manual one.
     ///
-    /// - Returns: `false` when the save was skipped.
+    /// - Returns: `false` when the save was skipped for a manual snapshot.
+    /// - Throws: the write error. Memory is left as it was before the call.
     @discardableResult
-    func save(displayKey: String, workspaces: [WorkspaceLayout], manual: Bool) -> Bool {
+    func save(displayKey: String, workspaces: [WorkspaceLayout], manual: Bool) throws -> Bool {
         if !manual, let existing = snapshots[displayKey], existing.isManual {
             hyprLog(.debug, .lifecycle, "layout auto-save skipped — manual snapshot exists for '\(displayKey)'")
             return false
         }
+        let previous = (snapshots, unreadable)
+        // whole seconds, since iso8601 on disk drops the rest
+        let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
         snapshots[displayKey] = LayoutSnapshot(
             schemaVersion: LayoutSnapshot.currentSchemaVersion,
             displayKey: displayKey,
-            timestamp: Date(),
+            timestamp: now,
             isManual: manual,
             workspaces: workspaces
         )
+        unreadable[displayKey] = nil
         pruneOldest()
-        persist()
+        do {
+            try persist()
+        } catch {
+            (snapshots, unreadable) = previous
+            hyprLog(.warning, .lifecycle, "layout snapshot not written for '\(displayKey)': \(error)")
+            throw error
+        }
         let windows = workspaces.reduce(0) { $0 + $1.root.leaves.count }
         hyprLog(.notice, .lifecycle,
                 "layout \(manual ? "saved" : "auto-saved"): \(workspaces.count) workspaces, \(windows) windows for '\(displayKey)'")
@@ -176,7 +206,10 @@ final class LayoutSnapshotStore {
         while snapshots.count > Self.maxSnapshots {
             let automatic = snapshots.filter { !$0.value.isManual }
             let pool = automatic.isEmpty ? snapshots : automatic
-            guard let oldest = pool.min(by: { $0.value.timestamp < $1.value.timestamp }) else { break }
+            // timestamps are whole seconds, so ties fall back to the key
+            guard let oldest = pool.min(by: {
+                ($0.value.timestamp, $0.key) < ($1.value.timestamp, $1.key)
+            }) else { break }
             snapshots.removeValue(forKey: oldest.key)
             hyprLog(.debug, .lifecycle, "pruned layout snapshot '\(oldest.key)' (manual=\(oldest.value.isManual))")
         }
@@ -186,33 +219,46 @@ final class LayoutSnapshotStore {
 
     private func load() {
         guard let data = try? Data(contentsOf: fileURL) else { return }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let decoded: [String: LayoutSnapshot]
-        do {
-            decoded = try decoder.decode([String: LayoutSnapshot].self, from: data)
-        } catch {
-            hyprLog(.warning, .lifecycle, "layout snapshots unreadable (\(fileURL.lastPathComponent)): \(error)")
+        guard let raw = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            moveAside()
             return
         }
-        // a snapshot written by a newer schema is dropped rather than
-        // guessed at; the next save rewrites the file at this version.
-        snapshots = decoded.filter { $0.value.schemaVersion == LayoutSnapshot.currentSchemaVersion }
-        let dropped = decoded.count - snapshots.count
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        for (key, value) in raw {
+            // a newer schema or a shape this build doesn't know is kept
+            // raw rather than guessed at, so a downgrade doesn't eat it
+            if let entry = try? JSONSerialization.data(withJSONObject: value, options: .fragmentsAllowed),
+               let snap = try? decoder.decode(LayoutSnapshot.self, from: entry),
+               snap.schemaVersion == LayoutSnapshot.currentSchemaVersion {
+                snapshots[key] = snap
+            } else {
+                unreadable[key] = value
+            }
+        }
         hyprLog(.debug, .lifecycle,
                 "layout snapshots loaded: \(snapshots.count) configs"
-                + (dropped > 0 ? " (\(dropped) dropped: schema mismatch)" : ""))
+                + (unreadable.isEmpty ? "" : " (\(unreadable.count) kept unread: schema mismatch)"))
     }
 
-    private func persist() {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+    /// Keep a file we can't parse instead of overwriting it on the next save.
+    private func moveAside() {
+        let aside = URL(fileURLWithPath: fileURL.path + ".unreadable")
+        try? FileManager.default.removeItem(at: aside)
         do {
-            let data = try encoder.encode(snapshots)
-            try data.write(to: fileURL, options: .atomic)
+            try FileManager.default.moveItem(at: fileURL, to: aside)
+            hyprLog(.warning, .lifecycle, "layout snapshots unreadable, moved to \(aside.lastPathComponent)")
         } catch {
-            hyprLog(.warning, .lifecycle, "layout snapshots not written: \(error)")
+            hyprLog(.warning, .lifecycle, "layout snapshots unreadable and not moved aside: \(error)")
         }
+    }
+
+    private func persist() throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var raw = try JSONSerialization.jsonObject(with: encoder.encode(snapshots)) as? [String: Any] ?? [:]
+        for (key, value) in unreadable where raw[key] == nil { raw[key] = value }
+        let data = try JSONSerialization.data(withJSONObject: raw, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: fileURL, options: .atomic)
     }
 }

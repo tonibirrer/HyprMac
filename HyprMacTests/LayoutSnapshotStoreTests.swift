@@ -62,7 +62,7 @@ final class LayoutSnapshotStoreTests: XCTestCase {
     func testSaveThenLoadFromDiskRoundTrips() throws {
         let tree = sampleTree()
         let writer = LayoutSnapshotStore(fileURL: fileURL)
-        XCTAssertTrue(writer.save(displayKey: "Test:1920x1080",
+        XCTAssertTrue(try writer.save(displayKey: "Test:1920x1080",
                                   workspaces: [WorkspaceLayout(workspace: 2, root: tree)],
                                   manual: true))
 
@@ -76,6 +76,94 @@ final class LayoutSnapshotStoreTests: XCTestCase {
         // iso8601 keeps whole seconds
         XCTAssertEqual(snap.timestamp.timeIntervalSince1970,
                        written.timestamp.timeIntervalSince1970, accuracy: 1)
+    }
+
+    func testReloadedSnapshotIsIdenticalIncludingDate() throws {
+        let writer = LayoutSnapshotStore(fileURL: fileURL)
+        try writer.save(displayKey: "Test:1920x1080",
+                        workspaces: [WorkspaceLayout(workspace: 2, root: sampleTree())], manual: true)
+        let written = try XCTUnwrap(writer.snapshot(for: "Test:1920x1080"))
+
+        let reader = LayoutSnapshotStore(fileURL: fileURL)
+        XCTAssertEqual(reader.snapshot(for: "Test:1920x1080"), written)
+        XCTAssertEqual(reader.snapshots, writer.snapshots)
+    }
+
+    // MARK: - failed writes
+
+    func testSaveThrowsWhenParentDirectoryIsMissing() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hyprmac-missing-\(UUID().uuidString)")
+            .appendingPathComponent("layout-snapshots.json")
+        let store = LayoutSnapshotStore(fileURL: url)
+        XCTAssertThrowsError(try store.save(displayKey: "Test:1x1", workspaces: single("com.a"), manual: true))
+        XCTAssertNil(store.snapshot(for: "Test:1x1"), "memory must not claim a snapshot the disk lacks")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertTrue(LayoutSnapshotStore(fileURL: url).snapshots.isEmpty)
+    }
+
+    func testFailedSaveRollsBackReplacementAndPruning() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hyprmac-layout-dir-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("layout-snapshots.json")
+        let store = LayoutSnapshotStore(fileURL: url)
+        for i in 0..<LayoutSnapshotStore.maxSnapshots {
+            try store.save(displayKey: "Config\(i):100x100", workspaces: single("com.x"), manual: false)
+        }
+        let before = store.snapshots
+
+        // the directory disappears under us: both a replace and a
+        // pruning save must fail without touching memory
+        try FileManager.default.removeItem(at: dir)
+        XCTAssertThrowsError(try store.save(displayKey: "Config3:100x100", workspaces: single("com.y"), manual: true))
+        XCTAssertThrowsError(try store.save(displayKey: "Overflow:100x100", workspaces: single("com.y"), manual: false))
+        XCTAssertEqual(store.snapshots, before)
+        XCTAssertNotNil(store.snapshot(for: "Config0:100x100"), "pruned entry comes back on rollback")
+    }
+
+    func testSkipIsNotAFailure() throws {
+        let store = LayoutSnapshotStore(fileURL: fileURL)
+        try store.save(displayKey: "Test:1x1", workspaces: single("com.a"), manual: true)
+        var skipped: Bool?
+        XCTAssertNoThrow(skipped = try store.save(displayKey: "Test:1x1", workspaces: single("com.b"), manual: false))
+        XCTAssertEqual(skipped, false)
+    }
+
+    // MARK: - entries this build can't read
+
+    func testNewerSchemaEntryIsKeptWhenFileIsRewritten() throws {
+        // a future build may add fields and node kinds this build can't decode
+        let futureEntry: [String: Any] = [
+            "schemaVersion": LayoutSnapshot.currentSchemaVersion + 1,
+            "displayKey": "Future:1x1",
+            "timestamp": "2030-01-01T00:00:00Z",
+            "isManual": true,
+            "workspaces": [["workspace": 1, "root": ["tabs": ["a", "b"]]]],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: ["Future:1x1": futureEntry])
+        try data.write(to: fileURL)
+
+        let store = LayoutSnapshotStore(fileURL: fileURL)
+        XCTAssertNil(store.snapshot(for: "Future:1x1"))
+        try store.save(displayKey: "Test:1x1", workspaces: single("com.a"), manual: true)
+
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any])
+        let kept = try XCTUnwrap(raw["Future:1x1"] as? NSDictionary)
+        XCTAssertEqual(kept, futureEntry as NSDictionary)
+        XCTAssertNotNil(LayoutSnapshotStore(fileURL: fileURL).snapshot(for: "Test:1x1"))
+    }
+
+    func testUnreadableFileIsMovedAsideNotOverwritten() throws {
+        try Data("not json".utf8).write(to: fileURL)
+        let aside = URL(fileURLWithPath: fileURL.path + ".unreadable")
+        defer { try? FileManager.default.removeItem(at: aside) }
+
+        let store = LayoutSnapshotStore(fileURL: fileURL)
+        try store.save(displayKey: "Test:1x1", workspaces: single("com.a"), manual: true)
+
+        XCTAssertEqual(try Data(contentsOf: aside), Data("not json".utf8))
+        XCTAssertNotNil(LayoutSnapshotStore(fileURL: fileURL).snapshot(for: "Test:1x1"))
     }
 
     func testMissingFileLoadsEmpty() {
@@ -104,53 +192,53 @@ final class LayoutSnapshotStoreTests: XCTestCase {
 
     // MARK: - manual vs automatic
 
-    func testAutoSaveSkipsWhenManualExists() {
+    func testAutoSaveSkipsWhenManualExists() throws {
         let store = LayoutSnapshotStore(fileURL: fileURL)
         let key = "Test:1920x1080"
-        XCTAssertTrue(store.save(displayKey: key, workspaces: single("com.a"), manual: true))
-        XCTAssertFalse(store.save(displayKey: key, workspaces: single("com.b"), manual: false))
+        XCTAssertTrue(try store.save(displayKey: key, workspaces: single("com.a"), manual: true))
+        XCTAssertFalse(try store.save(displayKey: key, workspaces: single("com.b"), manual: false))
 
         let snap = store.snapshot(for: key)!
         XCTAssertTrue(snap.isManual)
         XCTAssertEqual(snap.workspaces.first?.root.leaves.first?.bundleID, "com.a")
     }
 
-    func testManualSaveOverwritesManual() {
+    func testManualSaveOverwritesManual() throws {
         let store = LayoutSnapshotStore(fileURL: fileURL)
         let key = "Test:1920x1080"
-        store.save(displayKey: key, workspaces: single("com.a"), manual: true)
-        store.save(displayKey: key, workspaces: single("com.b"), manual: true)
+        try store.save(displayKey: key, workspaces: single("com.a"), manual: true)
+        try store.save(displayKey: key, workspaces: single("com.b"), manual: true)
         XCTAssertEqual(store.snapshot(for: key)?.workspaces.first?.root.leaves.first?.bundleID, "com.b")
     }
 
-    func testAutoSaveOverwritesAuto() {
+    func testAutoSaveOverwritesAuto() throws {
         let store = LayoutSnapshotStore(fileURL: fileURL)
         let key = "Test:1920x1080"
-        store.save(displayKey: key, workspaces: single("com.a"), manual: false)
-        store.save(displayKey: key, workspaces: single("com.b"), manual: false)
+        try store.save(displayKey: key, workspaces: single("com.a"), manual: false)
+        try store.save(displayKey: key, workspaces: single("com.b"), manual: false)
         XCTAssertEqual(store.snapshot(for: key)?.workspaces.first?.root.leaves.first?.bundleID, "com.b")
     }
 
     // MARK: - pruning
 
-    func testPruningEvictsOldestAutomatic() {
+    func testPruningEvictsOldestAutomatic() throws {
         let store = LayoutSnapshotStore(fileURL: fileURL)
         for i in 0..<LayoutSnapshotStore.maxSnapshots {
-            store.save(displayKey: "Config\(i):100x100", workspaces: single("com.x"), manual: false)
+            try store.save(displayKey: "Config\(i):100x100", workspaces: single("com.x"), manual: false)
         }
         XCTAssertEqual(store.snapshots.count, LayoutSnapshotStore.maxSnapshots)
 
-        store.save(displayKey: "Overflow:100x100", workspaces: single("com.x"), manual: false)
+        try store.save(displayKey: "Overflow:100x100", workspaces: single("com.x"), manual: false)
         XCTAssertEqual(store.snapshots.count, LayoutSnapshotStore.maxSnapshots)
         XCTAssertNotNil(store.snapshot(for: "Overflow:100x100"))
         XCTAssertNil(store.snapshot(for: "Config0:100x100"), "oldest automatic snapshot is evicted")
     }
 
-    func testPruningEvictsAutomaticBeforeManual() {
+    func testPruningEvictsAutomaticBeforeManual() throws {
         let store = LayoutSnapshotStore(fileURL: fileURL)
-        store.save(displayKey: "Manual:100x100", workspaces: single("com.x"), manual: true)
+        try store.save(displayKey: "Manual:100x100", workspaces: single("com.x"), manual: true)
         for i in 0..<LayoutSnapshotStore.maxSnapshots {
-            store.save(displayKey: "Auto\(i):100x100", workspaces: single("com.x"), manual: false)
+            try store.save(displayKey: "Auto\(i):100x100", workspaces: single("com.x"), manual: false)
         }
         XCTAssertEqual(store.snapshots.count, LayoutSnapshotStore.maxSnapshots)
         XCTAssertNotNil(store.snapshot(for: "Manual:100x100"),
