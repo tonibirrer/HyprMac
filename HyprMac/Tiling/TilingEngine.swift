@@ -542,10 +542,9 @@ class TilingEngine {
         return tree
     }
 
-    /// Non-creating tree accessor for tests. Returns the live tree
-    /// for `(workspace, screen)`, or `nil` when none exists.
-    /// Production callers go through `tree(for:)` so the tree is
-    /// created on demand.
+    /// The live tree for `(workspace, screen)`, or `nil` when none
+    /// exists. Tests and the batch move read it. Never creates a tree;
+    /// callers that need one created go through `tree(for:)`.
     internal func existingTree(forWorkspace workspace: Int, screen: NSScreen) -> BSPTree? {
         trees[TilingKey(workspace: workspace, screen: screen)]
     }
@@ -555,6 +554,227 @@ class TilingEngine {
     /// dump to show tree membership without exposing the tree itself.
     func windowIDs(inTreeForWorkspace workspace: Int, screen: NSScreen) -> [CGWindowID] {
         existingTree(forWorkspace: workspace, screen: screen)?.allWindows.map(\.windowID) ?? []
+    }
+
+    // MARK: - layout persistence
+
+    /// Every window in any tree for `workspace`, on any screen. Read-only.
+    func windowIDs(inAnyTreeForWorkspace workspace: Int) -> Set<CGWindowID> {
+        trees.reduce(into: Set<CGWindowID>()) { ids, entry in
+            guard entry.key.workspace == workspace else { return }
+            ids.formUnion(entry.value.allWindows.map(\.windowID))
+        }
+    }
+
+    /// Serialised shape of `workspace`'s tree on whichever screen holds
+    /// it, or `nil` when the workspace has no tiled windows. `ref` names
+    /// each window in a restart-stable way; a window it declines (no
+    /// bundle ID) is dropped and its split collapses, exactly as if it
+    /// had closed. Read-only — the engine stays the only thing that
+    /// walks nodes (`docs/architecture.md`).
+    func layoutTree(forWorkspace workspace: Int, ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
+        // a workspace can briefly hold trees on two screens; take the fuller
+        // one, then the lower screen id, so the same state always saves the same
+        let candidates = trees.filter { $0.key.workspace == workspace && !$0.value.allWindows.isEmpty }
+            .sorted { ($1.value.allWindows.count, $0.key.screenID) < ($0.value.allWindows.count, $1.key.screenID) }
+        for (_, t) in candidates {
+            if let root = Self.serialize(t.root, ref: ref) { return root }
+        }
+        return nil
+    }
+
+    /// Outcome of `rebuildTree`.
+    enum LayoutRebuildOutcome: Equatable {
+        /// Tree published. `inserted` counts live windows the snapshot did
+        /// not name that were smart-inserted around the restored shape.
+        /// `refusedNewcomers` found no fitting slot and are in no tree; none
+        /// of them was admitted on the workspace before, so the caller hands
+        /// them to admission recovery as it would after an ordinary tile.
+        case rebuilt(inserted: Int, refusedNewcomers: [CGWindowID])
+        /// A saved leaf sits deeper than the screen allows; live tree untouched.
+        case exceedsMaxDepth(Int)
+        /// Windows already admitted on the workspace would have no slot in
+        /// the rebuilt tree; live tree untouched, nothing written.
+        case refusedIncumbents([CGWindowID])
+        /// Frame verification refused the shape (or a newer layout
+        /// superseded it, `nil`); live tree untouched.
+        case rejected(FrameSizingFailure?)
+    }
+
+    /// Replace `workspace`'s tree on `screen` with the shape in `root`.
+    ///
+    /// `resolve` names the live window for each saved leaf — called in
+    /// left-to-right leaf order, so a caller with two same-ref leaves
+    /// can hand out two different windows. A `nil`, a window not in
+    /// `windows`, a floater, or a window already placed collapses that
+    /// leaf's split exactly as closing it would. Every window in
+    /// `windows` the snapshot did not name is smart-inserted around the
+    /// restored shape, incumbents before newcomers. Ratios, user-set flags
+    /// and overrides come through verbatim — nothing is reset.
+    ///
+    /// An incumbent (admitted on the workspace, or in one of its trees)
+    /// that finds no slot rejects the rebuild with `.refusedIncumbents`
+    /// before anything is written, as `tileWindows` refuses to publish a
+    /// subset. A newcomer that finds none is left out and reported in
+    /// `.rebuilt(refusedNewcomers:)`.
+    ///
+    /// With `applyFrames` the layout runs the same verified sizing as
+    /// `tileWindows` and publishes only on acceptance. Pass `false` for a
+    /// hidden workspace: its windows are parked, so the shape is
+    /// published with the key marked unverified, and the next accepted
+    /// tile (the show) clears the mark.
+    func rebuildTree(forWorkspace workspace: Int, screen: NSScreen, from root: LayoutNode,
+                     windows: [HyprWindow], applyFrames: Bool,
+                     resolve: (SavedWindowRef) -> HyprWindow?) -> LayoutRebuildOutcome {
+        let generation = beginLayoutGeneration()
+        pendingSwapRevert = nil
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let rect = displayManager.cgRect(for: screen)
+        let tileable = windows.filter { !$0.isFloating }
+        let tileableIDs = Set(tileable.map(\.windowID))
+        primeMinimumSizes(tileable)
+
+        var placed = Set<CGWindowID>()
+        let candidate = newTree()
+        if let built = Self.build(root, resolve: { ref in
+            guard let w = resolve(ref), tileableIDs.contains(w.windowID),
+                  placed.insert(w.windowID).inserted else { return nil }
+            return w
+        }) {
+            candidate.root = built
+        }
+
+        let limit = maxDepth(for: screen)
+        let deepest = Self.maxLeafDepth(candidate.root)
+        guard deepest <= limit else {
+            hyprLog(.notice, .lifecycle, "layout rebuild ws\(workspace): saved depth \(deepest) exceeds max \(limit) — kept live tree")
+            return .exceedsMaxDepth(deepest)
+        }
+
+        // windows the snapshot never named take a slot around the restored
+        // shape, incumbents first as in tileWindows. a refused newcomer stays
+        // where it is and goes back to the caller; a refused incumbent
+        // rejects the rebuild, since publishing would drop it from the tree.
+        var incumbents = admittedWindowIDs[workspace, default: []]
+        for (k, t) in trees where k.workspace == workspace {
+            incumbents.formUnion(t.allWindows.map(\.windowID))
+        }
+        let unnamed = tileable.filter { !placed.contains($0.windowID) }
+        var insertedIDs: [CGWindowID] = []
+        var refusedIDs: [CGWindowID] = []
+        for w in unnamed.filter({ incumbents.contains($0.windowID) })
+                 + unnamed.filter({ !incumbents.contains($0.windowID) }) {
+            if smartInsertFitting(w, into: candidate, maxDepth: limit, rect: rect) {
+                insertedIDs.append(w.windowID)
+            } else {
+                refusedIDs.append(w.windowID)
+                hyprLog(.notice, .tiling, "layout rebuild: no fitting tile slot: wid=\(w.windowID) ws\(workspace) — staying in place")
+            }
+        }
+        let refusedIncumbents = refusedIDs.filter { incumbents.contains($0) }
+        guard refusedIncumbents.isEmpty else {
+            hyprLog(.notice, .lifecycle, "layout rebuild ws\(workspace): no slot for admitted \(refusedIncumbents) — kept live tree")
+            return .refusedIncumbents(refusedIncumbents.sorted())
+        }
+
+        // fork rules win over the saved leaf order, as on every membership
+        // change: sort priority reorders tiles, column locks follow the
+        // final leaf → window mapping. saved ratios stay verbatim.
+        applySortPriority(to: candidate)
+        candidate.applyFullHeight()
+
+        if applyFrames && accordionActive(screen) {
+            // accordion frames are near-fullscreen stacks, nothing to verify
+            // (see tileWindows); the shape stays the background tile layout
+            if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+            admittedWindowIDs[workspace, default: []].formUnion(candidate.allWindows.map(\.windowID))
+            unverified.removeValue(forKey: key)
+            applyAccordionLayout(tree(for: key), rect: rect)
+        } else if applyFrames {
+            let outcome = applyTrackedLayout(candidate, in: rect, generation: generation,
+                                             key: key, inserted: insertedIDs)
+            guard publishes(outcome), layoutGeneration == generation else {
+                let reason = layoutGeneration == generation ? Self.failure(of: outcome) : nil
+                hyprLog(.notice, .lifecycle, "layout rebuild ws\(workspace): verification refused — kept live tree (\(reason.map { "\($0)" } ?? "superseded"))")
+                return .rejected(reason)
+            }
+            admittedWindowIDs[workspace, default: []].formUnion(candidate.allWindows.map(\.windowID))
+            if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+        } else {
+            if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+            // parked windows: the tree speaks for nothing on screen until a show verifies it
+            mark(key, windowIDs: Set(candidate.allWindows.map(\.windowID)),
+                 insertedIDs: Set(insertedIDs), restored: false)
+        }
+        // a stale tree for this workspace on another screen must not keep
+        // a window the rebuilt tree now holds
+        let rebuiltIDs = Set(candidate.allWindows.map(\.windowID))
+        for (other, t) in trees where other.workspace == workspace && other != key {
+            for w in t.allWindows where rebuiltIDs.contains(w.windowID) {
+                t.remove(w)
+                pendingInsertedWindowIDs[other]?.removeAll { $0 == w.windowID }
+            }
+            t.root.pruneEmptyNodes()
+            if t.allWindows.isEmpty {
+                trees.removeValue(forKey: other)
+                unverified.removeValue(forKey: other)
+            }
+        }
+        hyprLog(.debug, .lifecycle, "layout rebuild ws\(workspace): \(placed.count) placed, \(insertedIDs.count) inserted, \(refusedIDs.count) refused, frames \(applyFrames ? "verified" : "deferred")")
+        return .rebuilt(inserted: insertedIDs.count, refusedNewcomers: refusedIDs)
+    }
+
+    private static func build(_ node: LayoutNode, resolve: (SavedWindowRef) -> HyprWindow?) -> BSPNode? {
+        switch node {
+        case .leaf(let ref):
+            return resolve(ref).map { BSPNode(window: $0) }
+        case let .split(override, ratio, userSet, left, right):
+            switch (build(left, resolve: resolve), build(right, resolve: resolve)) {
+            case (nil, nil):
+                return nil
+            case (let only?, nil), (nil, let only?):
+                return only
+            case (let l?, let r?):
+                let n = BSPNode()
+                n.left = l
+                n.right = r
+                l.parent = n
+                r.parent = n
+                n.splitOverride = override
+                n.splitRatio = ratio
+                n.userSetRatio = userSet
+                return n
+            }
+        }
+    }
+
+    private static func maxLeafDepth(_ node: BSPNode, depth: Int = 0) -> Int {
+        guard let l = node.left, let r = node.right else { return depth }
+        return max(maxLeafDepth(l, depth: depth + 1), maxLeafDepth(r, depth: depth + 1))
+    }
+
+    private static func failure(of outcome: LayoutApplicationOutcome) -> FrameSizingFailure? {
+        switch outcome {
+        case .accepted: return nil
+        case let .rejectedRestored(reason, _, _): return reason
+        case let .degraded(reason, _, _, _, _): return reason
+        }
+    }
+
+    private static func serialize(_ node: BSPNode, ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
+        if let window = node.window {
+            return ref(window).map(LayoutNode.leaf)
+        }
+        guard let left = node.left, let right = node.right else { return nil }
+        switch (serialize(left, ref: ref), serialize(right, ref: ref)) {
+        case (nil, nil):
+            return nil
+        case (let only?, nil), (nil, let only?):
+            return only
+        case (let l?, let r?):
+            return .split(override: node.splitOverride, ratio: node.splitRatio,
+                          userSet: node.userSetRatio, left: l, right: r)
+        }
     }
 
     func captureTiledDrag(draggedID: CGWindowID, workspace: Int, screen: NSScreen,
@@ -2843,6 +3063,21 @@ class TilingEngine {
 
     func canFitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
         withoutMinimaBypass { fitWindows(windows, onWorkspace: workspace, screen: screen) }
+    }
+
+    /// `admissionOutlook` for a whole projected membership. `windows` is
+    /// everything the workspace would tile once a batch lands, `incoming`
+    /// the ones arriving. Windows leaving drop out of the candidate first,
+    /// so a full workspace trading one window for another still fits. The
+    /// verdict carries no refusal facts; a batch only needs the verdict.
+    func projectedAdmissionOutlook(_ windows: [HyprWindow], incoming: Set<CGWindowID>,
+                                   onWorkspace workspace: Int, screen: NSScreen) -> AdmissionOutlook {
+        if canFitWindows(windows, onWorkspace: workspace, screen: screen) { return .fits }
+        let key = TilingKey(workspace: workspace, screen: screen)
+        let bypassed = withRevalidationBypass(incoming: incoming, key: key) {
+            fitWindows(windows, onWorkspace: workspace, screen: screen)
+        }
+        return bypassed ? .revalidatable([]) : .refused([])
     }
 
     private func fitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {

@@ -1,6 +1,54 @@
-# MacBook debug deployment — September 11, 2026
+# MacBook debug deployment
 
-## Current state
+All repository work runs on the Mac mini hub. The MacBook (`zachbook-pro`)
+only runs the signed Debug app for live-behavior tests.
+
+## Build
+
+`./scripts/build-debug.sh [Sparkle.xcframework]` builds the signed, universal
+`HyprMac Debug.app` into `build/debug-canonical.noindex/Build/Products/Debug/`.
+
+- Bundle id `com.zachgray.HyprMac.debug`, product `HyprMac Debug`, no Sparkle.
+- Info.plist `HyprMacSourceRevision` is `<sha12>+<content hash>` of the tree.
+  The hash includes absolute paths, so a different worktree gives a different
+  hash for the same source.
+- It needs a cached Sparkle.xcframework, by default at
+  `build/audit-harness/Sparkle.xcframework`. `build/` is ignored, so copy it
+  into a fresh worktree. It also needs `rg` and the Developer ID identity.
+
+## Redeploy (current)
+
+The Debug app now lives at `/Applications/HyprMac Debug.app`. The September 11
+record below says `~/Applications`; that path is out of date.
+
+1. Build on the hub. Note the executable sha256 and `HyprMacSourceRevision`.
+2. Tar only the one app, scp it to the MacBook, extract into a staging
+   directory, and run `codesign --verify --deep --strict` on it.
+3. Find the exact running pid with `pgrep -f` on the full executable path of
+   whichever HyprMac is running (Debug or release). Send `kill -TERM` to that
+   pid only. Wait until `ps -p` shows it gone.
+4. Move the old bundle aside for rollback. Move the new one into place.
+   Launch it with `/usr/bin/open`.
+5. Verify the new pid's executable path, `HyprMacSourceRevision`, and the
+   executable sha256. Check that the log shows `AXIsProcessTrusted=true` and
+   `started` (see [debugging.md](debugging.md)).
+
+Accessibility trust carries over because the signing identity and bundle id
+do not change. Launch through Launch Services (`/usr/bin/open`); a binary
+started directly from SSH reports untrusted.
+
+Debug and release share `~/Library/Application Support/HyprMac/`.
+`config.json` there can be a symlink into iCloud Drive. Back up those files
+before any migration test.
+
+---
+
+# Record: first install, September 11, 2026
+
+The rest of this file is the dated record of the first install. Its paths,
+hashes, and counts are historical.
+
+## Current state (as of September 11)
 
 The canonical debug app is installed and running on `zachbook-pro`
 (`100.78.164.103`) with Accessibility trust confirmed. Zach manually enabled

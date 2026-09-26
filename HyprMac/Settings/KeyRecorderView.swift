@@ -8,7 +8,6 @@ import SwiftUI
 /// Modifier-only key codes are rejected so users cannot bind to a
 /// bare modifier.
 struct KeyRecorderView: View {
-    @ObservedObject var config = UserConfig.shared
     @Binding var keyCode: UInt16
     @Binding var useHypr: Bool
     @Binding var useShift: Bool
@@ -23,7 +22,7 @@ struct KeyRecorderView: View {
         VStack(alignment: .leading, spacing: HyprSpacing.sm) {
             // modifier toggles
             HStack(spacing: HyprSpacing.xs + 2) {
-                ModifierToggle("\(config.hyprKey.badgeLabel) Hypr", isOn: $useHypr)
+                ModifierToggle("hypr", isOn: $useHypr)
                 ModifierToggle("⌃ Ctrl",  isOn: $useControl)
                 ModifierToggle("⌥ Opt",   isOn: $useOption)
                 ModifierToggle("⇧ Shift", isOn: $useShift)
@@ -112,6 +111,8 @@ struct ModifierToggle: View {
         Button { isOn.toggle() } label: {
             Text(label)
                 .font(.hyprMonoSm)
+                // fallback glyphs like ⇧ would otherwise make one pill taller
+                .frame(height: 14)
                 .padding(.horizontal, HyprSpacing.sm)
                 .padding(.vertical, HyprSpacing.xs + 1)
                 .background(

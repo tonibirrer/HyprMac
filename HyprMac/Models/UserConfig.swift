@@ -199,6 +199,12 @@ class UserConfig: ObservableObject {
                      right: outerPaddingSides.right ?? outerPadding)
     }
 
+    // restore the saved layout for this display setup at launch. saved to
+    // config.json; read once at startup, so nothing live needs re-applying
+    @Published var restoreLayoutOnLaunch: Bool {
+        didSet { guard !isReloading else { return }; save() }
+    }
+
     // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
         didSet {
@@ -267,6 +273,7 @@ class UserConfig: ObservableObject {
             self.workspaceWallpapers = saved.workspaceWallpapers ?? [:]
             self.workspaceColors = saved.workspaceColors ?? [:]
             self.stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
+            self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -297,6 +304,7 @@ class UserConfig: ObservableObject {
             self.workspaceWallpapers = [:]
             self.workspaceColors = [:]
             self.stickyWorkspaces = []
+            self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -440,7 +448,8 @@ class UserConfig: ObservableObject {
             outerPaddingSides: outerPaddingSides == .none ? nil : outerPaddingSides,
             workspaceWallpapers: workspaceWallpapers.isEmpty ? nil : workspaceWallpapers,
             workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors,
-            stickyWorkspaces: stickyWorkspaces.isEmpty ? nil : stickyWorkspaces.sorted())
+            stickyWorkspaces: stickyWorkspaces.isEmpty ? nil : stickyWorkspaces.sorted(),
+            restoreLayoutOnLaunch: restoreLayoutOnLaunch)
     }
 
     func resetToDefaults() {
@@ -480,6 +489,7 @@ class UserConfig: ObservableObject {
         workspaceWallpapers = [:]
         workspaceColors = [:]
         stickyWorkspaces = []
+        restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -562,6 +572,7 @@ class UserConfig: ObservableObject {
         workspaceWallpapers = saved.workspaceWallpapers ?? [:]
         workspaceColors = saved.workspaceColors ?? [:]
         stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
+        restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -617,7 +628,8 @@ extension SavedConfig {
             outerPaddingSides: nil,
             workspaceWallpapers: nil,
             workspaceColors: nil,
-            stickyWorkspaces: nil)
+            stickyWorkspaces: nil,
+            restoreLayoutOnLaunch: UserConfigDefaults.restoreLayoutOnLaunch)
     }
 }
 

@@ -5,8 +5,17 @@ builds, signs, notarizes, publishes, updates Sparkle, and updates Homebrew. The
 script stops on the first failed command; it does not offer a bypass for a
 failed test, signature, notarization, or Gatekeeper check.
 
-For per-release feature-list preparation, see the release feature-list
-instructions in the repository guidance.
+Releases run on the Mac mini hub, the same machine as all other repository
+work.
+
+## Before you release: What's New
+
+Update `WhatsNewFeatures.current` in `HyprMac/Welcome/WelcomeContent.swift`
+from `git log v<previous>..HEAD --oneline`. List user-facing changes only.
+Each entry needs an SF Symbol, a short title, a one-line description, and a
+tint (`.cyan` by default, `.magenta` for floating or scratchpad). Add
+`credit:` with the GitHub handle of an outside contributor. Commit and push
+this before starting the script, which refuses a dirty checkout.
 
 ## Usage
 
@@ -22,7 +31,8 @@ export DEVELOPMENT_TEAM=WYY8494SWG
 If supplied, the release-notes file must exist and be nonempty. Set
 `KEYCHAIN_PASSWORD` when the login keychain needs unlocking. Otherwise the
 script requires the keychain to be unlocked already; it never prompts for a
-secret.
+secret. A locked keychain makes `codesign` fail with `errSecInternalComponent`.
+Pick `<version>` from `MARKETING_VERSION` in `project.yml`.
 
 ## Prerequisites
 
@@ -66,7 +76,10 @@ resolved package directory, and must report both architectures through `lipo`.
 The pipeline re-signs Sparkle's nested code, signs the app last with the Release
 entitlements, and verifies the signature. It then creates the DMG, submits it
 to Apple, staples and validates the ticket, mounts the DMG read-only, and runs
-both `codesign` and Gatekeeper verification against the packaged app.
+both `codesign` and Gatekeeper verification against the packaged app. It then
+copies the stapled `HyprMac-<version>.dmg` to `build/HyprMac.dmg` and validates
+that copy's ticket as well. The copy lives outside `dist/` so Sparkle's
+`generate_appcast` never treats it as a second update.
 
 ### 5. Generate and validate update metadata
 
@@ -84,9 +97,15 @@ therefore contains the final project version, appcast, and cask metadata.
 
 ### 7. Create the GitHub Release
 
-The script creates the release from the already-pushed tag with `--verify-tag`,
-uploads the notarized DMG, and uses either the supplied notes file or generated
-notes.
+The script creates the release from the already-pushed tag with `--verify-tag`
+and uses either the supplied notes file or generated notes. It uploads two
+assets, both the same notarized bytes:
+
+- `HyprMac-<version>.dmg`, referenced by the Sparkle appcast and the Homebrew
+  cask.
+- `HyprMac.dmg`, which keeps
+  `https://github.com/zacharytgray/HyprMac/releases/latest/download/HyprMac.dmg`
+  working as a permanent download link.
 
 ### 8. Update the Homebrew tap
 
@@ -108,7 +127,8 @@ state first.
   do not rebuild different bytes under the same version.
 - **After the tag was pushed but before the GitHub Release:** verify that the
   tag points to the release commit, then create the GitHub Release from that
-  existing tag and upload the exact notarized DMG.
+  existing tag and upload both assets from the exact notarized DMG, the
+  versioned name and `HyprMac.dmg`.
 - **After the GitHub Release but before the tap push:** verify the published
   DMG hash, then update the tap with the already-validated cask.
 

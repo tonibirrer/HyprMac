@@ -258,6 +258,9 @@ struct SavedConfig: Codable {
     let workspaceColors: [String: String]?
     // workspaces (1...workspaceCount) that show sticky-ruled apps; sorted on write
     let stickyWorkspaces: [Int]?
+    // `var` with a default so the synthesized memberwise init takes it as a
+    // trailing optional — existing `SavedConfig(...)` call sites keep compiling.
+    var restoreLayoutOnLaunch: Bool? = nil
 }
 
 /// Optional per-side overrides for the uniform `outerPadding`. A nil side
@@ -299,6 +302,7 @@ extension SavedConfig {
         // fork additions (HyprMacExperiments)
         case windowRules, outerPaddingSides, workspaceWallpapers, workspaceColors
         case stickyWorkspaces
+        case restoreLayoutOnLaunch
     }
 
     init(from decoder: Decoder) throws {
@@ -368,6 +372,7 @@ extension SavedConfig {
         self.workspaceWallpapers = try c.decodeIfPresent([String: String].self, forKey: .workspaceWallpapers)
         self.workspaceColors = try c.decodeIfPresent([String: String].self, forKey: .workspaceColors)
         self.stickyWorkspaces = try c.decodeIfPresent([Int].self, forKey: .stickyWorkspaces)
+        self.restoreLayoutOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .restoreLayoutOnLaunch)
     }
 }
 

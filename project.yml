@@ -50,8 +50,8 @@ targets:
         PRODUCT_NAME: HyprMacExperiments
         PRODUCT_MODULE_NAME: HyprMac
         PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments
-        MARKETING_VERSION: "0.14.2"
-        CURRENT_PROJECT_VERSION: "87"
+        MARKETING_VERSION: "0.15.0"
+        CURRENT_PROJECT_VERSION: "89"
         CODE_SIGN_IDENTITY: "HyprMac Dev Signing"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: ""
@@ -75,8 +75,8 @@ targets:
         PRODUCT_NAME: HyprMacExperiments Debug
         PRODUCT_MODULE_NAME: HyprMac
         PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments.debug
-        MARKETING_VERSION: "0.14.2"
-        CURRENT_PROJECT_VERSION: "87.1"
+        MARKETING_VERSION: "0.15.0"
+        CURRENT_PROJECT_VERSION: "89.1"
         HYPRMAC_SOURCE_REVISION: unknown
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG HYPRMAC_DEBUG_VARIANT"
         CODE_SIGN_IDENTITY: "HyprMac Dev Signing"
