@@ -21,7 +21,7 @@ HyprMac/
 │   ├── Input/                verified tiled-drag sessions
 │   ├── Orchestration/        action dispatch, polling
 │   ├── State/                window state cache, focus, suppressions
-│   ├── Workspace/            workspace orchestration
+│   ├── Workspace/            workspace orchestration, layout restore
 │   └── *.swift               long-lived per-subsystem managers
 ├── Tiling/                   BSP trees, layout, frame readback
 ├── Models/                   windows, keybinds, actions, persisted config
@@ -180,23 +180,58 @@ automatic save never replaces a manual snapshot, and pruning evicts
 automatic snapshots first.
 
 `Hypr+Ctrl+R`, a settled reconcile onto a known key, and launch
-(opt-in via `restoreLayoutOnLaunch`) restore. `LayoutMatcher` pairs
-saved leaves with live windows — bundle ID required, then exact title,
-then current workspace; every window claimed once — and
-`WorkspaceOrchestrator.moveWindows` applies the workspace moves with
-the same suppression / tree-removal / park sequence as `Hypr+Shift+N`.
-Then `TilingEngine.rebuildTree` replaces each saved workspace's tree
-with the saved shape: a leaf whose window is gone collapses its split
-as a close would, windows the snapshot never named smart-insert around
-the restored shape (incumbents first), and a saved tree deeper than the
-screen's max depth is left alone. An already-admitted window that would
-find no slot rejects the rebuild and the live tree stays; a newcomer
-that finds none is left out and handed back to the caller. Visible
-workspaces go through the same verified sizing as any tile and publish
-only on acceptance; a hidden workspace's windows are parked, so its
-shape is published with the key marked unverified, and the accepted
-tile on its next show clears the mark. The Settings monitor toggle reuses the
+(opt-in via `restoreLayoutOnLaunch`) restore. Both actions are dropped
+while a display transition is settling. `LayoutRestorer`
+(`Core/Workspace/LayoutRestorer.swift`) runs the restore and returns a
+`LayoutRestoreOutcome`; `WindowManager` only looks up the snapshot,
+refreshes the position cache, logs, and shows the pill.
+
+1. `LayoutMatcher` pairs saved leaves with live windows. Bundle ID is
+   required. Exact non-empty title matches are reserved first across
+   the whole snapshot, so a missing earlier leaf can't take a window a
+   later leaf names exactly. Remaining leaves then take any unclaimed
+   window of the same app, the one already on the leaf's workspace
+   first. Every window is claimed once. Floaters and scratchpad
+   members are never candidates.
+2. `WorkspaceOrchestrator.moveWindows` applies the workspace moves with
+   the same suppression / tree-removal / park sequence as
+   `Hypr+Shift+N`. Each destination is judged on its projected
+   membership once the whole batch lands, so two full workspaces can
+   trade windows. A destination takes all of its arrivals or none;
+   refusals (`full`, `wontFit`, `sizingRefused`, disabled monitors,
+   scratchpad) come back per window.
+3. `TilingEngine.rebuildTree` replaces each saved workspace's tree with
+   the saved shape. Workspaces whose home monitor is disabled are
+   skipped. A leaf whose window is gone collapses its split as a close
+   would. Windows the snapshot never named smart-insert around the
+   restored shape, incumbents first. A saved tree deeper than the
+   screen's max depth is left alone. An already-admitted window that
+   would find no slot rejects the rebuild and the live tree stays. A
+   newcomer that finds none is left out; the restorer hands it to
+   `AdmissionRecovery` the way a tile pass hands over its refused
+   newcomers, so it floats in place instead of sitting untracked.
+   Publishing removes the restored windows from any other screen's
+   tree for the same workspace, so no window ends up in two trees.
+   Visible workspaces go through the same verified sizing as any tile
+   and publish only on acceptance. A hidden workspace's windows are
+   parked, so its shape is published with the key marked unverified,
+   and the accepted tile on its next show clears the mark.
+
+The outcome is one of: no snapshot for this display setup, already in
+place, complete, partial, or failed. Complete means every matched
+window reached its saved workspace and every shape was rebuilt.
+Partial means some of it applied and some was refused (a refused move,
+a shape kept live, or a refused newcomer). Failed means something was
+asked and none of it applied. Saved windows that are not open do not
+make a restore partial; the log counts them, and the manual pill
+mentions them. A manual restore shows a labelled pill for each case.
+Automatic restores are silent and
+log the outcome at `.notice`. The Settings monitor toggle reuses the
 reconcile under an unchanged key and does not restore.
+
+The snapshot file keeps each tiled window's raw title, on this Mac
+only. Deleting `layout-snapshots.json` (and any `.unreadable` copy)
+while HyprMac is quit clears every snapshot.
 
 ## Threading
 
