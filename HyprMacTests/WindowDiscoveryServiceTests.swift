@@ -43,7 +43,8 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         cache: WindowStateCache = WindowStateCache(),
         accessibility: AccessibilityManager = AccessibilityManager(),
         bundleIDForPID: @escaping (pid_t) -> String? = { _ in nil },
-        isWindowSizeSettable: @escaping (HyprWindow) -> Bool? = { _ in true }
+        isWindowSizeSettable: @escaping (HyprWindow) -> Bool? = { _ in true },
+        isWindowFullscreen: @escaping (HyprWindow) -> Bool = { _ in false }
     ) -> (WindowDiscoveryService, WindowStateCache, WorkspaceManager) {
         let display = DisplayManager()
         let workspaces = WorkspaceManager(displayManager: display)
@@ -54,7 +55,8 @@ final class WindowDiscoveryServiceTests: XCTestCase {
             displayManager: display,
             workspaceManager: workspaces,
             bundleIDForPID: bundleIDForPID,
-            isWindowSizeSettable: isWindowSizeSettable
+            isWindowSizeSettable: isWindowSizeSettable,
+            isWindowFullscreen: isWindowFullscreen
         )
         return (svc, cache, workspaces)
     }
@@ -113,6 +115,25 @@ final class WindowDiscoveryServiceTests: XCTestCase {
 
         XCTAssertTrue(changes.newWindows.isEmpty)
         XCTAssertFalse(changes.needsRetile)
+    }
+
+    // a game launched straight into native fullscreen used to be tiled onto
+    // the visible workspace, where its screen-sized minimum left no room
+    // for new windows. it stays out until it leaves fullscreen.
+    func testNewWindowInNativeFullscreenIsNotAdmittedUntilItLeaves() {
+        var fullscreen = true
+        let (svc, cache, _) = makeService(isWindowFullscreen: { _ in fullscreen })
+        let w = makeWindow(id: 200, pid: 6000)
+
+        let skipped = compute(svc, snapshot: [w], runningPIDs: [6000])
+        XCTAssertTrue(skipped.newWindows.isEmpty)
+        XCTAssertFalse(cache.knownWindowIDs.contains(200))
+        XCTAssertFalse(skipped.needsRetile)
+
+        fullscreen = false
+        let admitted = compute(svc, snapshot: [w], runningPIDs: [6000])
+        XCTAssertEqual(admitted.newWindows.map(\.windowID), [200])
+        XCTAssertTrue(cache.knownWindowIDs.contains(200))
     }
 
     func testAutoFloatExcludedBundleIDMutatesCacheButStillAssignableForCaller() {
