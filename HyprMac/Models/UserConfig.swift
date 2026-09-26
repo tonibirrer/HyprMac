@@ -129,10 +129,13 @@ class UserConfig: ObservableObject {
         didSet { persistRuntimeChange() }
     }
 
-    // iCloud sync state — stored in UserDefaults, not config.json
+    // restore the saved layout for this display setup at launch. saved to
+    // config.json; read once at startup, so nothing live needs re-applying
     @Published var restoreLayoutOnLaunch: Bool {
         didSet { guard !isReloading else { return }; save() }
     }
+
+    // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
         didSet {
             UserDefaults.standard.set(iCloudSyncEnabled, forKey: "iCloudSyncEnabled")

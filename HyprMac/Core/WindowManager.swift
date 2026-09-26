@@ -1400,15 +1400,9 @@ class WindowManager {
         // transition the tile pass is deferred, so the target workspace
         // would stay parked with the cursor warped to the 1px park sliver.
         // drop them for the settle window (a few seconds around wake).
-        if displayTransitionPending {
-            switch action {
-            case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
-                 .moveToNextEmptyWorkspace, .saveLayout, .restoreLayout:
-                hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
-                return
-            default:
-                break
-            }
+        if displayTransitionPending, Self.isDroppedMidDisplayTransition(action) {
+            hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
+            return
         }
         // workspace flows dismiss the scratchpad first (Hyprland-style: the
         // layer never survives a workspace change), then run normally —
@@ -1689,88 +1683,30 @@ class WindowManager {
         }
     }
 
-    /// Bring back the saved layout for the current topology: windows go
-    /// to their saved workspaces, then each workspace's tree is rebuilt
-    /// to the saved shape. Matching goes through `LayoutMatcher`, the
-    /// moves through `WorkspaceOrchestrator.moveWindows` (same
-    /// suppression, tree removal and park/place sequence as a user
-    /// `Hypr+Shift+N`), and the shape through `TilingEngine.rebuildTree`.
+    /// Bring back the saved layout for the current topology through
+    /// `LayoutRestorer`, then log the outcome and, for a manual restore,
+    /// say whether it was complete, partial, or failed.
     ///
     /// - Parameter windows: pre-fetched window list; AX is queried when nil.
     /// - Returns: `false` when there is no snapshot for this topology.
     @discardableResult
     private func restoreLayoutSnapshot(manual: Bool, windows: [HyprWindow]? = nil) -> Bool {
         let key = LayoutSnapshotStore.displayKey(screens: displayManager.screens)
-        guard let snapshot = layoutStore.snapshot(for: key) else {
-            hyprLog(.debug, .lifecycle, "no saved layout for '\(key)'")
-            if manual { flashLayoutMessage("No saved layout for this display setup") }
-            return false
-        }
-        let allWindows = windows ?? accessibility.getAllWindows()
-        let candidates = allWindows.compactMap { w -> LayoutMatcher.Candidate? in
-            guard !stateCache.floatingWindowIDs.contains(w.windowID),
-                  !scratchpad.contains(w.windowID),
-                  let ws = workspaceManager.workspaceFor(w.windowID),
-                  let ref = windowRef(for: w) else { return nil }
-            return LayoutMatcher.Candidate(windowID: w.windowID, bundleID: ref.bundleID,
-                                           title: ref.title, workspace: ws)
-        }
-        let plan = LayoutMatcher.plan(snapshot, candidates: candidates)
-        let byID = Dictionary(allWindows.map { ($0.windowID, $0) }, uniquingKeysWith: { first, _ in first })
-        let moves: [(window: HyprWindow, workspace: Int)] = plan.workspaceByWindow
-            .compactMap { wid, ws in
-                guard let w = byID[wid], workspaceManager.workspaceFor(wid) != ws else { return nil }
-                return (w, ws)
-            }
-            .sorted { $0.window.windowID < $1.window.windowID }
-        let moved = workspaceOrchestrator.moveWindows(moves).moved.count
+        let snapshot = layoutStore.snapshot(for: key)
+        let allWindows = snapshot == nil ? [] : (windows ?? accessibility.getAllWindows())
+        let restorer = LayoutRestorer(
+            engine: tilingEngine, orchestrator: workspaceOrchestrator,
+            workspaceManager: workspaceManager, stateCache: stateCache,
+            recovery: admissionRecovery,
+            isScratchpad: { [scratchpad] in scratchpad.contains($0) },
+            ref: { [weak self] in self?.windowRef(for: $0) })
+        let outcome = restorer.restore(snapshot, windows: allWindows)
+        if !outcome.rebuilt.isEmpty { updatePositionCache(windows: allWindows) }
 
-        // shape pass: rebuild each saved workspace's tree around the
-        // windows now on it. the engine is the only thing that touches
-        // nodes; visible workspaces verify frames, hidden ones publish the
-        // shape and verify on their next show.
-        var rebuilt = 0
-        var shapeFailures: [String] = []
-        for layout in snapshot.workspaces {
-            let ws = layout.workspace
-            guard let screen = workspaceManager.homeScreenForWorkspace(ws),
-                  !workspaceManager.isMonitorDisabled(screen) else { continue }
-            let onWorkspace = allWindows.filter {
-                workspaceManager.workspaceFor($0.windowID) == ws
-                    && !stateCache.floatingWindowIDs.contains($0.windowID)
-                    && !scratchpad.contains($0.windowID)
-            }
-            guard !onWorkspace.isEmpty else { continue }
-            var queues = plan.windowsByRef[ws] ?? [:]
-            let outcome = tilingEngine.rebuildTree(
-                forWorkspace: ws, screen: screen, from: layout.root,
-                windows: onWorkspace, applyFrames: workspaceManager.isWorkspaceVisible(ws)
-            ) { ref in
-                guard var queue = queues[ref], !queue.isEmpty else { return nil }
-                let id = queue.removeFirst()
-                queues[ref] = queue
-                return byID[id]
-            }
-            switch outcome {
-            case .rebuilt:
-                rebuilt += 1
-            case .exceedsMaxDepth(let depth):
-                shapeFailures.append("ws\(ws) depth \(depth)")
-            case .refusedIncumbents(let ids):
-                shapeFailures.append("ws\(ws) no slot for admitted \(ids)")
-            case .rejected(let reason):
-                shapeFailures.append("ws\(ws) \(reason.map { "\($0)" } ?? "superseded")")
-            }
-        }
-        if rebuilt > 0 { updatePositionCache(windows: allWindows) }
-
-        hyprLog(.notice, .lifecycle,
-                "layout restore '\(key)': \(plan.workspaceByWindow.count) matched, \(moved) moved, \(rebuilt) trees rebuilt, \(plan.unmatchedRefs.count) saved windows absent"
-                + (shapeFailures.isEmpty ? "" : "; shape kept live for \(shapeFailures.joined(separator: ", "))"))
-        if manual {
-            flashLayoutMessage(moved == 0 && rebuilt == 0 ? "Layout already in place" : "Layout restored")
-        }
-        return true
+        hyprLog(outcome.hasSnapshot ? .notice : .debug, .lifecycle,
+                "layout restore '\(key)' (\(manual ? "manual" : "auto")): \(outcome.logSummary)")
+        if manual { flashLayoutMessage(outcome.message) }
+        return outcome.hasSnapshot
     }
 
     private func windowRef(for window: HyprWindow) -> SavedWindowRef? {
@@ -2158,6 +2094,20 @@ class WindowManager {
                                                  tiledPositions: stateCache.tiledPositions,
                                                  recoveryIDs: admissionRecovery.pendingWindowIDs) else { return }
         focusController.recordFocus(target.id, reason: target.reason)
+    }
+
+    /// Actions that wait out a display transition. Save and restore are in
+    /// here too: mid-transition the topology key and the trees are both in
+    /// flux, so a save would file a half-migrated layout and a restore would
+    /// be undone by the settle reconcile.
+    static func isDroppedMidDisplayTransition(_ action: Action) -> Bool {
+        switch action {
+        case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
+             .moveToNextEmptyWorkspace, .saveLayout, .restoreLayout:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Whether `action` makes an armed admission retry stale.

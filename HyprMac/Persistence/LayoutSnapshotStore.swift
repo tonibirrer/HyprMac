@@ -7,8 +7,8 @@
 // `restoreLayoutOnLaunch` is on.
 //
 // The store never touches a tree. `TilingEngine.layoutTree` serialises,
-// `LayoutMatcher` pairs saved leaves with live windows, and
-// `WindowManager` moves the bytes between them.
+// `WindowManager` hands the result to the store, and `LayoutRestorer`
+// matches, moves and rebuilds on the way back.
 
 import Cocoa
 

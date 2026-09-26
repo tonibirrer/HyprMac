@@ -518,9 +518,19 @@ class TilingEngine {
             mark(key, windowIDs: Set(candidate.allWindows.map(\.windowID)),
                  insertedIDs: Set(insertedIDs), restored: false)
         }
-        for (other, t) in trees where other.workspace == workspace && other != key && t.allWindows.isEmpty {
-            trees.removeValue(forKey: other)
-            unverified.removeValue(forKey: other)
+        // a stale tree for this workspace on another screen must not keep
+        // a window the rebuilt tree now holds
+        let rebuiltIDs = Set(candidate.allWindows.map(\.windowID))
+        for (other, t) in trees where other.workspace == workspace && other != key {
+            for w in t.allWindows where rebuiltIDs.contains(w.windowID) {
+                t.remove(w)
+                pendingInsertedWindowIDs[other]?.removeAll { $0 == w.windowID }
+            }
+            t.root.pruneEmptyNodes()
+            if t.allWindows.isEmpty {
+                trees.removeValue(forKey: other)
+                unverified.removeValue(forKey: other)
+            }
         }
         hyprLog(.debug, .lifecycle, "layout rebuild ws\(workspace): \(placed.count) placed, \(insertedIDs.count) inserted, \(refusedIDs.count) refused, frames \(applyFrames ? "verified" : "deferred")")
         return .rebuilt(inserted: insertedIDs.count, refusedNewcomers: refusedIDs)

@@ -56,8 +56,8 @@ enum Action: Equatable {
     /// `label` is the display name shown in the keybind list and overlay;
     /// an empty label falls back to the program's basename.
     case runCommand(label: String, command: String)
-    /// Save the current window→workspace layout for the active display
-    /// configuration.
+    /// Save each workspace's windows and tree shape for the active
+    /// display configuration.
     case saveLayout
     /// Restore the saved layout for the active display configuration.
     case restoreLayout
