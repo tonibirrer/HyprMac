@@ -94,6 +94,11 @@ final class WindowDiscoveryService {
     /// `NSRunningApplication`.
     private let bundleIDForPID: (pid_t) -> String?
     private let isWindowSizeSettable: (HyprWindow) -> Bool?
+    private let isWindowFullscreen: (HyprWindow) -> Bool
+
+    /// Native-fullscreen windows left out of admission, so each one is
+    /// logged once instead of on every poll.
+    private var fullscreenSkippedIDs: Set<CGWindowID> = []
 
     /// Consecutive cycles skipped by the mass-gone guard. Bounded so a
     /// genuine mass close is delayed, not deadlocked.
@@ -125,13 +130,15 @@ final class WindowDiscoveryService {
          displayManager: DisplayManager,
          workspaceManager: WorkspaceManager,
          bundleIDForPID: @escaping (pid_t) -> String? = { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier },
-         isWindowSizeSettable: @escaping (HyprWindow) -> Bool? = { $0.isSizeSettable }) {
+         isWindowSizeSettable: @escaping (HyprWindow) -> Bool? = { $0.isSizeSettable },
+         isWindowFullscreen: @escaping (HyprWindow) -> Bool = { $0.isFullscreen }) {
         self.stateCache = stateCache
         self.accessibility = accessibility
         self.displayManager = displayManager
         self.workspaceManager = workspaceManager
         self.bundleIDForPID = bundleIDForPID
         self.isWindowSizeSettable = isWindowSizeSettable
+        self.isWindowFullscreen = isWindowFullscreen
     }
 
     /// Production entry point: snapshot AX, capture running pids, and
@@ -203,7 +210,19 @@ final class WindowDiscoveryService {
         }
 
         // new
+        fullscreenSkippedIDs.formIntersection(currentIDs)
         for w in snapshot where !stateCache.knownWindowIDs.contains(w.windowID) {
+            // a window that shows up already in native fullscreen owns its
+            // own Space — a game launched fullscreen. tiling it reserves a
+            // screen-sized leaf on the visible workspace and crowds real
+            // tiles off it. leave it unknown so it is admitted normally
+            // once it leaves fullscreen.
+            if isWindowFullscreen(w) {
+                if fullscreenSkippedIDs.insert(w.windowID).inserted {
+                    hyprLog(.notice, .discovery, "new window in native fullscreen: '\(w.title ?? "?")' (\(w.windowID)) — not tiling it")
+                }
+                continue
+            }
             if let frame = w.frame {
                 let onScreen = displayManager.screens.contains { screen in
                     frame.isSubstantiallyVisible(on: displayManager.cgRect(for: screen))
