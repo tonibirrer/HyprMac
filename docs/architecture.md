@@ -179,8 +179,13 @@ trees migrate; later fires in the same debounce do not save again. An
 automatic save never replaces a manual snapshot, and pruning evicts
 automatic snapshots first.
 
-`Hypr+Ctrl+R`, a settled reconcile onto a known key, and launch
-(opt-in via `restoreLayoutOnLaunch`) restore. Both actions are dropped
+`Hypr+Ctrl+R`, a settled reconcile whose display key differs from the
+one it replaced, and the first start of the process (opt-in via
+`restoreLayoutOnLaunch`; resuming from pause is not a launch) restore.
+A settle under the same key (Dock resize, arrangement drag, primary
+change) does not restore. Display keys are sorted `name:WxH` pairs, so
+identical monitor models at the same size alias regardless of
+arrangement. Both actions are dropped
 while a display transition is settling. `LayoutRestorer`
 (`Core/Workspace/LayoutRestorer.swift`) runs the restore and returns a
 `LayoutRestoreOutcome`; `WindowManager` only looks up the snapshot,
@@ -193,9 +198,13 @@ refreshes the position cache, logs, and shows the pill.
    window of the same app, the one already on the leaf's workspace
    first. Every window is claimed once. Floaters and scratchpad
    members are never candidates.
-2. `WorkspaceOrchestrator.moveWindows` applies the workspace moves with
-   the same suppression / tree-removal / park sequence as
-   `Hypr+Shift+N`. Each destination is judged on its projected
+2. `WorkspaceOrchestrator.moveWindows` applies the workspace moves.
+   It uses the same suppressions and park/place steps as
+   `Hypr+Shift+N`, but lays out and verifies each visible destination
+   before any assignment changes, and drops windows from their source
+   trees by membership only, with one retile at the end. A destination
+   that refuses is laid out again with its old members, so its windows
+   return to their tiles even when the arrival was parked. Each destination is judged on its projected
    membership once the whole batch lands, so two full workspaces can
    trade windows. A destination takes all of its arrivals or none;
    refusals (`full`, `wontFit`, `sizingRefused`, disabled monitors,
