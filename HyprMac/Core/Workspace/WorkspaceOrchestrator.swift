@@ -928,7 +928,11 @@ final class WorkspaceOrchestrator {
             hyprLog(.notice, .workspace, "moveWindows: ws\(workspace) refused its arrivals"
                     + " [\(arriving.sorted().map(String.init).joined(separator: ", "))]"
                     + " \(layout.failure.map { "\($0)" } ?? "no slot")")
-            // the live tree still holds whatever the last accepted round left
+            // the refused candidate may have been published in part, or its
+            // frames left in place when a parked arrival put the rollback out
+            // of reach. record what was tried so the next round lays the
+            // destination out again without these arrivals
+            laidOut[workspace] = (screen, ids)
             return workspace
         }
         return nil

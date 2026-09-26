@@ -377,10 +377,9 @@ class TilingEngine {
         return tree
     }
 
-    /// Non-creating tree accessor for tests. Returns the live tree
-    /// for `(workspace, screen)`, or `nil` when none exists.
-    /// Production callers go through `tree(for:)` so the tree is
-    /// created on demand.
+    /// The live tree for `(workspace, screen)`, or `nil` when none
+    /// exists. Tests and the batch move read it. Never creates a tree;
+    /// callers that need one created go through `tree(for:)`.
     internal func existingTree(forWorkspace workspace: Int, screen: NSScreen) -> BSPTree? {
         trees[TilingKey(workspace: workspace, screen: screen)]
     }
@@ -401,7 +400,11 @@ class TilingEngine {
     /// had closed. Read-only — the engine stays the only thing that
     /// walks nodes (`docs/architecture.md`).
     func layoutTree(forWorkspace workspace: Int, ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
-        for (key, t) in trees where key.workspace == workspace && !t.allWindows.isEmpty {
+        // a workspace can briefly hold trees on two screens; take the fuller
+        // one, then the lower screen id, so the same state always saves the same
+        let candidates = trees.filter { $0.key.workspace == workspace && !$0.value.allWindows.isEmpty }
+            .sorted { ($1.value.allWindows.count, $0.key.screenID) < ($0.value.allWindows.count, $1.key.screenID) }
+        for (_, t) in candidates {
             if let root = Self.serialize(t.root, ref: ref) { return root }
         }
         return nil

@@ -198,8 +198,7 @@ struct LayoutRestorer {
     /// tile pass's refusals do: stranded, already judged, float in place on
     /// the next turn unless something tiles them first.
     private func handOff(_ ids: [CGWindowID], workspace: Int, screen: NSScreen) {
-        let published = Set(engine.existingTree(forWorkspace: workspace, screen: screen)?
-            .allWindows.map(\.windowID) ?? [])
+        let published = Set(engine.windowIDs(inTreeForWorkspace: workspace, screen: screen))
         recovery.note(TilingEngine.AdmissionResult(
             workspace: workspace, screen: screen,
             generation: engine.currentLayoutGeneration,

@@ -160,12 +160,18 @@ final class LayoutSnapshotStore {
     /// Store `workspaces` under `displayKey`. An automatic save never
     /// replaces a manual one.
     ///
-    /// - Returns: `false` when the save was skipped for a manual snapshot.
+    /// - Returns: `false` when an automatic save was skipped: a manual or
+    ///   unreadable snapshot holds the key, or manual snapshots fill every slot.
     /// - Throws: the write error. Memory is left as it was before the call.
     @discardableResult
     func save(displayKey: String, workspaces: [WorkspaceLayout], manual: Bool) throws -> Bool {
         if !manual, let existing = snapshots[displayKey], existing.isManual {
             hyprLog(.debug, .lifecycle, "layout auto-save skipped — manual snapshot exists for '\(displayKey)'")
+            return false
+        }
+        // an entry this build can't read may be a newer build's manual save
+        if !manual, unreadable[displayKey] != nil {
+            hyprLog(.debug, .lifecycle, "layout auto-save skipped — unreadable snapshot kept for '\(displayKey)'")
             return false
         }
         let previous = (snapshots, unreadable)
@@ -180,6 +186,12 @@ final class LayoutSnapshotStore {
         )
         unreadable[displayKey] = nil
         pruneOldest()
+        // every slot held by a manual snapshot: pruning took this auto-save
+        guard snapshots[displayKey] != nil else {
+            (snapshots, unreadable) = previous
+            hyprLog(.debug, .lifecycle, "layout auto-save skipped — no room beside manual snapshots for '\(displayKey)'")
+            return false
+        }
         do {
             try persist()
         } catch {

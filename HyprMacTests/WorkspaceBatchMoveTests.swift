@@ -274,6 +274,33 @@ final class WorkspaceBatchMoveTests: XCTestCase {
         rig.assertNoHalfMoves()
     }
 
+    // an arrival parked on a hidden workspace sits outside the screen, so the
+    // engine can't roll back to its frame; the destination still has to
+    // come back to its old tiles
+    func testParkedArrivalRefusingItsSlotPutsTheDestinationBack() {
+        let rig = BatchMoveRig()
+        let visible = rig.visible(on: 0)
+        let hidden = rig.hidden(on: 0)
+        rig.fill(visible, [1001, 1002, 1003])
+        rig.fill(hidden, [2001])
+        let park = rig.workspaceManager.hidePosition()
+        rig.frames[2001]?.origin = park
+        let before = rig.frames
+        rig.ignoresWrites = [2001]
+
+        let result = rig.orchestrator.moveWindows([(rig.window(2001), visible)])
+
+        XCTAssertTrue(result.moved.isEmpty)
+        XCTAssertEqual(result.refused[2001], .sizingRefused)
+        XCTAssertEqual(rig.assigned(visible), [1001, 1002, 1003])
+        XCTAssertEqual(rig.treeIDs(visible), [1001, 1002, 1003])
+        XCTAssertEqual(rig.treeIDs(hidden), [2001])
+        for id: CGWindowID in [1001, 1002, 1003] {
+            XCTAssertEqual(rig.frames[id], before[id], "\(id) was left off its tile")
+        }
+        rig.assertNoHalfMoves()
+    }
+
     // an unrelated destination still lands when another group overflows
     func testOverflowingGroupDoesNotHoldBackAnotherDestination() {
         let rig = BatchMoveRig()

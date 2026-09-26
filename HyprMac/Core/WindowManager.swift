@@ -195,6 +195,9 @@ class WindowManager {
     /// notification of a transition files the departing layout under this
     /// key — by then `displayManager.screens` already reflects the new one.
     private var settledDisplayKey = ""
+    /// the launch restore runs once per process; resuming from pause
+    /// restarts the manager but is not a launch
+    private var didRunLaunchRestore = false
     private let layoutStore = LayoutSnapshotStore.shared
 
     /// Wire the dependency graph and configure every subsystem callback.
@@ -635,8 +638,11 @@ class WindowManager {
             self.workspaceManager.initializeMonitors()
             self.settledDisplayKey = LayoutSnapshotStore.displayKey(screens: self.displayManager.screens)
             let initialWindows = self.snapshotAndTile()
-            if self.config.restoreLayoutOnLaunch {
-                self.restoreLayoutSnapshot(manual: false, windows: initialWindows)
+            if !self.didRunLaunchRestore {
+                self.didRunLaunchRestore = true
+                if self.config.restoreLayoutOnLaunch {
+                    self.restoreLayoutSnapshot(manual: false, windows: initialWindows)
+                }
             }
             // attach AX observers after the initial tile so their events feed
             // the same coalescing scheduler. this covers the app-level
@@ -1671,6 +1677,7 @@ class WindowManager {
         }
         guard !workspaces.isEmpty else {
             hyprLog(.debug, .lifecycle, "layout save skipped — no tiled windows for '\(key)'")
+            if manual { flashLayoutMessage("Nothing to save — no tiled windows") }
             return false
         }
         do {
@@ -2096,6 +2103,14 @@ class WindowManager {
         focusController.recordFocus(target.id, reason: target.reason)
     }
 
+    /// Whether a settled display change should restore the saved layout.
+    /// Only a different display set does: a Dock resize, an arrangement
+    /// drag, or a primary-display change keeps the key, and restoring there
+    /// would undo whatever the user arranged since the last save.
+    static func restoresAfterSettle(from departedKey: String, to settledKey: String) -> Bool {
+        departedKey != settledKey
+    }
+
     /// Actions that wait out a display transition. Save and restore are in
     /// here too: mid-transition the topology key and the trees are both in
     /// flux, so a save would file a half-migrated layout and a restore would
@@ -2121,7 +2136,7 @@ class WindowManager {
         switch action {
         case .switchWorkspace, .cycleWorkspace, .focusDirection, .focusFloating,
              .focusMenuBar, .showKeybinds, .showWorkspaceOverview, .launchApp,
-             .runCommand:
+             .runCommand, .saveLayout:
             return false
         default: return true
         }
@@ -2818,6 +2833,7 @@ class WindowManager {
                 return
             }
             self.lastDisplayFingerprint = fingerprint
+            let departedKey = self.settledDisplayKey
             self.settledDisplayKey = LayoutSnapshotStore.displayKey(screens: self.displayManager.screens)
             self.focusBorder.primaryScreenHeight = self.displayManager.primaryScreenHeight
             self.focusBrackets.primaryScreenHeight = self.displayManager.primaryScreenHeight
@@ -2830,7 +2846,8 @@ class WindowManager {
             // the fingerprint refreshed DisplayManager; initializeMonitors runs
             // before TilingEngine.handleDisplayChange so the home-screen
             // lookup the engine consults is current.
-            self.reconcileAfterDisplayChange(restoreSavedLayout: true)
+            self.reconcileAfterDisplayChange(
+                restoreSavedLayout: Self.restoresAfterSettle(from: departedKey, to: self.settledDisplayKey))
         }
     }
 

@@ -411,4 +411,18 @@ final class LayoutRestorerTests: XCTestCase {
         XCTAssertTrue(WindowManager.isDroppedMidDisplayTransition(.moveToWorkspace(2)))
         XCTAssertFalse(WindowManager.isDroppedMidDisplayTransition(.focusDirection(.left)))
     }
+
+    // a Dock resize or arrangement drag settles under the same key and must
+    // not pull back an older snapshot
+    func testOnlyANewDisplaySetRestoresAfterSettle() {
+        XCTAssertFalse(WindowManager.restoresAfterSettle(from: "A:1512x982", to: "A:1512x982"))
+        XCTAssertTrue(WindowManager.restoresAfterSettle(from: "A:1512x982|B:2560x1440", to: "A:1512x982"))
+        XCTAssertTrue(WindowManager.restoresAfterSettle(from: "A:1512x982", to: "A:1512x982|B:2560x1440"))
+    }
+
+    // saving changes no layout, so a pending admission retry stays armed
+    func testSaveLeavesPendingRecoveryAloneButRestoreCancelsIt() {
+        XCTAssertFalse(WindowManager.cancelsPendingRecovery(.saveLayout))
+        XCTAssertTrue(WindowManager.cancelsPendingRecovery(.restoreLayout))
+    }
 }

@@ -154,6 +154,37 @@ final class LayoutSnapshotStoreTests: XCTestCase {
         XCTAssertNotNil(LayoutSnapshotStore(fileURL: fileURL).snapshot(for: "Test:1x1"))
     }
 
+    // an unreadable entry may be a newer build's manual save
+    func testAutoSaveDoesNotReplaceAnUnreadableEntry() throws {
+        let futureEntry: [String: Any] = [
+            "schemaVersion": LayoutSnapshot.currentSchemaVersion + 1,
+            "displayKey": "Future:1x1", "timestamp": "2030-01-01T00:00:00Z",
+            "isManual": true, "workspaces": [],
+        ]
+        try JSONSerialization.data(withJSONObject: ["Future:1x1": futureEntry]).write(to: fileURL)
+
+        let store = LayoutSnapshotStore(fileURL: fileURL)
+        XCTAssertFalse(try store.save(displayKey: "Future:1x1", workspaces: single("com.a"), manual: false))
+
+        let raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any])
+        XCTAssertEqual(raw["Future:1x1"] as? NSDictionary, futureEntry as NSDictionary)
+        XCTAssertTrue(try store.save(displayKey: "Future:1x1", workspaces: single("com.a"), manual: true))
+    }
+
+    // with every slot held by a manual snapshot, a new auto-save has nowhere to go
+    func testAutoSaveThatWouldBePrunedAtOnceIsSkipped() throws {
+        let store = LayoutSnapshotStore(fileURL: fileURL)
+        for i in 0..<LayoutSnapshotStore.maxSnapshots {
+            try store.save(displayKey: "Manual:\(i)", workspaces: single("com.a"), manual: true)
+        }
+        let before = try Data(contentsOf: fileURL)
+
+        XCTAssertFalse(try store.save(displayKey: "Auto:1", workspaces: single("com.a"), manual: false))
+        XCTAssertNil(store.snapshot(for: "Auto:1"))
+        XCTAssertEqual(store.snapshots.count, LayoutSnapshotStore.maxSnapshots)
+        XCTAssertEqual(try Data(contentsOf: fileURL), before)
+    }
+
     func testUnreadableFileIsMovedAsideNotOverwritten() throws {
         try Data("not json".utf8).write(to: fileURL)
         let aside = URL(fileURLWithPath: fileURL.path + ".unreadable")
