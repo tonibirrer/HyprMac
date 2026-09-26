@@ -18,6 +18,7 @@ struct GeneralSettingsView: View {
             mousePanel
             neverTilePanel
             systemPanel
+            layoutsPanel
             footerPanel
         }
         .onAppear {
@@ -35,12 +36,16 @@ struct GeneralSettingsView: View {
         HyprPanel("Status",
                   footer: accessibilityGranted ? nil : "Accessibility permission is required for HyprMac to function. Open System Settings to grant it.") {
             HyprRow("HyprMac", icon: "bolt.fill") {
-                if config.enabled {
-                    HyprAccentBadge("ACTIVE", icon: "checkmark")
+                // the toggle style carries its own spacer; keep the badge beside it
+                HStack(spacing: 0) {
+                    if config.enabled {
+                        HyprAccentBadge("ACTIVE", icon: "checkmark")
+                    }
+                    Toggle("", isOn: $config.enabled)
+                        .toggleStyle(HyprToggleStyle())
+                        .labelsHidden()
                 }
-                Toggle("", isOn: $config.enabled)
-                    .toggleStyle(HyprToggleStyle())
-                    .labelsHidden()
+                .fixedSize()
             }
             HyprRow(accessibilityGranted ? "Accessibility granted" : "Accessibility required",
                     icon: accessibilityGranted ? "checkmark.shield" : "exclamationmark.shield",
@@ -197,6 +202,19 @@ struct GeneralSettingsView: View {
             return "\(loginItem.appName) will launch automatically when you sign in. You can turn it off in System Settings → General → Login Items."
         }
         return "Start \(loginItem.appName) automatically when you sign in."
+    }
+
+    // MARK: layouts
+
+    private var layoutsPanel: some View {
+        HyprPanel("Layouts",
+                  footer: "Hypr+Ctrl+S saves the window arrangement for the current display setup; Hypr+Ctrl+R brings it back. A saved layout also restores on its own when that display setup reconnects.") {
+            HyprRow("Restore saved layout at launch", icon: "arrow.counterclockwise", divider: false) {
+                Toggle("", isOn: $config.restoreLayoutOnLaunch)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+            }
+        }
     }
 
     // MARK: footer — replay tour + reset

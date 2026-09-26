@@ -48,7 +48,7 @@ struct TilingSettingsView: View {
                         paddingOverrideRow("Left", \.left)
                         paddingOverrideRow("Right", \.right)
                     }
-                    Text("Preview updates live — the geometry is the design.")
+                    Text("The preview updates as you drag.")
                         .font(.hyprCaption)
                         .foregroundStyle(Color.hyprTextTertiary)
                         .fixedSize(horizontal: false, vertical: true)

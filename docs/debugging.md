@@ -1,10 +1,28 @@
 # Debugging
 
-HyprMac logs through `os.Logger` under the subsystem
-`com.zachgray.HyprMac`. This document covers how to read the logs,
-how to enable verbose logging in Release builds for support
-sessions, and the smaller knobs available for narrowing the
-output.
+HyprMac logs through `os.Logger`. The subsystem is the running app's
+bundle id: `com.zachgray.HyprMac` for release and
+`com.zachgray.HyprMac.debug` for the Debug app. The recipes below use
+the release id; swap in the debug id when reading the Debug app. This
+document covers how to read the logs, how to enable verbose logging in
+Release builds for support sessions, and the smaller knobs available
+for narrowing the output.
+
+Quick rules:
+
+- Call `/usr/bin/log` by full path. A shell function can shadow `log`,
+  especially over SSH.
+- Only `.notice` and above persist. `.debug` lines show up only in a
+  live stream started before the repro:
+  `/usr/bin/log stream --level debug --predicate 'subsystem == "com.zachgray.HyprMac.debug"'`.
+- Debug builds also keep a file log at
+  `~/Library/Logs/HyprMac/<bundle id>.log` (see below).
+- The running build's source is `HyprMacSourceRevision` in the app's
+  Info.plist. `scripts/build-debug.sh` fills it in as
+  `<sha12>+<content hash>`; other builds leave it empty or `unknown`.
+- Intermittent bugs: no repro, no guess fix. Add `.notice` logs at the
+  suspect paths, ship them in the Debug app, and fix only once the logs
+  confirm a cause. Keep those logs afterward.
 
 ## Log tiers
 

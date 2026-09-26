@@ -318,22 +318,19 @@ private struct KeybindOverlayView: View {
 
     // MARK: sections
 
-    // left = Focus & Navigation, then Apps + System
+    // left = Window Management, center = Apps + System,
+    // right = Workspaces, then Focus & Navigation
     private var leftSections: [OverlaySection] {
-        var result = [section(for: .focusNav)].compactMap { $0 }
-        let merged = rows(for: .apps) + rows(for: .system)
-        if !merged.isEmpty {
-            result.append(OverlaySection(title: "Apps & System", rows: merged))
-        }
-        return result
-    }
-
-    private var centerSections: [OverlaySection] {
         [section(for: .windowManagement)].compactMap { $0 }
     }
 
+    private var centerSections: [OverlaySection] {
+        let merged = rows(for: .apps) + rows(for: .system)
+        return merged.isEmpty ? [] : [OverlaySection(title: "Apps & System", rows: merged)]
+    }
+
     private var rightSections: [OverlaySection] {
-        [section(for: .workspaces)].compactMap { $0 }
+        [section(for: .workspaces), section(for: .focusNav)].compactMap { $0 }
     }
 
     private func section(for category: KeybindCategory) -> OverlaySection? {

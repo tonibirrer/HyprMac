@@ -103,15 +103,81 @@ struct PermissionStatusRow: View {
     }
 }
 
+// MARK: - modifier keys check row
+
+/// The Modifier Keys reminder. Same tile language as `PermissionStatusRow`,
+/// but it is a manual check: macOS gives us no way to read that setting, so
+/// this never shows a granted state.
+struct ModifierKeysCheckRow: View {
+    let guidance: HyprKeySystemGuidance
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "keyboard")
+                .font(.system(size: 14))
+                .foregroundStyle(Color.hyprTextSecondary)
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.hyprTextSecondary.opacity(0.12))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.hyprTextSecondary.opacity(0.3), lineWidth: 1)
+                )
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("Modifier Keys")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(Color.hyprTextPrimary)
+                    Text("CHECK")
+                        .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundStyle(Color.hyprTextTertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(Color.hyprTextTertiary.opacity(0.12)))
+                }
+                Text("\(guidance.title) \(HyprKeySystemGuidance.cannotCheckNote)")
+                    .font(.system(size: 11))
+                    .lineSpacing(2)
+                    .foregroundStyle(Color.hyprTextPrimary.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .help(guidance.detail)
+
+            Spacer(minLength: 8)
+
+            Button("Open") { HyprKeySystemGuidance.openKeyboardSettings() }
+                .controlSize(.small)
+                .accessibilityLabel(HyprKeySystemGuidance.openButtonTitle)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.hyprSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.hyprTextPrimary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
 // MARK: - launch gate
 
 /// Live permission state for the launch gate. Updated by the view's own
 /// 1 Hz poll and stamped granted by the AppDelegate poll when AX lands.
 final class PermissionsGateModel: ObservableObject {
     @Published var axGranted = AccessibilityManager.isAccessibilityEnabled()
+    /// nil when the selected Hypr key can't be remapped in Modifier Keys
+    @Published var modifierGuidance = HyprKeySystemGuidance.forKey(UserConfig.shared.hyprKey)
 
     func refresh() {
         axGranted = AccessibilityManager.isAccessibilityEnabled()
+        modifierGuidance = HyprKeySystemGuidance.forKey(UserConfig.shared.hyprKey)
     }
 }
 
@@ -131,7 +197,7 @@ struct PermissionsGateView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             footer
         }
-        .frame(width: 520, height: 440)
+        .frame(width: 520, height: 530)
         .background(Color.hyprBackground)
         .onReceive(poll) { _ in model.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -139,20 +205,11 @@ struct PermissionsGateView: View {
         }
     }
 
-    // MARK: header — icon + wordmark
+    // MARK: header — lockup
 
     private var header: some View {
-        HStack(spacing: 10) {
-            if let icon = NSApp.applicationIconImage {
-                Image(nsImage: icon)
-                    .resizable()
-                    .frame(width: 30, height: 30)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            Text("HYPRMAC")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .tracking(1.5)
-                .foregroundStyle(Color.hyprTextPrimary.opacity(0.7))
+        HStack {
+            HyprLockup(markSize: 20)
             Spacer()
         }
         .padding(.horizontal, 20)
@@ -190,6 +247,12 @@ struct PermissionsGateView: View {
             )
             .frame(maxWidth: 420)
             .padding(.top, 18)
+
+            if let guidance = model.modifierGuidance {
+                ModifierKeysCheckRow(guidance: guidance)
+                    .frame(maxWidth: 420)
+                    .padding(.top, 10)
+            }
 
             // rebuilds/updates invalidate the grant; the stale-toggle dance
             // from the old alert lives on as a caption.
@@ -260,7 +323,7 @@ final class PermissionsGateWindowController {
         win.isMovableByWindowBackground = true
         win.level = .floating
         win.center()
-        win.setContentSize(NSSize(width: 520, height: 440))
+        win.setContentSize(NSSize(width: 520, height: 530))
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window = win

@@ -29,7 +29,7 @@ struct ColorPickerRow: View {
             }
             ColorPicker("", selection: $color, supportsOpacity: false)
                 .labelsHidden()
-                .frame(width: 36)
+                .fixedSize()
         }
     }
 }

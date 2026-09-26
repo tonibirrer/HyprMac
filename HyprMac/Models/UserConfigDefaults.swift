@@ -85,6 +85,9 @@ enum UserConfigDefaults {
     // default (nil) resolves to the built-in display.
     static let accordionMode: Bool = false
     static let accordionOverlap: CGFloat = 60
+    // saved layouts: restore the snapshot for the current display setup
+    // on launch. synced (SavedConfig).
+    static let restoreLayoutOnLaunch: Bool = false
     // focusBorderColorHex / floatingBorderColorHex are nil by default —
     // resolvedFocusBorderColor / resolvedFloatingBorderColor compute the
     // system color when nil.

@@ -4,7 +4,7 @@ import SwiftUI
 
 // MARK: - what's new feature list
 // Update this array before each release with features from git log;
-// see CLAUDE.md "Release Feature List" for the workflow.
+// see docs/release.md for the workflow.
 
 /// Accent used for a changelog row's icon tile.
 enum WhatsNewTint {
@@ -23,17 +23,18 @@ struct WhatsNewFeature {
 }
 
 enum WhatsNewFeatures {
-    // update this before each release — see CLAUDE.md instructions
+    // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "bolt",
-            title: "An Instant Workspace Indicator",
-            description: "The workspace flash now appears the moment you press the shortcut, before HyprMac rearranges any windows, instead of trailing the switch."
+            icon: "square.and.arrow.down.on.square",
+            title: "Saved Layouts",
+            description: "Hypr+Ctrl+S saves which workspace every window is on and how each one is split, across all your monitors. Hypr+Ctrl+R puts it back, and plugging a saved display setup back in restores it on its own.",
+            credit: "@joops"
         ),
         WhatsNewFeature(
-            icon: "rectangle.and.text.magnifyingglass",
-            title: "A Cleaner Workspace Flash",
-            description: "The indicator shows just the workspace number. The display name no longer appears under it on any monitor setup."
+            icon: "keyboard",
+            title: "A Balanced Keybind List",
+            description: "Hypr+K now spreads its shortcuts evenly: window management on the left, apps and system in the middle, workspaces and focus on the right."
         ),
     ]
 }

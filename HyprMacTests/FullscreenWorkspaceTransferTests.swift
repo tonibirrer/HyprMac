@@ -30,6 +30,47 @@ final class NextEmptyWorkspaceTests: XCTestCase {
         manager.assignWindow(999, toWorkspace: Constants.workspaceCount)
         XCTAssertNil(manager.nextEmptyWorkspace(after: 1, on: screen))
     }
+
+    func testCleanSingleDisplaySelectsWorkspaceTwo() {
+        let screen = TransferScreen(x: 0)
+        let manager = WorkspaceManager(displayManager: DisplayManager(screenSource: { [screen] }))
+        manager.initializeMonitors()
+        manager.assignWindow(11, toWorkspace: 1)
+        XCTAssertEqual(manager.workspacesAnchoredTo(screen), Array(1...Constants.workspaceCount))
+        XCTAssertEqual(manager.nextEmptyWorkspace(after: 1, on: screen), 2)
+    }
+
+    // disconnecting a display in the same process must re-anchor every
+    // workspace to the survivor, not keep the old two-display stride.
+    func testDisconnectToSingleDisplayReanchorsWithoutRestart() {
+        let left = TransferScreen(x: -1600)
+        let primary = TransferScreen(x: 0)
+        let builtIn = TransferScreen(x: 0, width: 1512, height: 945)
+        var provided = [left, primary]
+        let display = DisplayManager(screenSource: { provided })
+        let manager = WorkspaceManager(displayManager: display)
+        manager.initializeMonitors()
+        XCTAssertEqual(manager.nextEmptyWorkspace(after: 1, on: left), 3)
+
+        provided = [builtIn]
+        display.refresh()
+        manager.initializeMonitors()
+        _ = manager.switchWorkspace(1, cursorScreen: builtIn)
+
+        XCTAssertEqual(manager.workspacesAnchoredTo(builtIn), Array(1...Constants.workspaceCount))
+        XCTAssertEqual(manager.nextEmptyWorkspace(after: 1, on: builtIn), 2)
+    }
+
+    func testClosedGhostsDoNotReserveButLiveWindowsStillDo() {
+        let screen = TransferScreen(x: 0)
+        let manager = WorkspaceManager(displayManager: DisplayManager(screenSource: { [screen] }))
+        manager.initializeMonitors()
+        manager.assignWindow(21, toWorkspace: 2)
+        manager.assignWindow(22, toWorkspace: 2)
+        XCTAssertEqual(manager.nextEmptyWorkspace(after: 1, on: screen, ignoring: [21, 22]), 2)
+        XCTAssertEqual(manager.nextEmptyWorkspace(after: 1, on: screen, ignoring: [21]), 3)
+        XCTAssertEqual(manager.nextEmptyWorkspace(after: 1, on: screen), 3)
+    }
 }
 
 final class SoleWindowTransferEngineTests: XCTestCase {
@@ -354,12 +395,116 @@ final class FullscreenWorkspaceOrchestratorTests: XCTestCase {
         XCTAssertTrue(engine.unverifiedGeometryWindowIDs.contains(sibling.windowID))
         XCTAssertNil(engine.existingTree(forWorkspace: 2, screen: screen))
     }
+
+    // live repro 2026-09-18: two displays → built-in only, same process.
+    // ws2 kept the external display's closed-but-app-alive windows, so the
+    // menu bar showed it empty while Hypr+F skipped it and landed on ws3.
+    func testAfterDisconnectClosedGhostsOnWorkspaceTwoDoNotBlockIt() throws {
+        let left = TransferScreen(x: -1600)
+        let primary = TransferScreen(x: 0)
+        let builtIn = TransferScreen(x: 0, width: 1512, height: 945)
+        var provided = [left, primary]
+        let display = DisplayManager(screenSource: { provided })
+        let manager = WorkspaceManager(displayManager: display)
+        manager.initializeMonitors()
+        XCTAssertEqual(manager.workspaceForScreen(primary), 2)
+        let state = WindowStateCache()
+        // closed on the external display while their apps kept running
+        for ghost: CGWindowID in [4701, 4702, 4703] {
+            manager.assignWindow(ghost, toWorkspace: 2)
+            state.hiddenWindowIDs.insert(ghost)
+        }
+        let engine = TilingEngine(displayManager: display)
+
+        provided = [builtIn]
+        display.refresh()
+        manager.initializeMonitors()
+        engine.handleDisplayChange(currentScreens: display.screens,
+                                   homeScreensForWorkspace: { manager.homeScreensForWorkspace($0) })
+        _ = manager.switchWorkspace(1, cursorScreen: builtIn)
+
+        let mover = TransferWindow(id: 4711, frame: CGRect(x: 8, y: 40, width: 740, height: 840))
+        let sibling = TransferWindow(id: 4712, frame: CGRect(x: 760, y: 40, width: 740, height: 840))
+        for window in [mover, sibling] {
+            manager.assignWindow(window.windowID, toWorkspace: 1)
+            state.cachedWindows[window.windowID] = window
+        }
+        engine.prepareTileLayout([mover, sibling], onWorkspace: 1, screen: builtIn)
+        let orchestrator = makeOrchestrator(manager, engine, display, state)
+        orchestrator.actualFocusedWindow = { mover }
+        orchestrator.allWindows = { [mover, sibling] }
+        orchestrator.transferRejected = { _, message in XCTFail("unexpected rejection: \(message)") }
+
+        orchestrator.moveToNextEmptyWorkspace()
+
+        XCTAssertEqual(manager.workspaceFor(mover.windowID), 2)
+        XCTAssertEqual(manager.workspaceForScreen(builtIn), 2)
+        XCTAssertEqual(engine.existingTree(forWorkspace: 2, screen: builtIn)?.allWindows.map(\.windowID),
+                       [mover.windowID])
+    }
+
+    // nothing on screen means empty, the menu bar's rule. a live floater
+    // still owns its workspace
+    func testMinimizedAndClosedWindowsDoNotBlockButLiveFloaterDoes() throws {
+        let screen = TransferScreen(x: 0)
+        let display = DisplayManager(screenSource: { [screen] })
+        let manager = WorkspaceManager(displayManager: display)
+        manager.initializeMonitors()
+        let state = WindowStateCache()
+        // a live floater owns ws2
+        manager.assignWindow(4802, toWorkspace: 2)
+        state.floatingWindowIDs.insert(4802)
+        // minimized (hidden + reserved) on ws3 does not own it
+        manager.assignWindow(4801, toWorkspace: 3)
+        state.hiddenWindowIDs.insert(4801)
+        state.reservedHiddenWindowIDs.insert(4801)
+        // a closed ghost on ws3 does not own it either
+        manager.assignWindow(4803, toWorkspace: 3)
+        state.hiddenWindowIDs.insert(4803)
+
+        let mover = TransferWindow(id: 4811, frame: CGRect(x: 80, y: 90, width: 600, height: 500))
+        let sibling = TransferWindow(id: 4812, frame: CGRect(x: 700, y: 90, width: 600, height: 500))
+        for window in [mover, sibling] {
+            manager.assignWindow(window.windowID, toWorkspace: 1)
+            state.cachedWindows[window.windowID] = window
+        }
+        let engine = TilingEngine(displayManager: display)
+        engine.prepareTileLayout([mover, sibling], onWorkspace: 1, screen: screen)
+        let orchestrator = makeOrchestrator(manager, engine, display, state)
+        orchestrator.actualFocusedWindow = { mover }
+        orchestrator.allWindows = { [mover, sibling] }
+        orchestrator.transferRejected = { _, message in XCTFail("unexpected rejection: \(message)") }
+
+        orchestrator.moveToNextEmptyWorkspace()
+
+        XCTAssertEqual(manager.workspaceFor(mover.windowID), 3)
+        XCTAssertEqual(manager.workspaceFor(4802), 2)
+        XCTAssertEqual(manager.workspaceFor(4801), 3)
+        XCTAssertEqual(manager.workspaceFor(4803), 3)
+    }
+
+    private func makeOrchestrator(_ manager: WorkspaceManager, _ engine: TilingEngine,
+                                  _ display: DisplayManager, _ state: WindowStateCache) -> WorkspaceOrchestrator {
+        let border = FocusBorder()
+        let orchestrator = WorkspaceOrchestrator(
+            workspaceManager: manager, tilingEngine: engine,
+            accessibility: AccessibilityManager(), displayManager: display,
+            cursorManager: CursorManager(), stateCache: state,
+            focusController: FocusStateController(focusBorder: border), focusBorder: border,
+            dimmingOverlay: DimmingOverlay(), suppressions: SuppressionRegistry(),
+            revalidation: MinimaRevalidation())
+        orchestrator.focusTransferredWindow = { _ in }
+        orchestrator.warpToWindow = { _ in }
+        orchestrator.updateFocusBorder = { _ in }
+        orchestrator.updatePositionCache = { }
+        return orchestrator
+    }
 }
 
 private final class TransferScreen: NSScreen {
     private let bounds: CGRect
-    init(x: CGFloat) {
-        bounds = CGRect(x: x, y: 0, width: 1600, height: 1000)
+    init(x: CGFloat, width: CGFloat = 1600, height: CGFloat = 1000) {
+        bounds = CGRect(x: x, y: 0, width: width, height: height)
         super.init()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

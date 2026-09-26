@@ -3,166 +3,154 @@
 > [!WARNING]
 > **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style window rules. It builds as **HyprMacExperiments** with its own bundle ID, its own config directory (`~/Library/Application Support/HyprMacExperiments/`, iCloud folder and IPC sockets included) so it can be installed and switched with a regular HyprMac install without the two ever sharing state — the first launch copies an existing HyprMac config over once. Auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
 
-A keyboard-driven tiling window manager for macOS.
+**A keyboard-driven tiling window manager for macOS, inspired by [Hyprland](https://hyprland.org).**
+Free, open source, and the first real job your Caps Lock key has ever had.
 
-Caps Lock becomes a **Hypr** modifier key by default, and the physical Hypr key can be changed in Settings. From there: BSP dwindle tiling, 10 virtual workspaces, directional focus and window swapping, pointer-edge target insertion, and focus-follows-mouse — all without touching System Integrity Protection.
+[![Watch the HyprMac demo](docs/screenshots/demo-card.jpg)](https://hyprmac.app/hyprmac-demo-github.mp4)
 
-[![HyprMac demo](docs/screenshots/demo-thumb.png)](https://github.com/user-attachments/assets/1f6f12ff-8e89-49ab-8be9-f2996025763a)
+**▶ [Watch the one-minute demo](https://hyprmac.app/hyprmac-demo-github.mp4)** ·
+**[Try it in your browser](https://hyprmac.app/#try)** ·
+**[hyprmac.app](https://hyprmac.app)**
 
-> HyprMac is in active development. Contributions and bug reports are welcome.
+## What it does
 
----
+If your Mac usually looks like a pile of windows stacked on top of each other, and the one you
+want is always at the bottom, HyprMac is for you.
 
-## What It Solves
+- **Windows arrange themselves.** Open an app and it slots into a tidy tiled layout. No
+  dragging, no resizing, no digging.
+- **Your keyboard drives.** Hold Caps Lock, which becomes your **Hypr** key out of the box (there
+  are a bunch of alternatives!), and tap an arrow to jump between windows. Add Shift to swap
+  them. Tap a number to switch workspaces.
+- **You can't get lost.** Forgot a shortcut? **Hypr + K** shows every one of them.
 
-macOS doesn't ship with a tiling window manager. Third-party options either require disabling SIP, rely on AppleScript hacks, or bolt tiling on top of macOS Spaces in ways that feel fragile. HyprMac takes a different approach: it manages its own virtual workspaces in userspace, uses Accessibility APIs only, and provides a dedicated Hypr modifier for a clean, Hyprland-style workflow that works within macOS's constraints.
+A handful of keys covers the basics, and most people have them down in a few minutes. When you
+want more, every keybind is remappable and you can point keys at your own scripts.
 
----
+## The five keys to know
 
-## Features
+| Keys | What happens |
+|------|--------------|
+| `Hypr + ←/→/↑/↓` | Move between windows |
+| `Hypr + Shift + ←/→/↑/↓` | Swap windows around |
+| `Hypr + 1–9` / `Hypr + 0` | Jump to workspace 1–9 / 10 |
+| `Hypr + Return` | Open Terminal |
+| `Hypr + K` | Show every keybind |
 
-| | |
-|---|---|
-| 🪟 **BSP Dwindle Tiling** | Smart insertion with min-size adaptation and automatic split ratio adjustment |
-| 🗂 **10 Virtual Workspaces** | Managed in userspace — no macOS Spaces dependency, no SIP needed |
-| 🎯 **Directional Focus & Swap** | Move focus or swap windows left/right/up/down across monitors |
-| 🖱 **Focus-Follows-Mouse** | Toggleable, with automatic suppression when menus are open |
-| 🔄 **Drag Placement** | Drag to insert, or hold Hypr while dragging to swap positions |
-| 🔲 **Floating Toggle** | Pop windows in and out of the tiling layout on demand |
-| 📌 **Window Rules** *(fork)* | Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style |
-| 🧷 **Sticky Apps** *(fork)* | Hyprland's `pin`, extended to tiles: chosen apps follow you across the workspaces that opt in |
-| 🏛 **Full-Height Apps** *(fork)* | Per-app guarantee of a full-height column in the dwindle layout, master-layout style |
-| 🔗 **Linked Monitors** *(fork)* | Toggle: all monitors show one workspace, tiles load-balanced across screens by size |
-| 🪗 **Accordion Mode** *(fork)* | AeroSpace-style stacked layout when only the chosen screen (default: built-in) is connected, with configurable side peek; the tiled layout is kept in the background and restored when monitors return |
-| 🔌 **IPC + sketchybar** *(fork)* | Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators |
-| 🎨 **Workspace Identity** *(fork)* | Per-workspace accent colors and wallpapers |
-| 📐 **Per-Side Padding** *(fork)* | Top-only outer padding to reserve space for a status bar |
-| 🖥 **Multi-Monitor** | Per-monitor workspace assignment with directional cross-monitor navigation |
-| ⌨️ **Fully Configurable** | Edit the Hypr key, keybinds, app launchers, gaps, and padding in-app or via JSON |
-| 📋 **Keybind Overlay** | `Hypr+K` shows all active shortcuts at a glance |
-| 🗺 **Workspace Overview** | `Hypr+O` shows workspace layouts, app search, and scratchpad apps; two rows of five workspaces; type 1–9 or 0 to switch |
-| ◐ **Overlay Appearance** | Follow macOS light/dark mode or choose an override in Settings → General |
+## Install
 
----
-
-## Requirements
-
-- macOS 13 (Ventura) or later
-- Accessibility permission — System Settings → Privacy & Security → Accessibility
-- For the default Caps Lock Hypr key: Caps Lock set to **"⇪ Caps Lock"** in Modifier Keys (not "No Action")
-
----
-
-## Installation
-
-### Homebrew (recommended)
+Homebrew:
 
 ```sh
 brew trust --cask zacharytgray/hyprmac/hyprmac
 brew install --cask zacharytgray/hyprmac/hyprmac
 ```
 
-Homebrew refuses to load casks from third-party taps until you trust them. The first line trusts only the HyprMac cask, which also lets `brew upgrade --cask hyprmac` work later.
+Homebrew refuses to load casks from third-party taps until you trust them. The first line trusts
+only the HyprMac cask, which also lets `brew upgrade --cask hyprmac` work later.
 
-### Manual Download
+Or grab the DMG: [HyprMac.dmg](https://github.com/zacharytgray/HyprMac/releases/latest/download/HyprMac.dmg),
+open it, and drag HyprMac to Applications. Older versions live on the
+[releases page](https://github.com/zacharytgray/HyprMac/releases).
 
-Download the latest DMG from [GitHub Releases](https://github.com/zacharytgray/HyprMac/releases), open it, and drag HyprMac to Applications.
+Then follow the [install guide](https://hyprmac.app/guides/install/) for first-run setup,
+permissions, and the recommended macOS settings.
 
-### Build from Source
+### Requirements
 
-```sh
-git clone https://github.com/zacharytgray/HyprMac.git
-cd HyprMac
+- macOS 13 (Ventura) or later
+- Accessibility permission, in System Settings → Privacy & Security → Accessibility. HyprMac uses
+  the Accessibility APIs only, so there's no need to disable System Integrity Protection.
+- For the default Caps Lock Hypr key: Caps Lock must stay set to **"⇪ Caps Lock"** in System
+  Settings → Keyboard → Keyboard Shortcuts → Modifier Keys, not "No Action". The pane is per
+  keyboard, so check each one you use. HyprMac remaps Caps Lock to F18 itself.
+- The same holds if Control, Option, or Command is your Hypr key: leave it on its default
+  there. Tab, backtick, backslash, F13–F20, and Shift are not in that pane and need nothing.
+- macOS gives apps no way to read that setting, so HyprMac shows this as a reminder in
+  onboarding and in Settings → Keys, with an Open Keyboard Settings button.
 
-brew install xcodegen
-xcodegen generate
+## For Hyprland folks
 
-export DEVELOPMENT_TEAM=YOUR_TEAM_ID
-xcodebuild -project HyprMac.xcodeproj -scheme HyprMac -configuration Debug \
-  -derivedDataPath build DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM build
+You'll feel at home. The differences are mostly macOS being macOS:
 
-cp -r build/Build/Products/Debug/HyprMac.app /Applications/
-```
+- **Tiling:** BSP dwindle, like Hyprland's default layout. New windows split the focused one,
+  and **Hypr + J** flips the split direction. Drag a tiled window onto another tile's edge to
+  insert it there, or hold Hypr while dragging to swap the two.
+- **Workspaces:** ten of them (keys 1–9 and 0), plus a scratchpad and an overview on
+  **Hypr + O**. macOS has no public API for this, so HyprMac keeps its own virtual workspaces and
+  hides the other workspaces' windows when you switch.
+- **Hypr + F:** native macOS fullscreen spawns its own Space and wrecks the layout, so HyprMac
+  gives the window a dedicated empty workspace on its display instead.
+- **Focus follows mouse:** there if you want it, with an adjustable hover rate.
+- **Config:** everything, including the Hypr key itself, lives in Settings and is saved as JSON
+  at `~/Library/Application Support/HyprMac/config.json`. The schema is in
+  [Keybinds and actions](docs/keybinds-and-actions.md).
+- **Your own tools:** Settings → Keys → Add → Command… binds a chord to any program or script.
+  It runs directly, not through a shell, so keep pipes and redirects inside a script.
 
----
+## All default keybinds
 
-## Keybinds
-
-All keybinds are configurable in Settings (menubar icon → Settings → Keybinds).
-Toggle Float uses **Hypr+T**, without Shift. On startup and config reload, an exact legacy Hypr+Shift+T Toggle Float binding moves to Hypr+T only if the new chord is free and there is a single, unambiguous Toggle Float binding. Customized bindings and occupied chords stay unchanged. The migrated value is written on the next normal settings save. A deliberately chosen binding identical to the old default cannot be distinguished from that default.
-
-Cycle Floating now uses **Hypr+Shift+T**. After the Toggle Float migration, an unambiguous old Hypr+F Cycle Floating binding moves to Shift+T only if that chord is free and the new dedicated-workspace action has not already been configured. Hypr+F then receives the new action. Custom or conflicting bindings stay unchanged; add the new action in Settings when its default chord is occupied. Hypr+0 and Hypr+Shift+0 are added only when their actions are missing and their chords are free. Workspace 10 is always stored as 10; internal workspace 0 remains the scratchpad.
-
-Settings → Keys → Add → Command… binds a chord to any program or script. It runs directly, not through a shell, so pipes and redirects are passed along as plain arguments — put those in a script and point the keybind at it.
-
-The physical Hypr key is configurable in Settings → General. Options include Caps Lock, Tab, backtick, backslash, F13-F20, and left/right variants of Shift, Control, Option, and Command.
-
-### Defaults
+Everything below is configurable in Settings → Keys. The full reference lives at
+[hyprmac.app/guides/keybinds](https://hyprmac.app/guides/keybinds/).
 
 | Shortcut | Action |
 |----------|--------|
-| `⇪ + ←/→/↑/↓` | Focus window in direction |
-| `⇪ + ⇧ + ←/→/↑/↓` | Swap window in direction |
-| `⇪ + J` | Toggle split direction |
-| `⇪ + T` | Toggle floating/tiling |
-| `⇪ + F` | Move focused window to a dedicated workspace on its display |
-| `⇪ + ⇧ + T` | Cycle focus through floating windows |
-| `⇪ + 1–9` | Switch to workspace N |
-| `⇪ + ⇧ + 1–9` | Move window to workspace N |
-| `⇪ + 0` | Switch to workspace 10 |
-| `⇪ + ⇧ + 0` | Move window to workspace 10 |
-| `⇪ + ⌃ + ←/→` | Move window to adjacent monitor |
-| `⇪ + ⌃ + ⇧ + ←/→/↑/↓` | Resize focused window in direction |
-| `⇪ + ⇥` / `⇪ + ⇧ + ⇥` | Cycle occupied workspaces on current monitor |
-| `⇪ + W` | Close window |
-| `⇪ + K` | Show keybind overlay |
-| `⇪ + O` | Show workspace overview (two rows of five) |
-| `⇪ + P` | Pause / resume tiling |
-| `⇪ + S` | Toggle scratchpad |
-| `⇪ + ⇧ + S` | Send window to scratchpad |
-| `⇪ + ↵` | Launch/focus Terminal |
-| `⇪ + \`` | Warp cursor to menu bar |
+| `Hypr + ←/→/↑/↓` | Focus window in direction |
+| `Hypr + Shift + ←/→/↑/↓` | Swap window in direction |
+| `Hypr + Ctrl + ←/→` | Move window to adjacent monitor |
+| `Hypr + Ctrl + Shift + ←/→/↑/↓` | Resize focused window in direction |
+| `Hypr + 1–9` / `Hypr + 0` | Switch to workspace 1–9 / workspace 10 |
+| `Hypr + Shift + 1–9` / `Hypr + Shift + 0` | Move window to workspace 1–9 / workspace 10 |
+| `Hypr + Tab` / `Hypr + Shift + Tab` | Cycle occupied workspaces on this monitor |
+| `Hypr + F` | Move window to a dedicated workspace on its display |
+| `Hypr + T` | Toggle floating and tiled |
+| `Hypr + Shift + T` | Cycle focus through floating windows |
+| `Hypr + J` | Toggle split direction |
+| `Hypr + S` / `Hypr + Shift + S` | Toggle scratchpad / send window to scratchpad |
+| `Hypr + W` | Close window |
+| `Hypr + P` | Pause or resume tiling |
+| `Hypr + K` | Show the keybind overlay |
+| `Hypr + O` | Show workspace overview |
+| `Hypr + Ctrl + S` / `Hypr + Ctrl + R` | Save / restore the layout for this display setup |
+| `Hypr + M` | Collapse onto a single screen for screen sharing, and back *(fork)* |
+| `Hypr + A` | Toggle accordion mode *(fork)* |
+| `Hypr + Return` | Launch or focus Terminal |
+| ``Hypr + ` `` | Warp the cursor to the menu bar |
 
-### Mouse
+## Saved layouts
 
-| Action | Effect |
-|--------|--------|
-| Hover over tiled window | Focus follows mouse (when enabled) |
-| Drag a tiled window onto a target edge | Insert on that side, within the same workspace and monitor |
-| Hold Hypr while dragging a tiled window | Swap with the target, subject to verified sizing and Max Splits |
-| Hold Option when releasing a tiled drag | Swap with the target (compatibility shortcut) |
+**Hypr + Ctrl + S** saves which workspace each tiled window is on and how each workspace is
+split, across every monitor, for the displays you have connected right now. **Hypr + Ctrl + R**
+puts all of it back. Restore only moves windows that are open; it doesn't reopen closed apps,
+and a saved window that isn't open is skipped. A HUD like the workspace switch one says whether
+the layout was saved, restored, or only partly restored.
 
----
+HyprMac also saves on its own just before your displays change, and restores when you return to
+a display setup it has saved. To restore at launch too, turn on "Restore saved layout at launch"
+in Settings → General.
 
-## Menu Bar Access
+Saved layouts stay on this Mac in `~/Library/Application Support/HyprMac/layout-snapshots.json`.
+The file keeps window titles so it can tell windows apart. To clear it, quit HyprMac and delete
+the file, plus `layout-snapshots.json.unreadable` if it exists. Setups with the same monitor
+models at the same resolutions share one saved layout, however they are arranged.
 
-Focus-follows-mouse and the macOS menu bar don't always play nicely together — mousing up to the menu bar can accidentally shift focus to a window underneath. HyprMac handles this two ways:
+## Fork features
 
-1. **Menu tracking detection** — FFM is automatically suppressed while any app's menu is open, so focus won't shift once you've clicked a menu item.
-2. **`Hypr + \``** — Instantly warps the cursor to the menu bar on the current monitor. It's faster than mousing there manually and sidesteps the focus-switching problem entirely. The action, shortcut, and physical Hypr key are configurable in Settings.
+What this fork adds on top of upstream HyprMac:
 
----
-
-## Virtual Workspaces
-
-HyprMac manages 10 workspaces entirely in userspace, bypassing macOS Spaces.
-
-- Every workspace is **statically anchored** to a monitor: `(N − 1) mod monitorCount`, left to right. With 3 monitors, workspaces 1/4/7/10 live on the left, 2/5/8 in the middle, 3/6/9 on the right
-- Switching to workspace N always lands on its home monitor — workspace identity never drifts between monitors
-- Switching to a workspace that's already visible just focuses its monitor
-- `⇪ + ⌃ + ←/→` throws the focused window to the adjacent monitor's visible workspace
-- Inactive windows are hidden off-screen (a macOS constraint — one pixel remains visible in a corner)
-- Monitor connects/disconnects preserve workspace assignments; layouts migrate to each workspace's current home
-
-**Hypr+F: dedicated workspace.** The focused window moves to the next empty workspace owned by its physical display, wrapping through that display’s workspace numbers. Floating, minimized, hidden, and reserved windows all count as occupants. If no workspace is free, the move is rejected with red feedback and the window stays put. An eligible floating window becomes tiled. The window fills the normal usable area with configured padding; this does not enter macOS native fullscreen. Later windows may join the workspace. If the focused window is already the only window assigned to its workspace, Hypr+F does nothing.
-
-The action requires an ordinary managed, visible, resizable window. It does not override excluded apps, disabled displays, native fullscreen, or an open scratchpad layer. Holding F does not repeat the move. Workspace 10 uses the **0 key**, and Hypr+O shows workspaces 1–5 above 6–10.
-
-A single macOS Space per monitor is recommended for the cleanest experience.
+- 📌 **Window Rules** — Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style
+- 🧷 **Sticky Apps** — Hyprland's `pin`, extended to tiles: chosen apps follow you across the workspaces that opt in
+- 🏛 **Full-Height Apps** — Per-app guarantee of a full-height column in the dwindle layout, master-layout style
+- 🔗 **Linked Monitors** — Toggle: all monitors show one workspace, tiles load-balanced across screens by size
+- 🪗 **Accordion Mode** — AeroSpace-style stacked layout when only the chosen screen (default: built-in) is connected, with configurable side peek; the tiled layout is kept in the background and restored when monitors return
+- 🔌 **IPC + sketchybar** — Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators
+- 🎨 **Workspace Identity** — Per-workspace accent colors and wallpapers
+- 📐 **Per-Side Padding** — Top-only outer padding to reserve space for a status bar
+- 🖥 **Screen-Sharing Toggles** — `Hypr+M` collapses the desktop onto one monitor (and back), `Hypr+A` flips accordion mode
 
 ---
 
-## Window Rules *(fork feature)*
+### Window Rules *(fork feature)*
 
 Hyprland-style per-app rules, modeled on `windowrule = <effect>, class:...`. Each rule is keyed by bundle ID and can apply two effects, independently or together:
 
@@ -200,7 +188,7 @@ Semantics:
 
 ---
 
-## Sticky Apps *(fork feature)*
+### Sticky Apps *(fork feature)*
 
 Hyprland's `pin` (`windowrule = pin` / the `pin` dispatcher) shows a window "on all workspaces" — but only floating windows, and always on every workspace of the monitor. HyprMac adapts the idea in two ways: sticky works for **tiled** windows too, and **workspaces opt in** individually, so a chat client and a browser can ride along on your working workspaces while a presentation or focus workspace stays clean.
 
@@ -221,7 +209,7 @@ Semantics:
 
 ---
 
-## Full-Height Apps *(fork feature)*
+### Full-Height Apps *(fork feature)*
 
 Dwindle's spiral alternates split axes, so the second window on a wide screen gets cut in half the moment a third one opens. For a browser or a chat client you usually want a column that keeps its full height no matter what opens next. Hyprland's dwindle has nothing per window for this; its master layout does (the master area is a full-height column, `orientation = left`, slaves stacked beside it), and so does its scrolling layout (every window is a column). HyprMac takes the master semantics and makes them a per-app window rule: **Full height** in Settings → Layout → Window Rules, or `"fullHeight": true`.
 
@@ -237,7 +225,7 @@ How it works inside the BSP tree:
 
 ---
 
-## Linked Monitors *(fork feature)*
+### Linked Monitors *(fork feature)*
 
 Hyprland (like HyprMac's default) binds each workspace to one monitor and [declined](https://github.com/hyprwm/Hyprland/issues/747) a spanning mode — this toggle is a fork experiment. **Settings → Layout → Per-Monitor Settings → Link monitors** (shown with 2+ screens; machine-local, never iCloud-synced):
 
@@ -251,7 +239,7 @@ Known v1 limits: cross-screen **drag**-swap works, but keyboard swap stays withi
 
 ---
 
-## IPC & sketchybar *(fork feature)*
+### IPC & sketchybar *(fork feature)*
 
 HyprMac exposes its state the way Hyprland does — over unix sockets, not callbacks. `hyprmac.sock` answers queries; `hyprmac.events.sock` streams events to whoever connects (Hyprland's `.socket` / `.socket2` split). `scripts/hyprmacctl` wraps both:
 
@@ -265,7 +253,7 @@ hyprmacctl subscribe               # stream: workspace>>FOCUSED>>PREV / windowsc
 
 [`examples/sketchybar/`](examples/sketchybar/) has a ready-made integration: workspace indicators with per-workspace app icons (AeroSpace-setup parity), clickable to switch, highlighted in each workspace's accent color.
 
-## Workspace Colors & Wallpapers *(fork feature)*
+### Workspace Colors & Wallpapers *(fork feature)*
 
 Settings → Layout → Workspaces assigns each workspace an accent color and a wallpaper. The color tints the focus border while that workspace is focused and is served over IPC for status bars; the wallpaper swaps in per monitor the instant the workspace is shown (Hyprland needs hyprpaper + an IPC script for this — macOS lets HyprMac do it natively via `NSWorkspace.setDesktopImageURL`).
 
@@ -275,75 +263,64 @@ Per-side outer padding lives in Settings → Layout → Gaps → "Per-side overr
 
 ---
 
-## Architecture
+## The reality of macOS
 
-HyprMac is structured as a thin orchestration layer over a handful of focused services. Hotkeys feed into an `ActionDispatcher` that routes work to the right service; a polling loop drives a `WindowDiscoveryService` that detects new, gone, and drifted windows and hands the diff back to the dispatcher.
-
-```
-HotkeyManager (CGEventTap)
-    └→ WindowManager.handleAction
-        └→ ActionDispatcher.dispatch
-            ├→ FocusStateController       (focus id + visual border)
-            ├→ WorkspaceOrchestrator      (workspace switch / move)
-            ├→ FloatingWindowController   (toggle / cycle / raise)
-            ├→ TilingEngine               (swap / split toggle / retile)
-            └→ AppLauncherManager         (launch / focus)
-                ↓
-        WindowStateCache mutations
-                ↓
-        TilingEngine.applyLayout (two-pass via FrameReadbackPoller)
-                ↓
-        FocusBorder, FocusBrackets, DimmingOverlay (visual layer)
-```
-
-Polling and discovery run in parallel:
-
-```
-AX notifications + PollingScheduler (10-second fallback timer)
-    └→ WindowDiscoveryService.computeChanges
-        └→ ActionDispatcher.applyChanges
-```
-
-Window-keyed state lives in `WindowStateCache`; focus state in `FocusStateController`; date-gated suppressions (`activation-switch`, `mouse-focus`, `workspace-transition`) in `SuppressionRegistry`. BSP trees live in `TilingEngine` (one per `(workspace, screen)` pair). Sizing verifies complete actual frames, including the final adjusted pass. Tiled drags use an isolated candidate tree and commit only after verified acceptance; failed candidates restore and verify the pre-drag frames.
-
-Everything runs on the main thread. UI-touching classes (`FocusBorder`, `DimmingOverlay`, `KeybindOverlayController`, `CursorManager`, `MouseTrackingManager`) assert this in DEBUG via `mainThreadOnly()`.
-
-For deeper reading:
-
-- [`docs/settings-polish.md`](docs/settings-polish.md) — hover response, focus appearance, and live-update guarantees.
-
-- [`docs/architecture.md`](docs/architecture.md) — long-form architecture, ownership rules, threading.
-- [`docs/tiling-algorithm.md`](docs/tiling-algorithm.md) — BSP dwindle, smart insert, two-pass layout, min-size memory.
-- [`docs/coordinate-systems.md`](docs/coordinate-systems.md) — CG ↔ NS conversion, multi-monitor edge cases.
-- [`docs/keybinds-and-actions.md`](docs/keybinds-and-actions.md) — `Action` enum, frozen JSON case keys, schema versioning.
-- [`docs/debugging.md`](docs/debugging.md) — Console.app filters, verbose-logging toggle, common debugging recipes.
-- [`CLAUDE.md`](CLAUDE.md) — build/run, code style, key technical decisions.
-
----
+macOS was not built to let other apps manage its windows, and every tiling window manager on the
+Mac is working against that. Some apps push back, and now and then a window will insist on doing
+its own thing. HyprMac is in active development and very usable day to day. When something
+misbehaves, [open an issue](https://github.com/zacharytgray/HyprMac/issues) and tell me about it.
 
 ## Updating
 
 > [!NOTE]
 > In this fork the Sparkle update feed is removed — it never auto-updates. Build from source to update. The rest of this section describes upstream HyprMac.
 
-**In-app updates are recommended for most users.** HyprMac checks for updates automatically via Sparkle — when one is available, you'll be prompted to install it directly from the app. You can also check manually via the menubar icon → "Check for Updates..."
+HyprMac checks for updates on its own through Sparkle and offers to install them, or use the
+menu bar icon → "Check for Updates...". Homebrew installs can run `brew upgrade --cask hyprmac`.
+After any update, macOS may ask you to re-grant Accessibility permission, because the signature
+changes with each release.
 
-For Homebrew installs, `brew upgrade --cask hyprmac` works as well. Or download the latest DMG from [GitHub Releases](https://github.com/zacharytgray/HyprMac/releases) and replace the app manually.
+## Build from source
 
-> After any update method, macOS may ask you to re-grant Accessibility permission in System Settings, since the binary signature changes with each release.
+```sh
+git clone https://github.com/zacharytgray/HyprMac.git
+cd HyprMac
 
----
+brew install xcodegen
+xcodegen generate
 
-## Inspired By
+export DEVELOPMENT_TEAM=YOUR_TEAM_ID
+xcodebuild -project HyprMac.xcodeproj -scheme HyprMac -configuration Debug \
+  -derivedDataPath build DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM build
 
-- [Hyprland](https://hyprland.org) — Wayland compositor, the primary inspiration for this project
-- [yabai](https://github.com/koekeishiya/yabai) — macOS tiling WM
-- [AeroSpace](https://github.com/nikitabobko/AeroSpace) — Swift macOS tiling WM with virtual workspaces
-- [Amethyst](https://github.com/ianyh/Amethyst) — macOS tiling WM
-- [skhd](https://github.com/koekeishiya/skhd) — Hotkey daemon
+cp -r build/Build/Products/Debug/HyprMac.app /Applications/
+```
 
----
+## Docs
+
+- [Architecture](docs/architecture.md): subsystems, ownership rules, threading
+- [Tiling algorithm](docs/tiling-algorithm.md): BSP dwindle, smart insert, two-pass layout
+- [Keybinds and actions](docs/keybinds-and-actions.md): the `Action` enum and its JSON schema
+- [Debugging](docs/debugging.md): Console filters, verbose logging, common recipes
+- [Release pipeline](docs/release.md): how a release is built, signed, and published
+
+## Contributing
+
+Bug reports, ideas, and pull requests are all welcome. Before you open a pull request, run the
+test gate:
+
+```sh
+./scripts/test-isolated.sh --debug-variant
+```
+
+## Inspired by
+
+- [Hyprland](https://hyprland.org): the Wayland compositor this project takes after
+- [yabai](https://github.com/koekeishiya/yabai): macOS tiling window manager
+- [AeroSpace](https://github.com/nikitabobko/AeroSpace): Swift tiling window manager with virtual workspaces
+- [Amethyst](https://github.com/ianyh/Amethyst): macOS tiling window manager
+- [skhd](https://github.com/koekeishiya/skhd): hotkey daemon
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -91,6 +91,8 @@ final class ActionDispatcher {
     var isTransientUIActive: () -> Bool = { false }
     var toggleScratchpad: () -> Void = {}
     var moveToScratchpad: () -> Void = {}
+    var saveLayout: () -> Void = {}
+    var restoreLayout: () -> Void = {}
 
     /// `false` until the first `applyChanges` completes. The initial
     /// discovery pass sees every pre-existing window as new; window rules
@@ -312,6 +314,10 @@ final class ActionDispatcher {
             break // handled by WindowManager so they remain available while paused
         case .runCommand(_, let command):
             commandRunner.run(command: command)
+        case .saveLayout:
+            saveLayout()
+        case .restoreLayout:
+            restoreLayout()
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -348,6 +354,8 @@ final class ActionDispatcher {
         case .toggleSingleScreen:  return "toggleSingleScreen"
         case .toggleAccordion:     return "toggleAccordion"
         case .runCommand:          return "runCommand"
+        case .saveLayout:          return "saveLayout"
+        case .restoreLayout:       return "restoreLayout"
         }
     }
 

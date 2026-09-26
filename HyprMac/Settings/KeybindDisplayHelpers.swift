@@ -82,6 +82,10 @@ extension Keybind {
             return "rectangle.stack"
         case .runCommand:
             return "terminal"
+        case .saveLayout:
+            return "square.and.arrow.down"
+        case .restoreLayout:
+            return "square.and.arrow.up"
         }
     }
 
@@ -119,6 +123,8 @@ extension Keybind {
         case .toggleSingleScreen:           return "Toggle Single Screen"
         case .toggleAccordion:              return "Toggle Accordion Mode"
         case .runCommand(let label, let cmd): return Keybind.commandDescription(label: label, command: cmd)
+        case .saveLayout:                   return "Save Layout"
+        case .restoreLayout:                return "Restore Layout"
         }
     }
 
