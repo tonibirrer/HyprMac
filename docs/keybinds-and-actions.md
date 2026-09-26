@@ -29,6 +29,8 @@ enum Action: Equatable {
     case moveToScratchpad
     case toggleTiling
     case runCommand(label: String, command: String)
+    case saveLayout
+    case restoreLayout
 }
 ```
 
@@ -65,6 +67,25 @@ Custom and conflicting bindings survive unchanged. Startup/reload migration is
 idempotent and is persisted on the next normal settings save; no schema-version
 flag is added. An explicitly chosen binding identical to a legacy default cannot
 be distinguished from that default.
+
+## Save and restore layout
+
+`saveLayout` and `restoreLayout` default to Hypr+Ctrl+S and Hypr+Ctrl+R
+and encode as `{"saveLayout":{}}` and `{"restoreLayout":{}}`. Neither
+chord is used by another default (`testEveryDefaultUsesUniqueChord`).
+`mergeNewDefaults` injects each one only onto a free chord, so a user
+who already bound Hypr+Ctrl+S or Hypr+Ctrl+R keeps that bind and can
+bind the layout action by hand. Both actions are dropped while a
+display transition is settling (`WindowManager.isDroppedMidDisplayTransition`).
+The launch toggle is `restoreLayoutOnLaunch` in `config.json`, off by
+default. What save and restore do is in `docs/architecture.md`
+("Layout persistence").
+
+Downgrade risk: a build older than per-keybind tolerance that shares
+`config.json` over iCloud fails the whole decode on the unknown
+`saveLayout` key and falls back to defaults, as described under
+"Per-element tolerance" below. That is not fixable from this side.
+Keep every machine sharing a config on a tolerant build.
 
 ## JSON wire format
 
@@ -172,6 +193,9 @@ else in the config is touched.
 `testUnknownActionKeyThrows` for the strict single-keybind decode,
 and the `testSavedConfig...` cases for the skip-and-keep-going
 behavior plus the unchanged encoded key set.
+`testLayoutSnapshotActionsRoundTripThroughSavedConfig` and
+`testUnknownLayoutActionBesideKnownOnesKeepsTheRest` cover the two
+layout actions.
 
 ## Schema versioning
 

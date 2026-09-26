@@ -191,6 +191,14 @@ class WindowManager {
     /// that then win the migration over the real trees.
     private var displayTransitionPending = false
     private var retileSkippedDuringTransition = false
+    /// Display key of the last settled topology. The auto-save on the first
+    /// notification of a transition files the departing layout under this
+    /// key — by then `displayManager.screens` already reflects the new one.
+    private var settledDisplayKey = ""
+    /// the launch restore runs once per process; resuming from pause
+    /// restarts the manager but is not a launch
+    private var didRunLaunchRestore = false
+    private let layoutStore = LayoutSnapshotStore.shared
 
     /// Wire the dependency graph and configure every subsystem callback.
     ///
@@ -444,6 +452,9 @@ class WindowManager {
         actionDispatcher.isMenuTracking = { [weak self] in self?.mouseTracker.menuTracking ?? false }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
+        actionDispatcher.saveLayout = { [weak self] in self?.saveLayoutSnapshot(manual: true) }
+        actionDispatcher.restoreLayout = { [weak self] in self?.restoreLayoutSnapshot(manual: true) }
+
         configureLiveConfigUpdates()
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
@@ -625,7 +636,14 @@ class WindowManager {
             guard let self, self.isRunning else { return }
             self.spaceManager.setup()
             self.workspaceManager.initializeMonitors()
+            self.settledDisplayKey = LayoutSnapshotStore.displayKey(screens: self.displayManager.screens)
             let initialWindows = self.snapshotAndTile()
+            if !self.didRunLaunchRestore {
+                self.didRunLaunchRestore = true
+                if self.config.restoreLayoutOnLaunch {
+                    self.restoreLayoutSnapshot(manual: false, windows: initialWindows)
+                }
+            }
             // attach AX observers after the initial tile so their events feed
             // the same coalescing scheduler. this covers the app-level
             // subscriptions (create / focus), then immediately adds window-level
@@ -1388,15 +1406,9 @@ class WindowManager {
         // transition the tile pass is deferred, so the target workspace
         // would stay parked with the cursor warped to the 1px park sliver.
         // drop them for the settle window (a few seconds around wake).
-        if displayTransitionPending {
-            switch action {
-            case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
-                 .moveToNextEmptyWorkspace:
-                hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
-                return
-            default:
-                break
-            }
+        if displayTransitionPending, Self.isDroppedMidDisplayTransition(action) {
+            hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
+            return
         }
         // workspace flows dismiss the scratchpad first (Hyprland-style: the
         // layer never survives a workspace change), then run normally —
@@ -1622,7 +1634,7 @@ class WindowManager {
     /// `distributeWindowsAcrossWorkspaces` — rewrote every window's
     /// workspace assignment and un-floated manual floats on every
     /// monitor connect/disconnect.
-    private func reconcileAfterDisplayChange() {
+    private func reconcileAfterDisplayChange(restoreSavedLayout: Bool = false) {
         // every pending recovery captured a screen that may no longer own
         // its workspace
         admissionRecovery.cancelAll(reason: "display change")
@@ -1639,6 +1651,91 @@ class WindowManager {
         classifyAndAssign(allWindows)
         reparkHiddenWorkspaceWindows(allWindows)
         tileAllVisibleSpaces(windows: allWindows)
+        // a known display configuration came back — put windows on the
+        // workspaces the saved layout had them on. only the settled
+        // reconcile asks for this: the Settings monitor toggle reuses the
+        // reconcile under an unchanged key and must not undo itself.
+        if restoreSavedLayout {
+            restoreLayoutSnapshot(manual: false, windows: allWindows)
+        }
+    }
+
+    // MARK: - layout snapshots
+
+    /// Serialise every regular workspace's tree under `displayKey`
+    /// (default: the current topology). Floaters, scratchpad members, and
+    /// windows without a workspace are in no tree, so they are never saved.
+    ///
+    /// - Returns: `false` when nothing was saved — no tiled windows, an
+    ///   automatic save yielding to a manual snapshot, or a failed write.
+    @discardableResult
+    private func saveLayoutSnapshot(manual: Bool, displayKey: String? = nil) -> Bool {
+        let key = displayKey ?? LayoutSnapshotStore.displayKey(screens: displayManager.screens)
+        let workspaces = layoutRestorer.capture()
+        guard !workspaces.isEmpty else {
+            hyprLog(.debug, .lifecycle, "layout save skipped — no tiled windows for '\(key)'")
+            if manual { showLayoutHUD(title: "Nothing to save", detail: "No tiled windows", failed: true) }
+            return false
+        }
+        do {
+            let saved = try layoutStore.save(displayKey: key, workspaces: workspaces, manual: manual)
+            if manual {
+                let count = workspaces.reduce(0) { $0 + $1.refs.count }
+                showLayoutHUD(title: "Saved", detail: "\(count) window\(count == 1 ? "" : "s")", failed: false)
+            }
+            return saved
+        } catch {
+            if manual { showLayoutHUD(title: "Couldn't save", detail: "The snapshot file couldn't be written", failed: true) }
+            return false
+        }
+    }
+
+    /// Bring back the saved layout for the current topology through
+    /// `LayoutRestorer`, then log the outcome and, for a manual restore,
+    /// say whether it was complete, partial, or failed.
+    ///
+    /// - Parameter windows: pre-fetched window list; AX is queried when nil.
+    /// - Returns: `false` when there is no snapshot for this topology.
+    @discardableResult
+    private func restoreLayoutSnapshot(manual: Bool, windows: [HyprWindow]? = nil) -> Bool {
+        let key = LayoutSnapshotStore.displayKey(screens: displayManager.screens)
+        let snapshot = layoutStore.snapshot(for: key)
+        let allWindows = snapshot == nil ? [] : (windows ?? accessibility.getAllWindows())
+        let outcome = layoutRestorer.restore(snapshot, windows: allWindows)
+        if !outcome.rebuilt.isEmpty { updatePositionCache(windows: allWindows) }
+
+        hyprLog(outcome.hasSnapshot ? .notice : .debug, .lifecycle,
+                "layout restore '\(key)' (\(manual ? "manual" : "auto")): \(outcome.logSummary)")
+        if manual {
+            let hud = outcome.hud
+            showLayoutHUD(title: hud.title, detail: hud.detail, failed: hud.failed)
+        }
+        return outcome.hasSnapshot
+    }
+
+    private var layoutRestorer: LayoutRestorer {
+        LayoutRestorer(
+            engine: tilingEngine, orchestrator: workspaceOrchestrator,
+            workspaceManager: workspaceManager, stateCache: stateCache,
+            recovery: admissionRecovery,
+            isScratchpad: { [scratchpad] in scratchpad.contains($0) },
+            ref: { [weak self] in self?.windowRef(for: $0) })
+    }
+
+    private func windowRef(for window: HyprWindow) -> SavedWindowRef? {
+        guard let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier,
+              !bundleID.isEmpty else { return nil }
+        return SavedWindowRef(bundleID: bundleID, title: SavedWindowRef.normalizedTitle(window.title ?? ""))
+    }
+
+    /// Same HUD as a workspace switch, on the screen under the cursor.
+    /// Manual save/restore only — the automatic paths stay silent.
+    private func showLayoutHUD(title: String, detail: String?, failed: Bool) {
+        let mouse = NSEvent.mouseLocation
+        let screens = displayManager.screens.filter { !workspaceManager.isMonitorDisabled($0) }
+        guard let screen = screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? screens.first else { return }
+        workspaceOverview.showStatusHUD(caption: "LAYOUT", title: title, detail: detail,
+                                        failed: failed, screen: screen)
     }
 
     /// Re-park every window assigned to a hidden workspace at the current
@@ -2014,6 +2111,28 @@ class WindowManager {
         focusController.recordFocus(target.id, reason: target.reason)
     }
 
+    /// Whether a settled display change should restore the saved layout.
+    /// Only a different display set does: a Dock resize, an arrangement
+    /// drag, or a primary-display change keeps the key, and restoring there
+    /// would undo whatever the user arranged since the last save.
+    static func restoresAfterSettle(from departedKey: String, to settledKey: String) -> Bool {
+        departedKey != settledKey
+    }
+
+    /// Actions that wait out a display transition. Save and restore are in
+    /// here too: mid-transition the topology key and the trees are both in
+    /// flux, so a save would file a half-migrated layout and a restore would
+    /// be undone by the settle reconcile.
+    static func isDroppedMidDisplayTransition(_ action: Action) -> Bool {
+        switch action {
+        case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
+             .moveToNextEmptyWorkspace, .saveLayout, .restoreLayout:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Whether `action` makes an armed admission retry stale.
     ///
     /// Whatever the user just asked for is newer than a retry armed off a
@@ -2025,7 +2144,7 @@ class WindowManager {
         switch action {
         case .switchWorkspace, .cycleWorkspace, .focusDirection, .focusFloating,
              .focusMenuBar, .showKeybinds, .showWorkspaceOverview, .launchApp,
-             .runCommand:
+             .runCommand, .saveLayout:
             return false
         default: return true
         }
@@ -2671,6 +2790,13 @@ class WindowManager {
         }
         let names = displayManager.screens.map { $0.localizedName }.joined(separator: ", ")
         hyprLog(.notice, .lifecycle, "screenParametersChanged fired (current screens: [\(names)])")
+        // snapshot the departing layout on the FIRST notification of a
+        // transition — before macOS shuffles windows onto surviving screens
+        // and before the trees migrate. later fires in the same debounce
+        // would re-save the piled-up state under the same key.
+        if !displayTransitionPending, !settledDisplayKey.isEmpty {
+            saveLayoutSnapshot(manual: false, displayKey: settledDisplayKey)
+        }
         // the scratchpad can't survive a topology change — reconcile would
         // park its visible members under a live scrim
         scratchpad.hide(reason: .displayChange)
@@ -2715,6 +2841,8 @@ class WindowManager {
                 return
             }
             self.lastDisplayFingerprint = fingerprint
+            let departedKey = self.settledDisplayKey
+            self.settledDisplayKey = LayoutSnapshotStore.displayKey(screens: self.displayManager.screens)
             self.focusBorder.primaryScreenHeight = self.displayManager.primaryScreenHeight
             self.focusBrackets.primaryScreenHeight = self.displayManager.primaryScreenHeight
             // cover the reconcile itself plus a settle tail — the retile it
@@ -2726,7 +2854,8 @@ class WindowManager {
             // the fingerprint refreshed DisplayManager; initializeMonitors runs
             // before TilingEngine.handleDisplayChange so the home-screen
             // lookup the engine consults is current.
-            self.reconcileAfterDisplayChange()
+            self.reconcileAfterDisplayChange(
+                restoreSavedLayout: Self.restoresAfterSettle(from: departedKey, to: self.settledDisplayKey))
         }
     }
 

@@ -141,10 +141,19 @@ final class WorkspaceOverviewController {
     }
 
     func showSwitchHUD(workspace: Int, screen: NSScreen) {
+        presentHUD(OverviewHostingView(rootView: WorkspaceSwitchHUD(workspace: workspace)), on: screen, for: 0.9)
+    }
+
+    /// The switch HUD's look for a short status, e.g. a layout save.
+    func showStatusHUD(caption: String, title: String, detail: String?, failed: Bool, screen: NSScreen) {
+        let view = StatusHUD(caption: caption, title: title, detail: detail, failed: failed)
+        // a sentence takes longer to read than a number
+        presentHUD(OverviewHostingView(rootView: view), on: screen, for: detail == nil ? 1.1 : 1.8)
+    }
+
+    private func presentHUD(_ hosting: NSView, on screen: NSScreen, for seconds: TimeInterval) {
         let generation = hudGeneration.next()
         hudPanel?.close()
-        let view = WorkspaceSwitchHUD(workspace: workspace)
-        let hosting = OverviewHostingView(rootView: view)
         let size = hosting.fittingSize
         let frame = NSRect(x: screen.visibleFrame.midX - size.width / 2,
                            y: screen.visibleFrame.minY + 12,
@@ -163,7 +172,7 @@ final class WorkspaceOverviewController {
         panel.displayIfNeeded()
         CATransaction.flush()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self, weak panel] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self, weak panel] in
             guard let self, self.hudGeneration.shouldHide(generation) else { return }
             if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                 panel?.close()
@@ -252,6 +261,32 @@ private final class OverviewHostingView<Content: View>: OverlayHostingView<Conte
         super.viewDidMoveToWindow()
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
+    }
+}
+
+private struct StatusHUD: View {
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
+    let caption: String
+    let title: String
+    let detail: String?
+    let failed: Bool
+    var body: some View {
+        VStack(spacing: 5) {
+            Text(caption).font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .tracking(2).foregroundStyle(failed ? Color.red : Color.hyprMagenta)
+            Text(title).font(.system(size: 26, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+            if let detail {
+                Text(detail).font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 26).padding(.vertical, 15)
+        .background(RoundedRectangle(cornerRadius: 15).fill(palette.background))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.hyprCyan.opacity(0.32)))
+        .compositingGroup()
+        .shadow(color: palette.shadow, radius: 18, y: 8).padding(64)
     }
 }
 

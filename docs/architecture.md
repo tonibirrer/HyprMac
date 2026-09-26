@@ -21,7 +21,7 @@ HyprMac/
 │   ├── Input/                verified tiled-drag sessions
 │   ├── Orchestration/        action dispatch, polling
 │   ├── State/                window state cache, focus, suppressions
-│   ├── Workspace/            workspace orchestration
+│   ├── Workspace/            workspace orchestration, layout restore
 │   └── *.swift               long-lived per-subsystem managers
 ├── Tiling/                   BSP trees, layout, frame readback
 ├── Models/                   windows, keybinds, actions, persisted config
@@ -160,6 +160,94 @@ Per-app AXObserver notifications are the primary discovery trigger; the
   `tree.root`.
 - **`WorkspaceManager`** owns the workspace↔screen mapping. Nothing
   else writes `monitorWorkspace` or `workspaceHomeScreen`.
+- **`LayoutSnapshotStore`** owns `layout-snapshots.json`. It never
+  sees a tree — `LayoutRestorer.capture` asks `TilingEngine.layoutTree`
+  to serialise one and `WindowManager` hands the result across.
+
+## Layout persistence
+
+A snapshot covers every regular workspace on every monitor, keyed by
+a fingerprint of the connected displays. Each workspace saves its BSP
+shape — a `LayoutNode` (leaf, or split with override / ratio /
+user-set flag) — plus `unplaced`: windows assigned to it that have not
+joined its tree yet, such as one sent to a hidden workspace that has
+not been shown since. Frames are not stored. Floaters, scratchpad
+members and closed-but-alive windows are never saved. Titles are
+stored with Terminal's trailing ` — 120×30` size dropped, since it
+changes on every resize. Restore rearranges open windows only; it
+never launches an app.
+
+`Hypr+Ctrl+S` saves manually. The first `didChangeScreenParameters`
+notification of a transition auto-saves under the departing key —
+before macOS shuffles windows onto surviving screens and before the
+trees migrate; later fires in the same debounce do not save again. An
+automatic save never replaces a manual snapshot, and pruning evicts
+automatic snapshots first.
+
+`Hypr+Ctrl+R`, a settled reconcile whose display key differs from the
+one it replaced, and the first start of the process (opt-in via
+`restoreLayoutOnLaunch`; resuming from pause is not a launch) restore.
+A settle under the same key (Dock resize, arrangement drag, primary
+change) does not restore. Display keys are sorted `name:WxH` pairs, so
+identical monitor models at the same size alias regardless of
+arrangement. Both actions are dropped
+while a display transition is settling. `LayoutRestorer`
+(`Core/Workspace/LayoutRestorer.swift`) runs the restore and returns a
+`LayoutRestoreOutcome`; `WindowManager` only looks up the snapshot,
+refreshes the position cache, logs, and shows the HUD.
+
+1. `LayoutMatcher` pairs saved leaves with live windows. Bundle ID is
+   required. Exact non-empty title matches are reserved first across
+   the whole snapshot, so a missing earlier leaf can't take a window a
+   later leaf names exactly. Remaining leaves then take any unclaimed
+   window of the same app, the one already on the leaf's workspace
+   first. Every window is claimed once. Floaters and scratchpad
+   members are never candidates.
+2. `WorkspaceOrchestrator.moveWindows` applies the workspace moves.
+   It uses the same suppressions and park/place steps as
+   `Hypr+Shift+N`, but lays out and verifies each visible destination
+   before any assignment changes, and drops windows from their source
+   trees by membership only, with one retile at the end. A destination
+   that refuses is laid out again with its old members, so its windows
+   return to their tiles even when the arrival was parked. Each destination is judged on its projected
+   membership once the whole batch lands, so two full workspaces can
+   trade windows. A destination takes all of its arrivals or none;
+   refusals (`full`, `wontFit`, `sizingRefused`, disabled monitors,
+   scratchpad) come back per window.
+3. `TilingEngine.rebuildTree` replaces each saved workspace's tree with
+   the saved shape. Workspaces whose home monitor is disabled are
+   skipped. A leaf whose window is gone collapses its split as a close
+   would. Windows the snapshot never named smart-insert around the
+   restored shape, incumbents first. A saved tree deeper than the
+   screen's max depth is left alone. An already-admitted window that
+   would find no slot rejects the rebuild and the live tree stays. A
+   newcomer that finds none is left out; the restorer hands it to
+   `AdmissionRecovery` the way a tile pass hands over its refused
+   newcomers, so it floats in place instead of sitting untracked.
+   Publishing removes the restored windows from any other screen's
+   tree for the same workspace, so no window ends up in two trees.
+   Visible workspaces go through the same verified sizing as any tile
+   and publish only on acceptance. A hidden workspace's windows are
+   parked, so its shape is published with the key marked unverified,
+   and the accepted tile on its next show clears the mark.
+
+The outcome is one of: no snapshot for this display setup, already in
+place, complete, partial, or failed. Complete means every matched
+window reached its saved workspace and every shape was rebuilt.
+Partial means some of it applied and some was refused (a refused move,
+a shape kept live, or a refused newcomer). Failed means something was
+asked and none of it applied. Saved windows that are not open do not
+make a restore partial; the log counts them, and the manual HUD
+mentions them. A manual save or restore shows the workspace-switch
+HUD (`WorkspaceOverviewController.showStatusHUD`) on the screen under
+the cursor, with a title for each case and a short detail line.
+Automatic restores are silent and
+log the outcome at `.notice`. The Settings monitor toggle reuses the
+reconcile under an unchanged key and does not restore.
+
+The snapshot file keeps each tiled window's raw title, on this Mac
+only. Deleting `layout-snapshots.json` (and any `.unreadable` copy)
+while HyprMac is quit clears every snapshot.
 
 ## Threading
 

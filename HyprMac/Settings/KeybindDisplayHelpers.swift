@@ -78,6 +78,10 @@ extension Keybind {
             return "pause.circle"
         case .runCommand:
             return "terminal"
+        case .saveLayout:
+            return "square.and.arrow.down"
+        case .restoreLayout:
+            return "square.and.arrow.up"
         }
     }
 
@@ -113,6 +117,8 @@ extension Keybind {
         case .resizeDirection(let d):       return "Resize \(d.rawValue.capitalized)"
         case .toggleTiling:                 return "Pause / Resume Tiling"
         case .runCommand(let label, let cmd): return Keybind.commandDescription(label: label, command: cmd)
+        case .saveLayout:                   return "Save Layout"
+        case .restoreLayout:                return "Restore Layout"
         }
     }
 

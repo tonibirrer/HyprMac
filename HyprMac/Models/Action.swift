@@ -56,6 +56,11 @@ enum Action: Equatable {
     /// `label` is the display name shown in the keybind list and overlay;
     /// an empty label falls back to the program's basename.
     case runCommand(label: String, command: String)
+    /// Save each workspace's windows and tree shape for the active
+    /// display configuration.
+    case saveLayout
+    /// Restore the saved layout for the active display configuration.
+    case restoreLayout
 }
 
 // MARK: - Codable
@@ -97,6 +102,8 @@ extension Action: Codable {
         case resizeDirection
         case toggleTiling
         case runCommand
+        case saveLayout
+        case restoreLayout
     }
 
     /// Accepted-but-not-emitted aliases. Lets a hand-edited config
@@ -168,6 +175,8 @@ extension Action: Codable {
                 command: try inner.decode(String.self, forKey: .command))
         case .resizeDirection:
             self = .resizeDirection(try Self.decodeDirection(inner, field: "resizeDirection"))
+        case .saveLayout:    self = .saveLayout
+        case .restoreLayout: self = .restoreLayout
         }
     }
 
@@ -236,6 +245,10 @@ extension Action: Codable {
             var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .runCommand)
             try p.encode(label, forKey: .label)
             try p.encode(command, forKey: .command)
+        case .saveLayout:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .saveLayout)
+        case .restoreLayout:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .restoreLayout)
         }
     }
 }

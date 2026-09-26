@@ -285,4 +285,30 @@ final class DefaultKeybindsTests: XCTestCase {
         }, [custom])
         XCTAssertFalse(merged.contains { $0.action == .toggleTiling })
     }
+
+    func testLayoutDefaultsUseHyprControlSAndR() throws {
+        let save = try XCTUnwrap(Keybind.defaults.first { $0.action == .saveLayout })
+        let restore = try XCTUnwrap(Keybind.defaults.first { $0.action == .restoreLayout })
+        XCTAssertEqual(save.keyCode, UInt16(kVK_ANSI_S))
+        XCTAssertEqual(save.modifiers, [.hypr, .control])
+        XCTAssertEqual(restore.keyCode, UInt16(kVK_ANSI_R))
+        XCTAssertEqual(restore.modifiers, [.hypr, .control])
+    }
+
+    // a user who already put something on Hypr+Ctrl+S keeps it; restore
+    // still arrives on its own free chord
+    func testDefaultMergeDoesNotShadowOccupiedHyprControlS() {
+        let custom = Keybind(keyCode: UInt16(kVK_ANSI_S), modifiers: [.hypr, .control],
+                             action: .runCommand(label: "Screenshot", command: "/usr/sbin/screencapture -i"))
+
+        let merged = UserConfig.mergeNewDefaults(saved: [custom])
+
+        XCTAssertEqual(merged.filter {
+            $0.keyCode == UInt16(kVK_ANSI_S) && $0.modifiers == [.hypr, .control]
+        }, [custom])
+        XCTAssertFalse(merged.contains { $0.action == .saveLayout })
+        XCTAssertTrue(merged.contains {
+            $0.action == .restoreLayout && $0.keyCode == UInt16(kVK_ANSI_R) && $0.modifiers == [.hypr, .control]
+        })
+    }
 }

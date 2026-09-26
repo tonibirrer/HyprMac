@@ -160,6 +160,41 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         XCTAssertEqual(kb.action, .closeWindow)
     }
 
+    func testLayoutSnapshotWireFormatsDecode() throws {
+        let save = #"{"action":{"saveLayout":{}},"keyCode":1,"modifiers":1}"#
+        let restore = #"{"action":{"restoreLayout":{}},"keyCode":15,"modifiers":1}"#
+        XCTAssertEqual(try JSONDecoder().decode(Keybind.self, from: Data(save.utf8)).action, .saveLayout)
+        XCTAssertEqual(try JSONDecoder().decode(Keybind.self, from: Data(restore.utf8)).action, .restoreLayout)
+    }
+
+    func testLayoutSnapshotActionsRoundTripThroughSavedConfig() throws {
+        let binds = [Keybind(keyCode: 1, modifiers: [.hypr, .control], action: .saveLayout),
+                     Keybind(keyCode: 15, modifiers: [.hypr, .control], action: .restoreLayout)]
+        let encoded = try binds.map { String(data: try JSONEncoder().encode($0), encoding: .utf8)! }
+        XCTAssertTrue(encoded[0].contains(#""saveLayout":{}"#), encoded[0])
+        XCTAssertTrue(encoded[1].contains(#""restoreLayout":{}"#), encoded[1])
+        let json = """
+        {"keybinds":[\(encoded.joined(separator: ","))],"gapSize":8,"outerPadding":8,"enabled":true}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        let reloaded = try JSONDecoder().decode(SavedConfig.self, from: try JSONEncoder().encode(saved))
+        XCTAssertEqual(reloaded.keybinds.map(\.action), [.saveLayout, .restoreLayout])
+    }
+
+    // a build from before these actions sees an unknown key; it must drop
+    // just that bind. this is the shape such a build reads.
+    func testUnknownLayoutActionBesideKnownOnesKeepsTheRest() throws {
+        let json = """
+        {"keybinds":[
+            {"action":{"futureLayoutThing":{}},"keyCode":1,"modifiers":1},
+            {"action":{"restoreLayout":{}},"keyCode":15,"modifiers":1}
+        ],"gapSize":8,"outerPadding":8,"enabled":true,"restoreLayoutOnLaunch":true}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(saved.keybinds.map(\.action), [.restoreLayout])
+        XCTAssertEqual(saved.restoreLayoutOnLaunch, true)
+    }
+
     // MARK: - malformed-direction tolerance (was crash, now log + fallback)
 
     func testMalformedFocusDirectionFallsBack() throws {
