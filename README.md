@@ -115,11 +115,14 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 ## Saved layouts
 
 **Hypr + Ctrl + S** saves which workspace each tiled window is on and how each workspace is
-split, for the displays you have connected right now. A window counts once its workspace has
-been shown. **Hypr + Ctrl + R** puts the layout back. HyprMac also saves on its own just before
-your displays change, and restores when you return to a display setup it has saved. To restore
-at launch too, turn on "Restore saved layout at launch" in Settings → General. A saved window
-that isn't open is skipped, and a pill tells you if only part of the layout fit.
+split, across every monitor, for the displays you have connected right now. **Hypr + Ctrl + R**
+puts all of it back. Restore only moves windows that are open; it doesn't reopen closed apps,
+and a saved window that isn't open is skipped. A HUD like the workspace switch one says whether
+the layout was saved, restored, or only partly restored.
+
+HyprMac also saves on its own just before your displays change, and restores when you return to
+a display setup it has saved. To restore at launch too, turn on "Restore saved layout at launch"
+in Settings → General.
 
 Saved layouts stay on this Mac in `~/Library/Application Support/HyprMac/layout-snapshots.json`.
 The file keeps window titles so it can tell windows apart. To clear it, quit HyprMac and delete

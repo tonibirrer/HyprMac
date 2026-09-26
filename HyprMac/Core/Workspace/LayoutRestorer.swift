@@ -80,6 +80,24 @@ struct LayoutRestoreOutcome {
         }
     }
 
+    /// Title and detail for the manual-restore HUD.
+    var hud: (title: String, detail: String?, failed: Bool) {
+        let absentLine = absent > 0 ? "\(absent) saved window\(absent == 1 ? "" : "s") not open" : nil
+        let refusedLine: String? = {
+            let windows = unplacedWindowCount
+            if windows > 0 { return "\(windows) window\(windows == 1 ? "" : "s") didn't fit" }
+            let spaces = shapeFailures.count
+            return spaces > 0 ? "\(spaces) workspace\(spaces == 1 ? "" : "s") kept \(spaces == 1 ? "its" : "their") layout" : nil
+        }()
+        switch verdict {
+        case .noSnapshot: return ("No saved layout", "Nothing saved for this display setup", true)
+        case .alreadyInPlace: return ("Already in place", absentLine, false)
+        case .complete: return ("Restored", absentLine, false)
+        case .partial: return ("Partly restored", refusedLine, false)
+        case .failed: return ("Couldn't restore", refusedLine, true)
+        }
+    }
+
     // short enough for a pill; the log always carries the count
     private var absentNote: String {
         absent > 0 && absent < 100 ? " — \(absent) saved window\(absent == 1 ? "" : "s") not open" : ""
@@ -124,6 +142,26 @@ struct LayoutRestorer {
     let isScratchpad: (CGWindowID) -> Bool
     let ref: (HyprWindow) -> SavedWindowRef?
 
+    /// Every regular workspace's saved form: its tree shape, plus the
+    /// windows assigned to it that have not joined the tree yet (sent to a
+    /// hidden workspace that hasn't been shown since). Floaters, scratchpad
+    /// members and closed-but-alive windows are left out.
+    func capture() -> [WorkspaceLayout] {
+        let ghosts = stateCache.hiddenWindowIDs
+        return workspaceManager.regularWorkspaceWindowIDs().keys.sorted().compactMap { ws -> WorkspaceLayout? in
+            let root = engine.layoutTree(forWorkspace: ws, ref: ref)
+            let inTrees = engine.windowIDs(inAnyTreeForWorkspace: ws)
+            let unplaced = workspaceManager.windowIDs(onWorkspace: ws).sorted().compactMap { id -> SavedWindowRef? in
+                guard !inTrees.contains(id), !ghosts.contains(id),
+                      !stateCache.floatingWindowIDs.contains(id), !isScratchpad(id),
+                      let window = stateCache.cachedWindows[id] else { return nil }
+                return ref(window)
+            }
+            guard root != nil || !unplaced.isEmpty else { return nil }
+            return WorkspaceLayout(workspace: ws, root: root, unplaced: unplaced)
+        }
+    }
+
     func restore(_ snapshot: LayoutSnapshot?, windows allWindows: [HyprWindow]) -> LayoutRestoreOutcome {
         guard let snapshot else { return .noSnapshot }
         var outcome = LayoutRestoreOutcome()
@@ -163,11 +201,12 @@ struct LayoutRestorer {
             let onWorkspace = allWindows.filter {
                 workspaceManager.workspaceFor($0.windowID) == ws && !excluded($0.windowID)
             }
-            guard !onWorkspace.isEmpty else { continue }
+            // no saved tree: the moved windows join one when the workspace is shown
+            guard let root = layout.root, !onWorkspace.isEmpty else { continue }
             let before = engine.layoutTree(forWorkspace: ws, ref: ref)
             var queues = plan.windowsByRef[ws] ?? [:]
             let result = engine.rebuildTree(
-                forWorkspace: ws, screen: screen, from: layout.root,
+                forWorkspace: ws, screen: screen, from: root,
                 windows: onWorkspace, applyFrames: workspaceManager.isWorkspaceVisible(ws)
             ) { ref in
                 guard var queue = queues[ref], !queue.isEmpty else { return nil }

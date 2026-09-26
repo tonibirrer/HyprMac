@@ -393,6 +393,14 @@ class TilingEngine {
 
     // MARK: - layout persistence
 
+    /// Every window in any tree for `workspace`, on any screen. Read-only.
+    func windowIDs(inAnyTreeForWorkspace workspace: Int) -> Set<CGWindowID> {
+        trees.reduce(into: Set<CGWindowID>()) { ids, entry in
+            guard entry.key.workspace == workspace else { return }
+            ids.formUnion(entry.value.allWindows.map(\.windowID))
+        }
+    }
+
     /// Serialised shape of `workspace`'s tree on whichever screen holds
     /// it, or `nil` when the workspace has no tiled windows. `ref` names
     /// each window in a restart-stable way; a window it declines (no

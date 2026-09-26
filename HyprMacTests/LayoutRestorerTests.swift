@@ -77,9 +77,12 @@ private final class RestorerRig {
 
     var all: [HyprWindow] { windows.values.sorted { $0.windowID < $1.windowID } }
 
+    var scratchpadIDs: Set<CGWindowID> = []
+
     var restorer: LayoutRestorer {
         LayoutRestorer(engine: engine, orchestrator: orchestrator, workspaceManager: workspaceManager,
-                       stateCache: cache, recovery: recovery, isScratchpad: { _ in false },
+                       stateCache: cache, recovery: recovery,
+                       isScratchpad: { [scratchpadIDs] in scratchpadIDs.contains($0) },
                        ref: { Self.ref($0.windowID) })
     }
 
@@ -155,11 +158,14 @@ private final class RestorerRig {
         }
     }
 
-    func restore(_ layouts: [Int: LayoutNode]) -> LayoutRestoreOutcome {
+    func restore(_ layouts: [Int: LayoutNode],
+                 unplaced: [Int: [SavedWindowRef]] = [:]) -> LayoutRestoreOutcome {
+        let workspaces = Set(layouts.keys).union(unplaced.keys).sorted().map {
+            WorkspaceLayout(workspace: $0, root: layouts[$0], unplaced: unplaced[$0] ?? [])
+        }
         let snapshot = LayoutSnapshot(
             schemaVersion: LayoutSnapshot.currentSchemaVersion, displayKey: "restorer-test",
-            timestamp: Date(), isManual: true,
-            workspaces: layouts.sorted { $0.key < $1.key }.map { WorkspaceLayout(workspace: $0.key, root: $0.value) })
+            timestamp: Date(), isManual: true, workspaces: workspaces)
         return restorer.restore(snapshot, windows: all)
     }
 
@@ -401,6 +407,69 @@ final class LayoutRestorerTests: XCTestCase {
 
         XCTAssertEqual(outcome.verdict, .complete)
         XCTAssertEqual(rig.engine.windowIDs(inTreeForWorkspace: visible, screen: rig.screens[0]), [2, 1])
+        rig.assertEachWindowInOneTree()
+    }
+
+    func testHUDTextNamesEachVerdict() {
+        var outcome = LayoutRestoreOutcome()
+        outcome.moved = [1: 2]
+        outcome.rebuilt = [2]
+        XCTAssertEqual(outcome.hud.title, "Restored")
+        XCTAssertNil(outcome.hud.detail)
+        outcome.refusedMoves = [3: .full(tiled: 5, capacity: 4)]
+        XCTAssertEqual(outcome.hud.title, "Partly restored")
+        XCTAssertEqual(outcome.hud.detail, "1 window didn't fit")
+        XCTAssertFalse(outcome.hud.failed)
+        outcome.moved = [:]
+        outcome.rebuilt = []
+        XCTAssertEqual(outcome.hud.title, "Couldn't restore")
+        XCTAssertTrue(outcome.hud.failed)
+        XCTAssertEqual(LayoutRestoreOutcome.noSnapshot.hud.title, "No saved layout")
+    }
+
+    // a window sent to a hidden workspace joins its tree only when shown;
+    // a save still has to know which workspace it is on
+    func testCaptureKeepsAWindowParkedOnAHiddenWorkspace() {
+        let rig = RestorerRig()
+        let visible = rig.visible(on: 0)
+        let hidden = rig.hidden(on: 0)
+        rig.fill(visible, [1, 2])
+        rig.fill(hidden, [3], tile: false)
+
+        let layouts = rig.restorer.capture()
+
+        XCTAssertEqual(layouts.map(\.workspace), [visible, hidden])
+        XCTAssertEqual(layouts[0].unplaced, [])
+        XCTAssertNil(layouts[1].root)
+        XCTAssertEqual(layouts[1].unplaced, [RestorerRig.ref(3)])
+    }
+
+    // floaters, scratchpad members and closed-but-alive windows are never saved
+    func testCaptureSkipsFloatersScratchpadAndGhosts() {
+        let rig = RestorerRig()
+        let hidden = rig.hidden(on: 0)
+        rig.fill(hidden, [1, 2, 3, 4], tile: false)
+        rig.cache.floatingWindowIDs = [1]
+        rig.scratchpadIDs = [2]
+        rig.cache.hiddenWindowIDs = [3]
+
+        let layouts = rig.restorer.capture()
+
+        XCTAssertEqual(layouts.first { $0.workspace == hidden }?.unplaced, [RestorerRig.ref(4)])
+    }
+
+    func testUnplacedSavedWindowMovesBackToItsWorkspace() {
+        let rig = RestorerRig()
+        let visible = rig.visible(on: 0)
+        let hidden = rig.hidden(on: 0)
+        rig.fill(visible, [1, 2, 3])
+
+        let outcome = rig.restore([visible: split(leaf(1), leaf(2))],
+                                  unplaced: [hidden: [RestorerRig.ref(3)]])
+
+        XCTAssertEqual(outcome.moved, [3: hidden])
+        XCTAssertEqual(rig.workspace(of: 3), hidden)
+        XCTAssertEqual(outcome.verdict, .complete)
         rig.assertEachWindowInOneTree()
     }
 

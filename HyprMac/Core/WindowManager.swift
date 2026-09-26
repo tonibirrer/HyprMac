@@ -1671,21 +1671,21 @@ class WindowManager {
     @discardableResult
     private func saveLayoutSnapshot(manual: Bool, displayKey: String? = nil) -> Bool {
         let key = displayKey ?? LayoutSnapshotStore.displayKey(screens: displayManager.screens)
-        let workspaces = workspaceManager.regularWorkspaceWindowIDs().keys.sorted().compactMap { ws -> WorkspaceLayout? in
-            guard let root = tilingEngine.layoutTree(forWorkspace: ws, ref: { [self] in windowRef(for: $0) }) else { return nil }
-            return WorkspaceLayout(workspace: ws, root: root)
-        }
+        let workspaces = layoutRestorer.capture()
         guard !workspaces.isEmpty else {
             hyprLog(.debug, .lifecycle, "layout save skipped — no tiled windows for '\(key)'")
-            if manual { flashLayoutMessage("Nothing to save — no tiled windows") }
+            if manual { showLayoutHUD(title: "Nothing to save", detail: "No tiled windows", failed: true) }
             return false
         }
         do {
             let saved = try layoutStore.save(displayKey: key, workspaces: workspaces, manual: manual)
-            if manual { flashLayoutMessage("Layout saved") }
+            if manual {
+                let count = workspaces.reduce(0) { $0 + $1.refs.count }
+                showLayoutHUD(title: "Saved", detail: "\(count) window\(count == 1 ? "" : "s")", failed: false)
+            }
             return saved
         } catch {
-            if manual { flashLayoutMessage("Couldn't save layout") }
+            if manual { showLayoutHUD(title: "Couldn't save", detail: "The snapshot file couldn't be written", failed: true) }
             return false
         }
     }
@@ -1701,33 +1701,41 @@ class WindowManager {
         let key = LayoutSnapshotStore.displayKey(screens: displayManager.screens)
         let snapshot = layoutStore.snapshot(for: key)
         let allWindows = snapshot == nil ? [] : (windows ?? accessibility.getAllWindows())
-        let restorer = LayoutRestorer(
+        let outcome = layoutRestorer.restore(snapshot, windows: allWindows)
+        if !outcome.rebuilt.isEmpty { updatePositionCache(windows: allWindows) }
+
+        hyprLog(outcome.hasSnapshot ? .notice : .debug, .lifecycle,
+                "layout restore '\(key)' (\(manual ? "manual" : "auto")): \(outcome.logSummary)")
+        if manual {
+            let hud = outcome.hud
+            showLayoutHUD(title: hud.title, detail: hud.detail, failed: hud.failed)
+        }
+        return outcome.hasSnapshot
+    }
+
+    private var layoutRestorer: LayoutRestorer {
+        LayoutRestorer(
             engine: tilingEngine, orchestrator: workspaceOrchestrator,
             workspaceManager: workspaceManager, stateCache: stateCache,
             recovery: admissionRecovery,
             isScratchpad: { [scratchpad] in scratchpad.contains($0) },
             ref: { [weak self] in self?.windowRef(for: $0) })
-        let outcome = restorer.restore(snapshot, windows: allWindows)
-        if !outcome.rebuilt.isEmpty { updatePositionCache(windows: allWindows) }
-
-        hyprLog(outcome.hasSnapshot ? .notice : .debug, .lifecycle,
-                "layout restore '\(key)' (\(manual ? "manual" : "auto")): \(outcome.logSummary)")
-        if manual { flashLayoutMessage(outcome.message) }
-        return outcome.hasSnapshot
     }
 
     private func windowRef(for window: HyprWindow) -> SavedWindowRef? {
         guard let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier,
               !bundleID.isEmpty else { return nil }
-        return SavedWindowRef(bundleID: bundleID, title: window.title ?? "")
+        return SavedWindowRef(bundleID: bundleID, title: SavedWindowRef.normalizedTitle(window.title ?? ""))
     }
 
-    /// Labelled pill on every enabled screen. Manual save/restore only —
-    /// the automatic paths stay silent.
-    private func flashLayoutMessage(_ message: String) {
-        for screen in displayManager.screens where !workspaceManager.isMonitorDisabled(screen) {
-            focusBorder.flashInfo(message: message, around: displayManager.cgRect(for: screen))
-        }
+    /// Same HUD as a workspace switch, on the screen under the cursor.
+    /// Manual save/restore only — the automatic paths stay silent.
+    private func showLayoutHUD(title: String, detail: String?, failed: Bool) {
+        let mouse = NSEvent.mouseLocation
+        let screens = displayManager.screens.filter { !workspaceManager.isMonitorDisabled($0) }
+        guard let screen = screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? screens.first else { return }
+        workspaceOverview.showStatusHUD(caption: "LAYOUT", title: title, detail: detail,
+                                        failed: failed, screen: screen)
     }
 
     /// Re-park every window assigned to a hidden workspace at the current

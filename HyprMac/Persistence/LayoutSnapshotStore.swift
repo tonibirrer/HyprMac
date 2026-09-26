@@ -21,6 +21,16 @@ struct SavedWindowRef: Codable, Hashable {
     let title: String
 }
 
+extension SavedWindowRef {
+    /// Terminal ends its titles with the window size ("zsh — 120×30"),
+    /// which changes on every retile. Drop it so a resized window still
+    /// matches its saved leaf exactly.
+    static func normalizedTitle(_ title: String) -> String {
+        guard let range = title.range(of: #"\s—\s\d+×\d+$"#, options: .regularExpression) else { return title }
+        return String(title[..<range.lowerBound])
+    }
+}
+
 /// Serialised BSP subtree. Mirrors `BSPNode` field for field so a
 /// restore reproduces the saved tree exactly — including a `nil`
 /// override where dwindle picked the axis from the rect, which a
@@ -81,7 +91,36 @@ extension LayoutNode: Codable {
 /// same display key the workspace's static home is the same screen.
 struct WorkspaceLayout: Codable, Equatable {
     let workspace: Int
-    let root: LayoutNode
+    /// `nil` when none of the workspace's windows has joined its tree yet
+    let root: LayoutNode?
+    /// windows on the workspace that are not in its tree yet. a window sent
+    /// to a hidden workspace joins the tree only when the workspace is shown.
+    var unplaced: [SavedWindowRef] = []
+
+    /// every saved window on the workspace, tree leaves first
+    var refs: [SavedWindowRef] { (root?.leaves ?? []) + unplaced }
+
+    init(workspace: Int, root: LayoutNode?, unplaced: [SavedWindowRef] = []) {
+        self.workspace = workspace
+        self.root = root
+        self.unplaced = unplaced
+    }
+
+    private enum CodingKeys: String, CodingKey { case workspace, root, unplaced }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        workspace = try c.decode(Int.self, forKey: .workspace)
+        root = try c.decodeIfPresent(LayoutNode.self, forKey: .root)
+        unplaced = try c.decodeIfPresent([SavedWindowRef].self, forKey: .unplaced) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(workspace, forKey: .workspace)
+        try c.encodeIfPresent(root, forKey: .root)
+        if !unplaced.isEmpty { try c.encode(unplaced, forKey: .unplaced) }
+    }
 }
 
 /// A frozen layout for one display configuration.
@@ -199,7 +238,7 @@ final class LayoutSnapshotStore {
             hyprLog(.warning, .lifecycle, "layout snapshot not written for '\(displayKey)': \(error)")
             throw error
         }
-        let windows = workspaces.reduce(0) { $0 + $1.root.leaves.count }
+        let windows = workspaces.reduce(0) { $0 + $1.refs.count }
         hyprLog(.notice, .lifecycle,
                 "layout \(manual ? "saved" : "auto-saved"): \(workspaces.count) workspaces, \(windows) windows for '\(displayKey)'")
         return true

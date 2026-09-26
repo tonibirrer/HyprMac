@@ -138,4 +138,12 @@ final class LayoutMatcherTests: XCTestCase {
         let plan = LayoutMatcher.plan(snapshot([]), candidates: [candidate(1, "com.t", "A")])
         XCTAssertEqual(plan, LayoutMatcher.Plan())
     }
+
+    // terminal puts the window size in its title; a resize must not break an exact match
+    func testTerminalSizeSuffixIsNotPartOfTheTitle() {
+        XCTAssertEqual(SavedWindowRef.normalizedTitle("zgray — -zsh — 120×30"), "zgray — -zsh")
+        XCTAssertEqual(SavedWindowRef.normalizedTitle("zgray — -zsh — 54×59"), "zgray — -zsh")
+        XCTAssertEqual(SavedWindowRef.normalizedTitle("Budget 2026 — 3×4 grid"), "Budget 2026 — 3×4 grid")
+        XCTAssertEqual(SavedWindowRef.normalizedTitle("Notes"), "Notes")
+    }
 }

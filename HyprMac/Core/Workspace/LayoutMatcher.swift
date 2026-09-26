@@ -36,7 +36,7 @@ enum LayoutMatcher {
     /// deterministic.
     static func plan(_ snapshot: LayoutSnapshot, candidates: [Candidate]) -> Plan {
         let leaves: [(workspace: Int, ref: SavedWindowRef)] = snapshot.workspaces.flatMap { layout in
-            layout.root.leaves.map { (layout.workspace, $0) }
+            layout.refs.map { (layout.workspace, $0) }
         }
         var pick = [CGWindowID?](repeating: nil, count: leaves.count)
         var claimed = Set<CGWindowID>()

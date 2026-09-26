@@ -154,6 +154,21 @@ final class LayoutSnapshotStoreTests: XCTestCase {
         XCTAssertNotNil(LayoutSnapshotStore(fileURL: fileURL).snapshot(for: "Test:1x1"))
     }
 
+    // a workspace whose windows never joined its tree saves no root
+    func testUnplacedWindowsRoundTripWithoutARoot() throws {
+        let layouts = [WorkspaceLayout(workspace: 3, root: nil, unplaced: [ref("com.a", "doc")])]
+        try LayoutSnapshotStore(fileURL: fileURL).save(displayKey: "Test:1x1", workspaces: layouts, manual: true)
+
+        XCTAssertEqual(LayoutSnapshotStore(fileURL: fileURL).snapshot(for: "Test:1x1")?.workspaces, layouts)
+    }
+
+    // files written before unplaced windows existed still load
+    func testLayoutWithoutUnplacedKeyDecodes() throws {
+        let json = #"{"workspace": 1, "root": {"leaf": {"bundleID": "com.a", "title": "t"}}}"#
+        let layout = try JSONDecoder().decode(WorkspaceLayout.self, from: Data(json.utf8))
+        XCTAssertEqual(layout, WorkspaceLayout(workspace: 1, root: .leaf(ref("com.a", "t"))))
+    }
+
     // an unreadable entry may be a newer build's manual save
     func testAutoSaveDoesNotReplaceAnUnreadableEntry() throws {
         let futureEntry: [String: Any] = [
@@ -231,7 +246,7 @@ final class LayoutSnapshotStoreTests: XCTestCase {
 
         let snap = store.snapshot(for: key)!
         XCTAssertTrue(snap.isManual)
-        XCTAssertEqual(snap.workspaces.first?.root.leaves.first?.bundleID, "com.a")
+        XCTAssertEqual(snap.workspaces.first?.refs.first?.bundleID, "com.a")
     }
 
     func testManualSaveOverwritesManual() throws {
@@ -239,7 +254,7 @@ final class LayoutSnapshotStoreTests: XCTestCase {
         let key = "Test:1920x1080"
         try store.save(displayKey: key, workspaces: single("com.a"), manual: true)
         try store.save(displayKey: key, workspaces: single("com.b"), manual: true)
-        XCTAssertEqual(store.snapshot(for: key)?.workspaces.first?.root.leaves.first?.bundleID, "com.b")
+        XCTAssertEqual(store.snapshot(for: key)?.workspaces.first?.refs.first?.bundleID, "com.b")
     }
 
     func testAutoSaveOverwritesAuto() throws {
@@ -247,7 +262,7 @@ final class LayoutSnapshotStoreTests: XCTestCase {
         let key = "Test:1920x1080"
         try store.save(displayKey: key, workspaces: single("com.a"), manual: false)
         try store.save(displayKey: key, workspaces: single("com.b"), manual: false)
-        XCTAssertEqual(store.snapshot(for: key)?.workspaces.first?.root.leaves.first?.bundleID, "com.b")
+        XCTAssertEqual(store.snapshot(for: key)?.workspaces.first?.refs.first?.bundleID, "com.b")
     }
 
     // MARK: - pruning

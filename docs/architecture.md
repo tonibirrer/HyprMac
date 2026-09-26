@@ -161,16 +161,21 @@ Per-app AXObserver notifications are the primary discovery trigger; the
 - **`WorkspaceManager`** owns the workspace↔screen mapping. Nothing
   else writes `monitorWorkspace` or `workspaceHomeScreen`.
 - **`LayoutSnapshotStore`** owns `layout-snapshots.json`. It never
-  sees a tree — `TilingEngine.layoutTree` serialises one and
-  `WindowManager` hands the result across.
+  sees a tree — `LayoutRestorer.capture` asks `TilingEngine.layoutTree`
+  to serialise one and `WindowManager` hands the result across.
 
 ## Layout persistence
 
-A snapshot is the BSP shape of every regular workspace — a
-`LayoutNode` (leaf, or split with override / ratio / user-set flag)
-per workspace — keyed by a fingerprint of the connected displays.
-Frames are not stored. Floaters, scratchpad members and
-disabled-monitor windows are in no tree, so they are never saved.
+A snapshot covers every regular workspace on every monitor, keyed by
+a fingerprint of the connected displays. Each workspace saves its BSP
+shape — a `LayoutNode` (leaf, or split with override / ratio /
+user-set flag) — plus `unplaced`: windows assigned to it that have not
+joined its tree yet, such as one sent to a hidden workspace that has
+not been shown since. Frames are not stored. Floaters, scratchpad
+members and closed-but-alive windows are never saved. Titles are
+stored with Terminal's trailing ` — 120×30` size dropped, since it
+changes on every resize. Restore rearranges open windows only; it
+never launches an app.
 
 `Hypr+Ctrl+S` saves manually. The first `didChangeScreenParameters`
 notification of a transition auto-saves under the departing key —
@@ -189,7 +194,7 @@ arrangement. Both actions are dropped
 while a display transition is settling. `LayoutRestorer`
 (`Core/Workspace/LayoutRestorer.swift`) runs the restore and returns a
 `LayoutRestoreOutcome`; `WindowManager` only looks up the snapshot,
-refreshes the position cache, logs, and shows the pill.
+refreshes the position cache, logs, and shows the HUD.
 
 1. `LayoutMatcher` pairs saved leaves with live windows. Bundle ID is
    required. Exact non-empty title matches are reserved first across
@@ -232,8 +237,10 @@ window reached its saved workspace and every shape was rebuilt.
 Partial means some of it applied and some was refused (a refused move,
 a shape kept live, or a refused newcomer). Failed means something was
 asked and none of it applied. Saved windows that are not open do not
-make a restore partial; the log counts them, and the manual pill
-mentions them. A manual restore shows a labelled pill for each case.
+make a restore partial; the log counts them, and the manual HUD
+mentions them. A manual save or restore shows the workspace-switch
+HUD (`WorkspaceOverviewController.showStatusHUD`) on the screen under
+the cursor, with a title for each case and a short detail line.
 Automatic restores are silent and
 log the outcome at `.notice`. The Settings monitor toggle reuses the
 reconcile under an unchanged key and does not restore.
