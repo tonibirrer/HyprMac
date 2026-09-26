@@ -499,6 +499,12 @@ class WindowManager {
         }
         actionDispatcher.refocusUnderCursor = { [weak self] in self?.mouseTracker.refocusUnderCursor() }
         actionDispatcher.isTransientUIActive = { [weak self] in self?.isTransientUIActive ?? false }
+        actionDispatcher.frontmostAppShowsUnmanagedWindow = { [weak self] in
+            guard let self, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+            return self.accessibility.onScreenWindowIDs(ownedBy: pid).contains {
+                !self.stateCache.knownWindowIDs.contains($0) && !self.stateCache.hiddenWindowIDs.contains($0)
+            }
+        }
         actionDispatcher.toggleScratchpad = { [weak self] in self?.scratchpad.toggle() }
         actionDispatcher.moveToScratchpad = { [weak self] in self?.scratchpad.sendFocusedWindow() }
         actionDispatcher.saveLayout = { [weak self] in self?.saveLayoutSnapshot(manual: true) }

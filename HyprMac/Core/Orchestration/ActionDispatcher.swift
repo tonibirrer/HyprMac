@@ -89,6 +89,9 @@ final class ActionDispatcher {
     // true while a native menu tracks or an overlay process (Control
     // Center, Dock…) is frontmost — the focus invariant must hold off then.
     var isTransientUIActive: () -> Bool = { false }
+    // true when the frontmost app shows a window HyprMac doesn't track — a
+    // fullscreen game on its own Space. that window holds the user's focus.
+    var frontmostAppShowsUnmanagedWindow: () -> Bool = { false }
     var toggleScratchpad: () -> Void = {}
     var moveToScratchpad: () -> Void = {}
     var saveLayout: () -> Void = {}
@@ -540,6 +543,16 @@ final class ActionDispatcher {
         // border only, never steal.
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let frontAppOwnsTile = wsWindows.contains { stateCache.windowOwners[$0] == frontPID }
+        // (a) only holds when the front app has nothing of its own on
+        // screen (last window closed, bare desktop). a front app showing a
+        // window we never track — a native-fullscreen game — IS where the
+        // user is; pulling focus to a tile there steals it on every
+        // reconcile poll, since fullscreen suppression keeps the border
+        // dark and the invariant re-fires.
+        if !frontAppOwnsTile, frontmostAppShowsUnmanagedWindow() {
+            hyprLog(.debug, .focus, "focus invariant: frontmost app shows an untracked window (fullscreen game?) — leaving focus there")
+            return
+        }
         let mayStealFocus = !frontAppOwnsTile
         if !mayStealFocus {
             hyprLog(.debug, .focus, "focus invariant: frontmost app owns a tile but its focused window is untracked (popup/sheet) — border only")

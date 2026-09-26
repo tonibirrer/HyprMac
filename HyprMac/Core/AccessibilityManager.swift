@@ -131,6 +131,13 @@ class AccessibilityManager {
         return (element, pid)
     }
 
+    /// `pid`'s visible normal-layer windows, straight from the window
+    /// server — no AX pairing and none of the discovery filters, so a
+    /// window HyprMac never tracks (a native-fullscreen game) still counts.
+    func onScreenWindowIDs(ownedBy pid: pid_t) -> [CGWindowID] {
+        (cgWindowsByPID()[pid] ?? []).filter { $0.alpha > 0 }.map(\.windowID)
+    }
+
     /// Snapshot every visible normal window across all running apps.
     ///
     /// Walks every regular-activation app's `kAXWindowsAttribute`,
