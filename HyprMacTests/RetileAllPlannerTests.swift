@@ -420,6 +420,39 @@ final class RetileAllPlannerTests: XCTestCase {
         XCTAssertEqual(result.overflow, [16, 17, 18, 19, 20])
     }
 
+    // Cmd-N on a full visible workspace used to park the new window on the
+    // next workspace with room — out of sight, as if the keystroke did
+    // nothing. it stays where the user is and is reported for floating.
+    func testNewWindowPlannedOntoHiddenWorkspaceStaysOnPreferredAndFloats() {
+        let plan = RetileAllPlanner.admit(
+            windowIDs: [50],
+            preferredWorkspace: 2,
+            eligibleWorkspaces: [1, 2, 3],
+            existingAssignments: [2: Set((1...8).map(CGWindowID.init))],
+            excludedWindowIDs: [],
+            capacityForWorkspace: { _ in 8 }
+        )
+        XCTAssertEqual(plan.assignments[3], [50])
+
+        let visible = RetileAllPlanner.keepingNewWindowsVisible(
+            plan, preferredWorkspace: 2, isWorkspaceVisible: { $0 == 2 })
+
+        XCTAssertEqual(visible.floated, [50])
+        XCTAssertEqual(visible.plan.assignments[2], [50])
+        XCTAssertNil(visible.plan.assignments[3])
+    }
+
+    func testNewWindowPlannedOntoAnotherVisibleWorkspaceKeepsItsPlacement() {
+        let plan = RetileAllPlan(assignments: [2: [10], 5: [11]], overflow: [])
+
+        let visible = RetileAllPlanner.keepingNewWindowsVisible(
+            plan, preferredWorkspace: 2, isWorkspaceVisible: { $0 == 2 || $0 == 5 })
+
+        XCTAssertTrue(visible.floated.isEmpty)
+        XCTAssertEqual(visible.plan.assignments[2], [10])
+        XCTAssertEqual(visible.plan.assignments[5], [11])
+    }
+
     func testDisabledMonitorWindowRemainsFloating() {
         XCTAssertTrue(RetileAllPlanner.shouldRemainFloating(isAutoFloat: false, isOnDisabledMonitor: true))
         XCTAssertTrue(RetileAllPlanner.shouldRemainFloating(isAutoFloat: true, isOnDisabledMonitor: false))

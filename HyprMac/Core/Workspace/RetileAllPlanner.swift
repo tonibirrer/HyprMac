@@ -221,6 +221,30 @@ enum RetileAllPlanner {
         return RetileAllPlan(assignments: assignments, overflow: overflow)
     }
 
+    /// Pull back every incoming window the plan sent to a hidden workspace.
+    /// A window the user just opened (Cmd-N) that lands parked on another
+    /// workspace looks like the keystroke did nothing; it stays on
+    /// `preferredWorkspace` instead and comes back in `floated`, so the
+    /// caller floats it in front of the full tile set. Placements on a
+    /// visible workspace (another monitor) are kept as planned.
+    static func keepingNewWindowsVisible(
+        _ plan: RetileAllPlan,
+        preferredWorkspace: Int,
+        isWorkspaceVisible: (Int) -> Bool
+    ) -> (plan: RetileAllPlan, floated: [CGWindowID]) {
+        var assignments: [Int: [CGWindowID]] = [:]
+        var floated: [CGWindowID] = []
+        for (workspace, ids) in plan.assignments {
+            if workspace == preferredWorkspace || isWorkspaceVisible(workspace) {
+                assignments[workspace, default: []].append(contentsOf: ids)
+            } else {
+                assignments[preferredWorkspace, default: []].append(contentsOf: ids)
+                floated.append(contentsOf: ids)
+            }
+        }
+        return (RetileAllPlan(assignments: assignments, overflow: plan.overflow), floated.sorted())
+    }
+
     /// Apply a batch plan through dispatcher-owned assignment and parking
     /// operations. Kept free of AppKit dependencies for focused tests.
     static func applyAdmission(

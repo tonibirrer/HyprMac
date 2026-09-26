@@ -466,8 +466,23 @@ final class ActionDispatcher {
                 return RetileAllPlanner.workspaceCapacity(maxDepth: tilingEngine.maxDepth(for: home))
             }
         )
+        // a full workspace used to overflow a new window onto the next
+        // workspace with room, parked out of sight. float it here instead,
+        // in front of the tiles, the same way discovery auto-floats. only
+        // for windows opened after launch — the first pass spreads what
+        // was already open across workspaces as before.
+        let visible = hasCompletedInitialDiscovery
+            ? RetileAllPlanner.keepingNewWindowsVisible(
+                plan, preferredWorkspace: preferredWorkspace,
+                isWorkspaceVisible: workspaceManager.isWorkspaceVisible)
+            : (plan: plan, floated: [])
+        for windowID in visible.floated {
+            stateCache.floatingWindowIDs.insert(windowID)
+            byID[windowID]?.isFloating = true
+            hyprLog(.notice, .orchestration, "ws\(preferredWorkspace) full — floating new window '\(byID[windowID]?.title ?? "?")' (\(windowID)) in front instead of parking it on a hidden workspace")
+        }
         RetileAllPlanner.applyAdmission(
-            plan,
+            visible.plan,
             isWorkspaceVisible: workspaceManager.isWorkspaceVisible,
             assign: { [self] windowID, workspace in
                 if let window = byID[windowID] {
