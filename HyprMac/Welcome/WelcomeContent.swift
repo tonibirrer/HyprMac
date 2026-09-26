@@ -23,7 +23,7 @@ struct WhatsNewFeature {
 }
 
 enum WhatsNewFeatures {
-    // update this before each release — see CLAUDE.md instructions
+    // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
             icon: "paintpalette",

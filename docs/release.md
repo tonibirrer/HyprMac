@@ -5,8 +5,17 @@ builds, signs, notarizes, publishes, updates Sparkle, and updates Homebrew. The
 script stops on the first failed command; it does not offer a bypass for a
 failed test, signature, notarization, or Gatekeeper check.
 
-For per-release feature-list preparation, see the release feature-list
-instructions in the repository guidance.
+Releases run on the Mac mini hub, the same machine as all other repository
+work.
+
+## Before you release: What's New
+
+Update `WhatsNewFeatures.current` in `HyprMac/Welcome/WelcomeContent.swift`
+from `git log v<previous>..HEAD --oneline`. List user-facing changes only.
+Each entry needs an SF Symbol, a short title, a one-line description, and a
+tint (`.cyan` by default, `.magenta` for floating or scratchpad). Add
+`credit:` with the GitHub handle of an outside contributor. Commit and push
+this before starting the script, which refuses a dirty checkout.
 
 ## Usage
 
@@ -22,7 +31,8 @@ export DEVELOPMENT_TEAM=WYY8494SWG
 If supplied, the release-notes file must exist and be nonempty. Set
 `KEYCHAIN_PASSWORD` when the login keychain needs unlocking. Otherwise the
 script requires the keychain to be unlocked already; it never prompts for a
-secret.
+secret. A locked keychain makes `codesign` fail with `errSecInternalComponent`.
+Pick `<version>` from `MARKETING_VERSION` in `project.yml`.
 
 ## Prerequisites
 
