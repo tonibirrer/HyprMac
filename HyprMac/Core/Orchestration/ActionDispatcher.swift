@@ -308,8 +308,8 @@ final class ActionDispatcher {
             moveToScratchpad()
         case .resizeDirection(let dir):
             resizeInDirection(dir)
-        case .toggleTiling:
-            break // handled by WindowManager so it remains available while paused
+        case .toggleTiling, .toggleSingleScreen, .toggleAccordion:
+            break // handled by WindowManager so they remain available while paused
         case .runCommand(_, let command):
             commandRunner.run(command: command)
         }
@@ -345,6 +345,8 @@ final class ActionDispatcher {
         case .moveToScratchpad:    return "moveToScratchpad"
         case .resizeDirection:     return "resizeDirection"
         case .toggleTiling:        return "toggleTiling"
+        case .toggleSingleScreen:  return "toggleSingleScreen"
+        case .toggleAccordion:     return "toggleAccordion"
         case .runCommand:          return "runCommand"
         }
     }

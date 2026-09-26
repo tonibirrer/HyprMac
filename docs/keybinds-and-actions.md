@@ -29,6 +29,8 @@ enum Action: Equatable {
     case moveToScratchpad
     case toggleTiling
     case runCommand(label: String, command: String)
+    case toggleSingleScreen
+    case toggleAccordion
 }
 ```
 
@@ -225,6 +227,26 @@ is the source of truth and the synced fields are ignored.
 saved configs at load time, so users who upgrade pick up new
 keybinds without resetting their customizations. New default
 actions go in `DefaultKeybinds.swift`; the merge handles the rest.
+
+## Screen-sharing toggles
+
+`toggleSingleScreen` (default Hypr+M) disables every monitor except one
+and, pressed again, re-enables the monitors that were enabled before.
+The kept screen is the accordion monitor when it is connected (the
+built-in display unless `accordionMonitor` names another), else the
+built-in display, else the primary. The change goes through
+`config.disabledMonitors`, so it behaves exactly like unticking the
+monitors in Settings → Monitors: their windows float, the remaining
+screen reconciles the workspaces. The set to restore is persisted as
+`singleScreenRestore` in the monitor file, so the mode survives a
+restart and toggles off cleanly afterwards.
+
+`toggleAccordion` (default Hypr+A) flips the machine-local accordion
+mode. It only changes the layout while a single enabled screen is the
+accordion monitor — with several monitors enabled the press is recorded
+and takes effect on the next single-screen collapse.
+
+Both are available while tiling is paused and ignore key autorepeat.
 
 ## Run a command
 

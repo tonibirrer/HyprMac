@@ -160,6 +160,17 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         XCTAssertEqual(kb.action, .closeWindow)
     }
 
+    func testScreenSharingTogglesRoundTrip() throws {
+        for (action, key) in [(Action.toggleSingleScreen, "toggleSingleScreen"),
+                              (Action.toggleAccordion, "toggleAccordion")] {
+            let json = #"{"action":{"\#(key)":{}},"keyCode":46,"modifiers":1}"#
+            let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
+            XCTAssertEqual(kb.action, action)
+            let encoded = String(decoding: try JSONEncoder().encode(kb), as: UTF8.self)
+            XCTAssertTrue(encoded.contains("\"\(key)\":{}"), encoded)
+        }
+    }
+
     // MARK: - malformed-direction tolerance (was crash, now log + fallback)
 
     func testMalformedFocusDirectionFallsBack() throws {

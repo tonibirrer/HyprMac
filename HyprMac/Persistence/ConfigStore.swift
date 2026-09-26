@@ -398,4 +398,7 @@ struct SavedMonitorConfig: Codable {
     var accordionMode: Bool? = nil
     var accordionMonitor: String? = nil
     var accordionOverlap: CGFloat? = nil
+    // the disabled-monitor set to restore when single-screen mode
+    // (Action.toggleSingleScreen) is switched off; nil = not active
+    var singleScreenRestore: [String]? = nil
 }

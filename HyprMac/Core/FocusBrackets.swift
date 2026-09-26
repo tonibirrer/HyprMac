@@ -18,8 +18,18 @@ import Cocoa
 ///
 /// Threading: main-thread only.
 class FocusBrackets {
+    /// Which sides have more windows behind the focused one — accordion
+    /// mode without peek strips gives no other hint that Hypr+←/→ has
+    /// somewhere to go. A short vertical mark at the middle of that edge.
+    struct SideHints: Equatable {
+        var left = false
+        var right = false
+        static let none = SideHints()
+    }
+
     private(set) var trackedWindowID: CGWindowID?
     private(set) var isVisible = false
+    private(set) var sideHints: SideHints = .none
 
     private var panel: NSPanel?
     private var hostView: NSView?
@@ -29,6 +39,9 @@ class FocusBrackets {
     // color picked from accent brightness (white outline behind dark
     // accent, black outline behind light accent).
     private var outlineLayers: [CAShapeLayer] = []
+    // ordered [left, right]: the side marks and their contrast outlines
+    private var sideLayers: [CAShapeLayer] = []
+    private var sideOutlineLayers: [CAShapeLayer] = []
     private var trackedFrame: CGRect?
     private(set) var style: FocusBracketStyle = .rounded
     private(set) var markRadius: CGFloat = UserConfigDefaults.focusBracketRadius
@@ -64,9 +77,10 @@ class FocusBrackets {
     /// Show brackets around `rect`. Scale-in animation on first appear,
     /// re-stamps in place when already visible on a different window or
     /// frame.
-    func show(around rect: CGRect, windowID: CGWindowID) {
+    func show(around rect: CGRect, windowID: CGWindowID, sides: SideHints = .none) {
         mainThreadOnly()
         guard style != .off else { hide(); return }
+        sideHints = sides
 
         let p: NSPanel
         if let existing = panel {
@@ -92,8 +106,8 @@ class FocusBrackets {
         let outline = Self.contrastOutlineColor(for: accentCGColor)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for layer in cornerLayers { layer.strokeColor = accentCGColor }
-        for layer in outlineLayers { layer.strokeColor = outline }
+        for layer in cornerLayers + sideLayers { layer.strokeColor = accentCGColor }
+        for layer in outlineLayers + sideOutlineLayers { layer.strokeColor = outline }
         CATransaction.commit()
 
         p.alphaValue = 1.0
@@ -106,9 +120,10 @@ class FocusBrackets {
 
     /// Re-position brackets to `rect` without animation. Called when the
     /// focused window changes mid-press (e.g. via Hypr+arrow).
-    func updatePosition(_ rect: CGRect) {
+    func updatePosition(_ rect: CGRect, sides: SideHints? = nil) {
         mainThreadOnly()
         guard let p = panel, isVisible else { return }
+        if let sides { sideHints = sides }
         p.setFrame(panelRect(for: rect), display: false)
         layoutHostView(in: p)
         stampCornerPaths()
@@ -230,7 +245,30 @@ class FocusBrackets {
             cornerLayers[i].path = path
             cornerLayers[i].lineWidth = markThickness
         }
+        // side marks: a vertical line centered on the left / right inset
+        // edge, twice a corner leg long, shown only where a hint is set
+        let sideLength = leg * 2
+        let sideXs = [inset, W - inset]
+        let shown = [sideHints.left, sideHints.right]
+        for i in 0..<2 {
+            let path = CGMutablePath()
+            path.move(to: CGPoint(x: sideXs[i], y: H / 2 - sideLength / 2))
+            path.addLine(to: CGPoint(x: sideXs[i], y: H / 2 + sideLength / 2))
+            for layer in [sideOutlineLayers[i], sideLayers[i]] {
+                layer.frame = bounds
+                layer.path = path
+                layer.isHidden = !shown[i]
+            }
+            sideOutlineLayers[i].lineWidth = markThickness + 2
+            sideLayers[i].lineWidth = markThickness
+        }
         CATransaction.commit()
+    }
+
+    /// Whether each side mark is currently drawn. Test seam.
+    func currentSideMarks() -> (left: Bool, right: Bool) {
+        guard sideLayers.count == 2 else { return (false, false) }
+        return (!sideLayers[0].isHidden, !sideLayers[1].isHidden)
     }
 
     /// Build a single corner bracket: a straight leg, a 90° arc, another
@@ -292,6 +330,25 @@ class FocusBrackets {
             hostLayer.addSublayer(layer)
             cornerLayers.append(layer)
         }
+        for _ in 0..<2 {
+            let outline = CAShapeLayer()
+            outline.fillColor = nil
+            outline.strokeColor = outlineColor
+            outline.lineWidth = markThickness + 2
+            outline.lineCap = .round
+            outline.isHidden = true
+            hostLayer.addSublayer(outline)
+            sideOutlineLayers.append(outline)
+
+            let layer = CAShapeLayer()
+            layer.fillColor = nil
+            layer.strokeColor = accentCGColor
+            layer.lineWidth = markThickness
+            layer.lineCap = .round
+            layer.isHidden = true
+            hostLayer.addSublayer(layer)
+            sideLayers.append(layer)
+        }
     }
 
     /// Pick a contrasting outline color for `accent`. Dark accents get a
@@ -322,10 +379,15 @@ class FocusBrackets {
             CGSize(width: -off, height: -off),
             CGSize(width: off, height: -off),
         ]
-        for i in 0..<4 {
-            for layer in [outlineLayers[i], cornerLayers[i]] {
-                let dx = offsets[i].width
-                let dy = offsets[i].height
+        // the side marks slide in horizontally like their edge's corners
+        let sideOffsets = [CGSize(width: -off, height: 0), CGSize(width: off, height: 0)]
+        let animated: [(CGSize, [CAShapeLayer])] =
+            (0..<4).map { (offsets[$0], [outlineLayers[$0], cornerLayers[$0]]) }
+            + (0..<2).map { (sideOffsets[$0], [sideOutlineLayers[$0], sideLayers[$0]]) }
+        for (offset, layers) in animated {
+            for layer in layers {
+                let dx = offset.width
+                let dy = offset.height
                 let from = CATransform3DMakeTranslation(dx, dy, 0)
                 let to = CATransform3DIdentity
 
