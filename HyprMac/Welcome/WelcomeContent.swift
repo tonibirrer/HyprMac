@@ -4,7 +4,7 @@ import SwiftUI
 
 // MARK: - what's new feature list
 // Update this array before each release with features from git log;
-// see CLAUDE.md "Release Feature List" for the workflow.
+// see docs/release.md for the workflow.
 
 /// Accent used for a changelog row's icon tile.
 enum WhatsNewTint {
@@ -26,19 +26,15 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "paintpalette",
-            title: "A New Look",
-            description: "HyprMac has a new icon and logo. Settings got a cleanup too: a calmer Keys panel, and shortcuts now show the Hypr key as hypr."
+            icon: "square.and.arrow.down.on.square",
+            title: "Saved Layouts",
+            description: "Hypr+Ctrl+S saves which workspace every window is on and how each one is split, across all your monitors. Hypr+Ctrl+R puts it back, and plugging a saved display setup back in restores it on its own.",
+            credit: "@joops"
         ),
         WhatsNewFeature(
-            icon: "rectangle.portrait.and.arrow.forward",
-            title: "Hypr+F Finds the Empty Workspace",
-            description: "Minimized, hidden, and closed-but-running windows no longer make Hypr+F skip a workspace that looks empty."
-        ),
-        WhatsNewFeature(
-            icon: "capslock",
-            title: "A Caps Lock Reminder",
-            description: "If Caps Lock is your Hypr key, it has to stay on \"⇪ Caps Lock\" in System Settings → Keyboard → Modifier Keys. Onboarding and Settings → Keys now say so, with a button that opens the pane."
+            icon: "keyboard",
+            title: "A Balanced Keybind List",
+            description: "Hypr+K now spreads its shortcuts evenly: window management on the left, apps and system in the middle, workspaces and focus on the right."
         ),
     ]
 }
