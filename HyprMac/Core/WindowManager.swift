@@ -2005,7 +2005,7 @@ class WindowManager {
             engine: tilingEngine, orchestrator: workspaceOrchestrator,
             workspaceManager: workspaceManager, stateCache: stateCache,
             recovery: admissionRecovery,
-            isScratchpad: { [scratchpad] in scratchpad.contains($0) },
+            isScratchpad: { [scratchpad = scratchpad!] in scratchpad.contains($0) },
             ref: { [weak self] in self?.windowRef(for: $0) })
     }
 
