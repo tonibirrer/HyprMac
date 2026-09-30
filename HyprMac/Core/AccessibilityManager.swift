@@ -177,6 +177,11 @@ class AccessibilityManager {
         return .absent
     }
 
+    /// Processes whose windows never enter a snapshot — the running
+    /// games while a game screen is reserved (`GameScreenController`).
+    /// Their windows stay untracked: never tiled, parked, or floated.
+    var ignoredPIDs: Set<pid_t> = []
+
     func getAllWindows() -> [HyprWindow] {
         guard AXIsProcessTrusted() else { return [] }
 
@@ -192,7 +197,8 @@ class AccessibilityManager {
 
         let apps = NSWorkspace.shared.runningApplications.filter {
             $0.activationPolicy == .regular &&
-            !excludedBundleIDs.contains($0.bundleIdentifier ?? "")
+            !excludedBundleIDs.contains($0.bundleIdentifier ?? "") &&
+            !ignoredPIDs.contains($0.processIdentifier)
         }
 
         for app in apps {

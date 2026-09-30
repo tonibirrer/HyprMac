@@ -31,6 +31,7 @@
 		1276120B1D8BE4DEEDCF8EF3 /* WindowStateCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA39AE261654BF110E66771 /* WindowStateCache.swift */; };
 		12B84235B0C9B244D9366F35 /* FrameReadbackPollerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E74E9F8AA97C6653000640F /* FrameReadbackPollerTests.swift */; };
 		13C267DF966122EC9056C8BB /* SingleScreenModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAA7A4CC338AF3693AFAB6A7 /* SingleScreenModeTests.swift */; };
+		15A78146996ABA3396B2470C /* GameScreenController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E57F50BB0D193DFC2EAE99 /* GameScreenController.swift */; };
 		15AB8B9331E6A03CDD991F3C /* LayoutEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298318CA91C080E2C130A4DE /* LayoutEngineTests.swift */; };
 		16658F8479CAE2DD07B18DB5 /* FocusStateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB845A902D1A884872996805 /* FocusStateController.swift */; };
 		168FD89FF65391A9E45B716D /* DragManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02E56F3B2C9834C78368323D /* DragManager.swift */; };
@@ -169,6 +170,7 @@
 		885B8A821F467AE752F847B4 /* AccordionLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */; };
 		8A7450A0AEBA21F9865B5BEA /* DragSwapHandlerInsertionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C3A29473C9D3ECD870EB22 /* DragSwapHandlerInsertionTests.swift */; };
 		8BEC65B84A975386F95AA087 /* TiledDragTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8049A0C6B0FBEF8B6ED25B /* TiledDragTarget.swift */; };
+		8BF6C14CE9CD634B0E97B190 /* GameScreenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D625AA8593E0235F3D1EF2AB /* GameScreenTests.swift */; };
 		8C3306FE7A9CD13A28CA5C87 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49CB059612127CA6F3E7766 /* SettingsComponents.swift */; };
 		93AFE8B3CA78BCF41A938991 /* FocusBrackets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8680AE34CAB9F0BAA3C9D8F0 /* FocusBrackets.swift */; };
 		93F279679A1DA953F5BD2707 /* TiledDragEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AECFAE9BE1E8270FACA3F28 /* TiledDragEventTests.swift */; };
@@ -243,6 +245,7 @@
 		D380E4A1BDD2AD4281299E72 /* KeybindDecoderToleranceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */; };
 		D3AD8C51C2F4FC148513EA11 /* AccessibilityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8FB422F1864D03E43BF91E /* AccessibilityManager.swift */; };
 		D42C28555A078D585F2268A2 /* WindowRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D21946C610CB845DEC5502 /* WindowRule.swift */; };
+		D47796229BE820563628CD9D /* GameScreenController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E57F50BB0D193DFC2EAE99 /* GameScreenController.swift */; };
 		D58328860E2249DD694C36CA /* KeyCodeUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC469D5C5BC55B1A6D3CD7C2 /* KeyCodeUtils.swift */; };
 		D79FC29758B8999CB1D4BD05 /* TiledDragTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8049A0C6B0FBEF8B6ED25B /* TiledDragTarget.swift */; };
 		D849455C3C1CF4C164649D9A /* RetileAllPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5211B4FC8814875264166E19 /* RetileAllPlanner.swift */; };
@@ -471,6 +474,7 @@
 		D1BF4A13B8D8E5DDDD0DC479 /* AccordionLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccordionLayoutTests.swift; sourceTree = "<group>"; };
 		D2B096217238208C5F5BCA3E /* ActionDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDispatcher.swift; sourceTree = "<group>"; };
 		D3521F94E7B0FCC0E03B50D3 /* KeybindDecoderToleranceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindDecoderToleranceTests.swift; sourceTree = "<group>"; };
+		D625AA8593E0235F3D1EF2AB /* GameScreenTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScreenTests.swift; sourceTree = "<group>"; };
 		D7B55D3C4457B095922C6112 /* LayoutPersistencePerformanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutPersistencePerformanceTests.swift; sourceTree = "<group>"; };
 		D8425DC47E2604936890FF01 /* TiledDriftMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDriftMonitor.swift; sourceTree = "<group>"; };
 		D95B9944F99340F7EF2DB762 /* AccordionSwitchOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccordionSwitchOrderTests.swift; sourceTree = "<group>"; };
@@ -502,6 +506,7 @@
 		F06CFE0CDB28ECDC9411EEB1 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		F128E4713D085AE80F3D5B0A /* AXFrameWriteBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXFrameWriteBatch.swift; sourceTree = "<group>"; };
 		F24369A83C38C9C3757A23FB /* KeyRemapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRemapper.swift; sourceTree = "<group>"; };
+		F2E57F50BB0D193DFC2EAE99 /* GameScreenController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameScreenController.swift; sourceTree = "<group>"; };
 		F356D39971D5A80B38494D15 /* DwindleLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DwindleLayout.swift; sourceTree = "<group>"; };
 		F397ECC53628484AA2EBD5A2 /* KeyRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyRecorderView.swift; sourceTree = "<group>"; };
 		F3DB9C9425DBA2D12D58CAF7 /* WorkspaceSwitchAnnouncementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSwitchAnnouncementTests.swift; sourceTree = "<group>"; };
@@ -613,6 +618,7 @@
 				984C8889680F5B0CDD449061 /* FloatingWindowController.swift */,
 				B38E1F4DBD1DB2807610AB4E /* FocusBorder.swift */,
 				8680AE34CAB9F0BAA3C9D8F0 /* FocusBrackets.swift */,
+				F2E57F50BB0D193DFC2EAE99 /* GameScreenController.swift */,
 				F06CFE0CDB28ECDC9411EEB1 /* HotkeyManager.swift */,
 				C530FEE9D5C1B2B50C46C096 /* IPCServer.swift */,
 				A7BD70717FD497B0899FBCE5 /* KeybindOverlayController.swift */,
@@ -768,6 +774,7 @@
 				3F7802C236774AA24452B3E1 /* FrameSizingTransactionTests.swift */,
 				787772BD2B63EB7FAEB9DC58 /* FullHeightTests.swift */,
 				56823428D522E6724F9CB840 /* FullscreenWorkspaceTransferTests.swift */,
+				D625AA8593E0235F3D1EF2AB /* GameScreenTests.swift */,
 				43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */,
 				075CB706E42649E175CB784A /* HoverResponseRateTests.swift */,
 				4DE1252424844EA3C4E1B709 /* HyprKeySystemGuidanceTests.swift */,
@@ -1051,6 +1058,7 @@
 				16658F8479CAE2DD07B18DB5 /* FocusStateController.swift in Sources */,
 				557EC1265B83BD0ACFB2564C /* FrameReadbackPoller.swift in Sources */,
 				81AF83F1517A037F29B3CA9F /* FrameSizingTransaction.swift in Sources */,
+				15A78146996ABA3396B2470C /* GameScreenController.swift in Sources */,
 				E5F10E452CCBF25881BFBF54 /* GeneralSettingsView.swift in Sources */,
 				33D18D1F45F3CB1C3E2FDA03 /* HotkeyManager.swift in Sources */,
 				16D2236F6F74648ABA85664D /* HoverResponseRate.swift in Sources */,
@@ -1164,6 +1172,7 @@
 				E1B183F845EF460CEFC02DA0 /* FocusStateController.swift in Sources */,
 				F21B3CD356CACDD05464DCD4 /* FrameReadbackPoller.swift in Sources */,
 				EABEFF5EE2EE6EEABE6956EB /* FrameSizingTransaction.swift in Sources */,
+				D47796229BE820563628CD9D /* GameScreenController.swift in Sources */,
 				381F8B3911920F8BEF848FD2 /* GeneralSettingsView.swift in Sources */,
 				981B76EFF94EFE641AF42778 /* HotkeyManager.swift in Sources */,
 				B3BCB4B56872B79D3B673912 /* HoverResponseRate.swift in Sources */,
@@ -1266,6 +1275,7 @@
 				4C307BB05F3FA6FC89B4A9F5 /* FrameSizingTransactionTests.swift in Sources */,
 				884A5BB21E7E4D13F3037146 /* FullHeightTests.swift in Sources */,
 				F9857D1EBAD4EB6F9113B6E1 /* FullscreenWorkspaceTransferTests.swift in Sources */,
+				8BF6C14CE9CD634B0E97B190 /* GameScreenTests.swift in Sources */,
 				C1CCA6C07D0B273CF3AB3D6C /* HandleDisplayChangeTests.swift in Sources */,
 				D1DF9408D40B20ADFE58C85D /* HoverResponseRateTests.swift in Sources */,
 				DFE89755AA5CF65CC6319D33 /* HyprKeySystemGuidanceTests.swift in Sources */,

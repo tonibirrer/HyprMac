@@ -406,4 +406,9 @@ struct SavedMonitorConfig: Codable {
     // the disabled-monitor set to restore when single-screen mode
     // (Action.toggleSingleScreen) is switched off; nil = not active
     var singleScreenRestore: [String]? = nil
+    // game screen: the monitor a running game takes over — off limits for
+    // tiles until the game quits; nil = off. gameBundleIDs adds games whose
+    // Info.plist declares no game category.
+    var gameMonitor: String? = nil
+    var gameBundleIDs: [String]? = nil
 }

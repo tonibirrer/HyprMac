@@ -245,8 +245,10 @@ final class WindowDiscoveryService {
                 hyprLog(.debug, .discovery, "auto-float \(reason.rawValue): '\(w.title ?? "?")'")
             }
 
-            // auto-float on disabled monitors — surface so caller skips workspace assignment
-            if let screen = displayManager.screen(for: w), workspaceManager.isMonitorDisabled(screen) {
+            // auto-float on disabled monitors — surface so caller skips workspace
+            // assignment. a game-reserved screen floats nothing: the caller
+            // admits the window to the nearest enabled screen.
+            if let screen = displayManager.screen(for: w), workspaceManager.isMonitorUserDisabled(screen) {
                 if !stateCache.floatingWindowIDs.contains(w.windowID) {
                     stateCache.floatingWindowIDs.insert(w.windowID)
                     w.isFloating = true

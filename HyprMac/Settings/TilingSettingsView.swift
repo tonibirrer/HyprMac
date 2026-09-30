@@ -18,6 +18,7 @@ struct TilingSettingsView: View {
             scratchpadPanel
             accordionPanel
             monitorsPanel
+            gameScreenPanel
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             screens = NSScreen.screens
@@ -404,6 +405,72 @@ struct TilingSettingsView: View {
             names.append(saved)
         }
         return names
+    }
+
+    // MARK: game screen
+
+    private var gameScreenPanel: some View {
+        HyprPanel("Game Screen",
+                  footer: "While a game runs, its screen is off limits for tiles: they move to the other screens, new windows open there, and HyprMac moves the game onto the game screen, leaving and re-entering fullscreen if needed. Games are detected from their App Store category or Game Mode support; add any others below.") {
+            HyprRow("Game screen", icon: "gamecontroller",
+                    subtitle: "The monitor a running game takes over.",
+                    divider: true) {
+                Picker("", selection: $config.gameMonitor) {
+                    Text("Off").tag(String?.none)
+                    ForEach(gameMonitorChoices, id: \.self) { name in
+                        Text(name).tag(String?.some(name))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+            }
+            let extra = config.gameBundleIDs.sorted()
+            ForEach(extra, id: \.self) { bundleID in
+                HyprRow(appName(for: bundleID), icon: "app",
+                        subtitle: bundleID, divider: true) {
+                    Button {
+                        config.gameBundleIDs.remove(bundleID)
+                    } label: {
+                        Image(systemName: "minus.circle.fill")
+                            .foregroundStyle(.red.opacity(0.75))
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            HyprRow("Add game", icon: "plus",
+                    subtitle: "For a game that is not detected on its own.",
+                    divider: false) {
+                Button("Choose…") { pickGame() }
+                    .controlSize(.small)
+            }
+        }
+    }
+
+    /// Current screens plus a saved game monitor that isn't connected.
+    private var gameMonitorChoices: [String] {
+        var names = screens.map { $0.localizedName }
+        if let saved = config.gameMonitor, !names.contains(saved) {
+            names.append(saved)
+        }
+        return names
+    }
+
+    private func appName(for bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return bundleID }
+        return FileManager.default.displayName(atPath: url.path)
+    }
+
+    private func pickGame() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Game"
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url,
+           let id = Bundle(url: url)?.bundleIdentifier {
+            config.gameBundleIDs.insert(id)
+        }
     }
 
     // MARK: monitors
