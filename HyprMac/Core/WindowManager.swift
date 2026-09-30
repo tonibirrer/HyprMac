@@ -62,6 +62,10 @@ class WindowManager {
     // funnel into pollingScheduler.schedule(after:); the timer is a safety net.
     private let axNotifications = AXNotificationService()
 
+    // game screen: running games, and carrying their windows over to the
+    // configured game monitor while it is reserved.
+    private let gameScreen = GameScreenController()
+
     // floating-window lifecycle: float/tile toggle, cycle-focus, raise-behind, auto-float predicate.
     private(set) var floatingController: FloatingWindowController!
 
@@ -558,6 +562,8 @@ class WindowManager {
         coordinator.onDisabledMonitors = { [weak self] disabled in
             guard let self else { return }
             self.workspaceManager.disabledMonitors = disabled
+            // the game screen is only reserved while another screen is enabled
+            self.refreshGameScreen(reconcile: false)
             if self.isRunning { self.handleDisabledMonitorChange() }
             hyprLog(.debug, .lifecycle, "disabled monitors updated: \(disabled)")
         }
@@ -790,6 +796,9 @@ class WindowManager {
         dimmingOverlay.fadeDurationSec = config.chromeFadeDurationSec
         workspaceManager.disabledMonitors = config.disabledMonitors
         workspaceManager.linkedMonitors = config.linkedMonitors
+        // a game already running at launch reserves its screen before the
+        // first snapshot tiles anything onto it
+        refreshGameScreen(reconcile: false)
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
 
@@ -945,6 +954,20 @@ class WindowManager {
                 self.tilingEngine.accordionOverlap = overlap
                 self.animatedRetile()
             }.store(in: &configObservers)
+        // @Published emits in willSet — hop a runloop so the refresh reads
+        // the new value
+        config.$gameMonitor
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshGameScreen() }
+            .store(in: &configObservers)
+        config.$gameBundleIDs
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshGameScreen() }
+            .store(in: &configObservers)
         config.$accordionMonitor
             .dropFirst()
             .removeDuplicates()
@@ -2006,6 +2029,44 @@ class WindowManager {
         }
     }
 
+    // MARK: - game screen
+
+    /// Re-detect running games and reserve the game monitor while one
+    /// runs: tiles leave it, new windows open on the other screens, and
+    /// the games' windows become invisible to HyprMac (never tiled or
+    /// parked) and are carried onto it. `reconcile: false` is for callers
+    /// that reconcile the layout themselves right after.
+    private func refreshGameScreen(reconcile: Bool = true, terminatedPID: pid_t? = nil) {
+        gameScreen.refresh(extraBundleIDs: config.gameBundleIDs, terminatedPID: terminatedPID)
+        let reservedName = GameScreenPolicy.reservedMonitor(
+            gameMonitor: config.gameMonitor,
+            gameRunning: !gameScreen.gamePIDs.isEmpty,
+            connected: displayManager.screens.map(\.localizedName),
+            userDisabled: config.disabledMonitors)
+        let reserved: Set<String> = reservedName.map { [$0] } ?? []
+        let ignored = reserved.isEmpty ? [] : gameScreen.gamePIDs
+        let newlyIgnored = ignored.subtracting(accessibility.ignoredPIDs)
+        accessibility.ignoredPIDs = ignored
+        // a game tracked before it was ignored would read as hidden
+        // ghosts once its windows leave the snapshot — forget them
+        for pid in newlyIgnored { forgetApp(pid) }
+
+        if reserved != workspaceManager.reservedMonitors {
+            workspaceManager.reservedMonitors = reserved
+            if let reservedName {
+                hyprLog(.notice, .lifecycle, "game screen '\(reservedName)' reserved — tiles move to the other screens")
+            } else {
+                hyprLog(.notice, .lifecycle, "game screen released")
+            }
+            if reconcile && isRunning { handleDisabledMonitorChange() }
+        }
+        if let reservedName, !newlyIgnored.isEmpty {
+            gameScreen.scheduleRelocation(
+                to: { [weak self] in self?.displayManager.screens.first { $0.localizedName == reservedName } },
+                displayManager: displayManager)
+        }
+    }
+
     // MARK: - disabled monitor handling
 
     /// React to a runtime change of `config.disabledMonitors`.
@@ -2019,8 +2080,10 @@ class WindowManager {
     private func handleDisabledMonitorChange() {
         let allWindows = accessibility.getAllWindows()
 
-        // windows on newly-disabled monitors: remove from workspace + auto-float
-        for screen in displayManager.screens where workspaceManager.isMonitorDisabled(screen) {
+        // windows on newly-disabled monitors: remove from workspace + auto-float.
+        // a screen reserved by a game floats nothing — its tiles migrate to
+        // the enabled screens with their trees in the reconcile below.
+        for screen in displayManager.screens where workspaceManager.isMonitorUserDisabled(screen) {
             for w in allWindows {
                 guard let wScreen = displayManager.screen(for: w),
                       wScreen == screen else { continue }
@@ -2145,8 +2208,10 @@ class WindowManager {
                 hyprLog(.debug, .lifecycle, "auto-float \(reason.rawValue): '\(w.title ?? "?")'")
             }
 
-            // auto-float windows on disabled monitors — don't assign workspace
-            if let screen = displayManager.screen(for: w), workspaceManager.isMonitorDisabled(screen) {
+            // auto-float windows on disabled monitors — don't assign workspace.
+            // a window on a game-reserved screen is assigned to the nearest
+            // enabled screen instead, and tiling moves it there.
+            if let screen = displayManager.screen(for: w), workspaceManager.isMonitorUserDisabled(screen) {
                 if !stateCache.floatingWindowIDs.contains(w.windowID) {
                     stateCache.floatingWindowIDs.insert(w.windowID)
                     w.isFloating = true
@@ -2461,7 +2526,7 @@ class WindowManager {
         let keepFloating = Set(allWindows.filter {
             RetileAllPlanner.shouldRemainFloating(
                 isAutoFloat: floatingController.shouldAutoFloat($0, excludedBundleIDs: excluded),
-                isOnDisabledMonitor: displayManager.screen(for: $0).map(workspaceManager.isMonitorDisabled) == true
+                isOnDisabledMonitor: displayManager.screen(for: $0).map(workspaceManager.isMonitorUserDisabled) == true
             )
         }.map { $0.windowID })
         for wid in stateCache.floatingWindowIDs where !keepFloating.contains(wid) && allWids.contains(wid) {
@@ -2559,7 +2624,8 @@ class WindowManager {
     /// already-placed window is not bounced off its current workspace.
     private func assignToScreenWorkspace(_ window: HyprWindow) {
         guard workspaceManager.workspaceFor(window.windowID) == nil else { return }
-        if let screen = displayManager.screen(for: window) ?? displayManager.screens.first {
+        if let screen = (displayManager.screen(for: window) ?? displayManager.screens.first)
+            .map(workspaceManager.admissionScreen) {
             let ws = workspaceManager.workspaceForScreen(screen)
             workspaceManager.assignWindow(window.windowID, toWorkspace: ws)
         }
@@ -3315,6 +3381,11 @@ class WindowManager {
         let predecessorBundleID = previousActivationBundleID
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             previousActivationBundleID = app.bundleIdentifier
+            // a game brought forward may show a window the launch passes missed
+            if gameScreen.gamePIDs.contains(app.processIdentifier),
+               let target = displayManager.screens.first(where: workspaceManager.isMonitorReserved) {
+                gameScreen.relocateWindows(to: target, displayManager: displayManager)
+            }
         }
 
         // suppress FFM and every focus-restoring reaction while a transient
@@ -3535,6 +3606,7 @@ class WindowManager {
             // idempotent and retries once if the app isn't AX-ready yet.
             axNotifications.attach(pid: app.processIdentifier)
         }
+        refreshGameScreen()
         pollingScheduler.schedule(after: 0.5)
     }
 
@@ -3546,6 +3618,7 @@ class WindowManager {
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             axNotifications.detach(pid: app.processIdentifier)
             forgetApp(app.processIdentifier)
+            refreshGameScreen(terminatedPID: app.processIdentifier)
         }
         pollingScheduler.schedule()
     }
@@ -3643,6 +3716,8 @@ class WindowManager {
             // the fingerprint refreshed DisplayManager; initializeMonitors runs
             // before TilingEngine.handleDisplayChange so the home-screen
             // lookup the engine consults is current.
+            // the game monitor may have come or gone
+            self.refreshGameScreen(reconcile: false)
             self.reconcileAfterDisplayChange(
                 restoreSavedLayout: Self.restoresAfterSettle(from: departedKey, to: self.settledDisplayKey))
         }

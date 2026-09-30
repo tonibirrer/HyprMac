@@ -83,6 +83,16 @@ class UserConfig: ObservableObject {
     // set to put back when it is switched off; nil = not active. Written
     // with the monitor file by the disabledMonitors change that follows it.
     var singleScreenRestore: [String]?
+    // game screen (GameScreenController): localizedName of the monitor a
+    // running game takes over; nil = off. machine-local, like the rest of
+    // the monitor settings.
+    @Published var gameMonitor: String? {
+        didSet { if !isReloading { save() } }
+    }
+    // games whose Info.plist declares no game category
+    @Published var gameBundleIDs: Set<String> {
+        didSet { if !isReloading { save() } }
+    }
     @Published var showFocusBorder: Bool {
         didSet { persistRuntimeChange() }
     }
@@ -319,6 +329,8 @@ class UserConfig: ObservableObject {
         self.accordionMonitor = monitorConfig?.accordionMonitor
         self.accordionOverlap = monitorConfig?.accordionOverlap ?? UserConfigDefaults.accordionOverlap
         self.singleScreenRestore = monitorConfig?.singleScreenRestore
+        self.gameMonitor = monitorConfig?.gameMonitor
+        self.gameBundleIDs = Set(monitorConfig?.gameBundleIDs ?? [])
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
@@ -405,7 +417,9 @@ class UserConfig: ObservableObject {
             accordionMode: accordionMode,
             accordionMonitor: accordionMonitor,
             accordionOverlap: accordionOverlap,
-            singleScreenRestore: singleScreenRestore))
+            singleScreenRestore: singleScreenRestore,
+            gameMonitor: gameMonitor,
+            gameBundleIDs: gameBundleIDs.isEmpty ? nil : gameBundleIDs.sorted()))
     }
 
     private func persistRuntimeChange() {
@@ -470,6 +484,8 @@ class UserConfig: ObservableObject {
         accordionMonitor = nil
         accordionOverlap = UserConfigDefaults.accordionOverlap
         singleScreenRestore = nil
+        gameMonitor = nil
+        gameBundleIDs = []
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -583,6 +599,8 @@ class UserConfig: ObservableObject {
             accordionMonitor = mc.accordionMonitor
             accordionOverlap = mc.accordionOverlap ?? UserConfigDefaults.accordionOverlap
             singleScreenRestore = mc.singleScreenRestore
+            gameMonitor = mc.gameMonitor
+            gameBundleIDs = Set(mc.gameBundleIDs ?? [])
         }
         // else keep current values — don't overwrite with synced defaults
 

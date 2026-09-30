@@ -430,7 +430,9 @@ final class ActionDispatcher {
         ))
         var groups: [(screen: NSScreen, windows: [HyprWindow])] = []
         for window in windows where admittedIDs.contains(window.windowID) {
-            let screen = displayManager.screen(for: window) ?? screenUnderCursor()
+            // a window opening on a game-reserved screen joins the nearest
+            // enabled screen's workspace
+            let screen = workspaceManager.admissionScreen(for: displayManager.screen(for: window) ?? screenUnderCursor())
             if let index = groups.firstIndex(where: { $0.screen == screen }) {
                 groups[index].windows.append(window)
             } else {

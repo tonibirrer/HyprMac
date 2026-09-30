@@ -49,6 +49,13 @@ class WorkspaceManager {
     /// Disabled monitors host floating windows only.
     var disabledMonitors: Set<String> = []
 
+    /// Localized names of monitors a running game has taken over
+    /// (`GameScreenController`). Off limits for tiles like a disabled
+    /// monitor, but runtime-only: never persisted, never part of
+    /// `disabledMonitors`, and windows found on one are admitted to an
+    /// enabled screen instead of floating in place.
+    var reservedMonitors: Set<String> = []
+
     /// Linked-monitors mode: every enabled screen shows the SAME
     /// workspace, and the workspace's tiles are partitioned across the
     /// screens (each tile lives wholly on one screen — see
@@ -88,9 +95,38 @@ class WorkspaceManager {
         Int(screen.frame.origin.x * 10000 + screen.frame.origin.y)
     }
 
-    /// `true` when `screen` is in the user's `disabledMonitors` list.
+    /// `true` when `screen` hosts no tiles: the user disabled it, or a
+    /// running game reserved it.
     func isMonitorDisabled(_ screen: NSScreen) -> Bool {
+        disabledMonitors.contains(screen.localizedName) || isMonitorReserved(screen)
+    }
+
+    /// `true` when `screen` is in the user's `disabledMonitors` list.
+    /// Windows on such a screen float in place.
+    func isMonitorUserDisabled(_ screen: NSScreen) -> Bool {
         disabledMonitors.contains(screen.localizedName)
+    }
+
+    /// `true` when a running game has reserved `screen`.
+    func isMonitorReserved(_ screen: NSScreen) -> Bool {
+        reservedMonitors.contains(screen.localizedName)
+    }
+
+    /// The screen a window physically on `screen` is admitted to. A
+    /// reserved screen hands its windows to the nearest enabled screen,
+    /// where tiling moves them; any other screen answers itself.
+    func admissionScreen(for screen: NSScreen) -> NSScreen {
+        guard isMonitorReserved(screen) else { return screen }
+        return Self.nearestScreen(to: screen, among: enabledScreensLeftToRight()) ?? screen
+    }
+
+    /// The screen in `candidates` whose center is closest to `screen`'s;
+    /// the leftmost wins a tie.
+    static func nearestScreen(to screen: NSScreen, among candidates: [NSScreen]) -> NSScreen? {
+        func distance(_ other: NSScreen) -> CGFloat {
+            hypot(other.frame.midX - screen.frame.midX, other.frame.midY - screen.frame.midY)
+        }
+        return candidates.min { distance($0) < distance($1) }
     }
 
     // screens sorted left-to-right by CG x origin
