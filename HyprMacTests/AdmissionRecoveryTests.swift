@@ -875,6 +875,15 @@ final class FloatingRaiseRegressionTests: XCTestCase {
     }
 }
 
+final class FrameSizingFailureDescriptionTests: XCTestCase {
+    func testAXErrorCodesAppearInTheDescription() {
+        XCTAssertEqual("\(FrameSizingFailure.writeFailed(61531, .cannotComplete))",
+                       "writeFailed(61531, -25204)")
+        let optional: FrameSizingFailure? = .readFailed(7, .attributeUnsupported)
+        XCTAssertEqual("\(String(describing: optional))", "Optional(readFailed(7, -25205))")
+    }
+}
+
 final class MouseTrackingFocusRegressionTests: XCTestCase {
     func testPhysicalTopmostDispatchesFloaterAndExposedTilesWithoutFocusThrough() {
         let tracker = MouseTrackingManager()
