@@ -1390,31 +1390,71 @@ class TilingEngine {
                              progress: candidateProgress)
         }
         let reason = terminal.verdict.failure ?? .attemptsExhausted
+        let candidateTimedOut = terminal.progress.phase == .candidate
+            && terminal.progress.timeoutShapedCannotComplete
+            && Self.isDirectCannotComplete(reason)
         if let invalidOriginalID = originalFrames.keys.sorted().first(where: { windowID in
             originalFrames[windowID].map { !restorationFrame.contains($0) } ?? true
         }) {
             // an original parked off the usable frame is not a restoration
             // target, so the candidate writes stay where they landed. the
             // tree keeps its prior ratios: nothing here was verified
-            return .degraded(candidateReason: reason,
+            var candidateReason = reason
+            var actualFrames = terminal.actualFrames
+            var progress = candidateProgress
+            // a workspace switch reveals windows from their parked spot, so
+            // a slow app gets its slow retry here or not at all
+            if candidateTimedOut {
+                hyprLog(.notice, .tiling, "verified layout AX timeout recovery: reason=\(reason) "
+                        + "originals parked, retrying the layout with the slow timeout ids=["
+                        + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
+                let retry = timeoutRecoveryPoller.applyLayout(
+                    firstLayouts, usableFrame: rect, gap: gapSize, generation: generation
+                )
+                if case .accepted = retry.verdict {
+                    hyprLog(.notice, .tiling, "verified layout AX timeout recovery accepted")
+                    return .accepted(actualFrames: retry.actualFrames,
+                                     progress: FrameSizingProgressReport(candidate: retry.progress))
+                }
+                candidateReason = retry.verdict.failure ?? .attemptsExhausted
+                hyprLog(.notice, .tiling,
+                        "verified layout AX timeout recovery refused: reason=\(candidateReason)")
+                actualFrames = retry.actualFrames
+                progress = FrameSizingProgressReport(candidate: retry.progress)
+                guard layoutGeneration == generation else {
+                    return .degraded(candidateReason: .superseded, restorationReason: nil,
+                                     restorationAttempted: false,
+                                     actualFrames: actualFrames, progress: progress)
+                }
+            }
+            return .degraded(candidateReason: candidateReason,
                              restorationReason: .outsideUsableFrame(invalidOriginalID),
                              restorationAttempted: false,
-                             actualFrames: terminal.actualFrames,
-                             progress: candidateProgress)
+                             actualFrames: actualFrames,
+                             progress: progress)
         }
         let originals = windows.compactMap { window in
             originalFrames[window.windowID].map { (window, $0) }
         }
-        let restored = readbackPoller.applyRestoration(originals, usableFrame: restorationFrame,
+        var restored = readbackPoller.applyRestoration(originals, usableFrame: restorationFrame,
                                                         gap: gapSize, generation: generation)
+        // an app slow enough to time out the candidate times out the
+        // restoration the same way, which left the slow retry below
+        // unreachable for exactly the apps it exists for
+        if candidateTimedOut, restored.progress.timeoutShapedCannotComplete,
+           let restorationFailure = restored.verdict.failure,
+           Self.isDirectCannotComplete(restorationFailure),
+           layoutGeneration == generation {
+            hyprLog(.notice, .tiling, "verified layout AX timeout recovery: restoration timed out too "
+                    + "(\(restorationFailure)), restoring with the slow timeout")
+            restored = timeoutRecoveryPoller.applyRestoration(originals, usableFrame: restorationFrame,
+                                                              gap: gapSize, generation: generation)
+        }
         var progress = candidateProgress
         progress.restoration = restored.progress
         progress.restorationOverlaps = restored.overlaps
         if case .accepted = restored.verdict {
-            if terminal.progress.phase == .candidate,
-               terminal.progress.timeoutShapedCannotComplete,
-               Self.isDirectCannotComplete(reason),
-               layoutGeneration == generation {
+            if candidateTimedOut, layoutGeneration == generation {
                 hyprLog(.notice, .tiling, "verified layout AX timeout recovery: reason=\(reason) ids="
                         + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
                 let retry = timeoutRecoveryPoller.applyLayout(
