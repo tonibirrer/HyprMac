@@ -9,17 +9,26 @@ import XCTest
 final class CapsLockGuardTests: XCTestCase {
 
     private var lockOn = false
-    private var clears = 0
+    /// what the guard asked the HID system for
+    private var requests: [Bool] = []
+    /// whether a request takes; a re-syncing app ignores the guard
+    private var requestsTake = true
     private var guardUnderTest: CapsLockGuard!
 
     override func setUp() {
         lockOn = false
-        clears = 0
+        requests = []
+        requestsTake = true
         guardUnderTest = CapsLockGuard()
         guardUnderTest.isActive = { true }
         guardUnderTest.isLockOn = { [unowned self] in lockOn }
-        guardUnderTest.switchLockOff = { [unowned self] in clears += 1; lockOn = false; return true }
+        guardUnderTest.setLock = { [unowned self] on in
+            requests.append(on)
+            if requestsTake { lockOn = on }
+            return true
+        }
         guardUnderTest.frontmostApp = { "com.citrix.receiver.icaviewer.mac" }
+        guardUnderTest.runAfter = { _, work in work() }
     }
 
     func testALockSwitchedOnIsSwitchedOff() {
@@ -27,13 +36,14 @@ final class CapsLockGuardTests: XCTestCase {
 
         XCTAssertTrue(guardUnderTest.check(reason: "test"))
 
-        XCTAssertEqual(clears, 1)
+        XCTAssertEqual(requests, [false])
         XCTAssertFalse(lockOn)
+        XCTAssertEqual(guardUnderTest.failedClears, 0)
     }
 
     func testALockThatIsOffIsLeftAlone() {
         XCTAssertFalse(guardUnderTest.check(reason: "test"))
-        XCTAssertEqual(clears, 0)
+        XCTAssertEqual(requests, [])
     }
 
     func testAnotherHyprKeyLeavesCapsLockToTheUser() {
@@ -41,8 +51,22 @@ final class CapsLockGuardTests: XCTestCase {
         lockOn = true
 
         XCTAssertFalse(guardUnderTest.check(reason: "test"))
-        XCTAssertEqual(clears, 0)
+        XCTAssertEqual(requests, [])
         XCTAssertTrue(lockOn)
+    }
+
+    func testALockThatSurvivesAClearGetsOnThenOff() {
+        lockOn = true
+        requestsTake = false
+
+        guardUnderTest.check(reason: "test")
+        XCTAssertEqual(guardUnderTest.failedClears, 1)
+        requestsTake = true
+        guardUnderTest.check(reason: "test")
+
+        XCTAssertEqual(requests, [false, true, false])
+        XCTAssertFalse(lockOn)
+        XCTAssertEqual(guardUnderTest.failedClears, 0, "recovered")
     }
 
     func testItKeepsSwitchingItOffPastTheLogLimit() {
@@ -51,7 +75,8 @@ final class CapsLockGuardTests: XCTestCase {
             guardUnderTest.check(reason: "test")
         }
 
-        XCTAssertEqual(clears, 6, "the log goes quiet, the guard does not")
+        XCTAssertEqual(requests.count, 6, "the log goes quiet, the guard does not")
+        XCTAssertFalse(lockOn)
     }
 }
 

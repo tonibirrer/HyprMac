@@ -34,10 +34,19 @@ final class FullscreenSpaceController {
     /// A window joined; a tracked tile that went fullscreen must leave tiling.
     var memberJoined: (FullscreenMember) -> Void = { _ in }
     var memberLeft: (FullscreenMember) -> Void = { _ in }
+    var now: () -> Date = { Date() }
     /// Runs `work` on the main queue after `delay`.
     var runAfter: (_ delay: TimeInterval, _ work: @escaping () -> Void) -> Void = { delay, work in
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
+
+    /// Apps whose window went fullscreen this run, and until when a new
+    /// window of an app whose fullscreen window just went is held back.
+    private var fullscreenBundles: Set<String> = []
+    private var handoverUntil: [String: Date] = [:]
+    /// How long a new window of such an app waits before it is tiled.
+    static let handoverHold: TimeInterval = 5
+    static let freshWindowHold: TimeInterval = 2
 
     // MARK: - state
 
@@ -57,14 +66,23 @@ final class FullscreenSpaceController {
         let observed = displays.contains { !$0.fullscreenSpaces.isEmpty }
             ? reader.fullscreenWindows(in: displays, ignoring: ignoredPIDs())
             : []
+        return apply(observed)
+    }
+
+    /// The members' half of `refresh`, for what the window server reported.
+    @discardableResult
+    func apply(_ observed: [FullscreenWindowObservation]) -> Refresh {
         let wasShowing = Set(members.byWindow.values.filter(\.isShowing).map(\.windowID))
         let (added, removed) = members.reconcile(observed, assign: workspaceForNewMember)
         for member in added {
-            let app = NSRunningApplication(processIdentifier: member.pid)?.bundleIdentifier ?? "pid \(member.pid)"
+            if let bundleID = member.bundleID { fullscreenBundles.insert(bundleID) }
+            let app = member.bundleID ?? "pid \(member.pid)"
             hyprLog(.notice, .lifecycle, "fullscreen: \(app) window \(member.windowID) joins ws\(member.workspace) — takes \(screenName(member.displayUUID)) while ws\(member.workspace) is up")
             memberJoined(member)
         }
         for member in removed {
+            // a session window replaced on login or a resolution change
+            if let bundleID = member.bundleID { handoverUntil[bundleID] = now().addingTimeInterval(Self.handoverHold) }
             hyprLog(.notice, .lifecycle, "fullscreen: window \(member.windowID) left fullscreen or closed — ws\(member.workspace) gets \(screenName(member.displayUUID)) back")
             memberLeft(member)
         }
@@ -72,6 +90,27 @@ final class FullscreenSpaceController {
             .filter { $0.isShowing && !wasShowing.contains($0.windowID) }
             .sorted { $0.windowID < $1.windowID }
         return Refresh(membershipChanged: !added.isEmpty || !removed.isEmpty, newlyShown: newlyShown)
+    }
+
+    /// How much longer a window seen for the first time at `firstSeen`
+    /// must wait before it may be tiled, or `nil` when it need not.
+    ///
+    /// A fullscreen app replaces its window on a login or a resolution
+    /// change, and the new one is a normal window for a second or two
+    /// before it goes fullscreen. Tiled in that moment, it moved to
+    /// another screen and went fullscreen there. So a new window of an app
+    /// whose fullscreen window just went waits a few seconds, and one of an
+    /// app that went fullscreen this run waits a moment.
+    func holdRemaining(bundleID: String?, firstSeen: Date) -> TimeInterval? {
+        guard let bundleID else { return nil }
+        let t = now()
+        var until: Date?
+        if let handover = handoverUntil[bundleID], handover > t { until = handover }
+        if fullscreenBundles.contains(bundleID) {
+            let fresh = firstSeen.addingTimeInterval(Self.freshWindowHold)
+            if fresh > t, fresh > (until ?? .distantPast) { until = fresh }
+        }
+        return until.map { $0.timeIntervalSince(t) }
     }
 
     /// The screens among `screens` that `workspace`'s fullscreen members take.

@@ -3428,6 +3428,7 @@ class WindowManager {
             guard let self else { return }
             self.accessibility.excludedWindowIDs = self.fullscreen.members.windowIDs
         }
+        accessibility.holdBack = { [weak self] window in self?.holdsBackFullscreenCandidate(window) ?? false }
         accessibility.windowsBehindFullscreen = { [weak self] listed, remembered in
             guard let self else { return [] }
             let candidates = self.stateCache.knownWindowIDs
@@ -3436,6 +3437,35 @@ class WindowManager {
                 .compactMap { remembered[$0] }
             return self.fullscreen.windowsBehindFullscreen(candidates)
         }
+    }
+
+    /// When each held-back window was first seen.
+    private var heldBackSince: [CGWindowID: Date] = [:]
+
+    /// Leave a new window of a fullscreen app out of the snapshot while it
+    /// may still go fullscreen (`FullscreenSpaceController.holdRemaining`),
+    /// with a poll booked for when the hold ends.
+    private func holdsBackFullscreenCandidate(_ window: HyprWindow) -> Bool {
+        let id = window.windowID
+        guard !stateCache.knownWindowIDs.contains(id), !stateCache.hiddenWindowIDs.contains(id) else {
+            heldBackSince[id] = nil
+            return false
+        }
+        let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+        let firstSeen = heldBackSince[id] ?? Date()
+        guard let remaining = fullscreen.holdRemaining(bundleID: bundleID, firstSeen: firstSeen) else {
+            if heldBackSince.removeValue(forKey: id) != nil {
+                hyprLog(.notice, .discovery, "fullscreen: '\(window.title ?? "?")' (\(id)) of \(bundleID ?? "?") stayed a normal window — tiling it")
+            }
+            return false
+        }
+        if heldBackSince[id] == nil {
+            heldBackSince[id] = firstSeen
+            hyprLog(.notice, .discovery, "fullscreen: holding '\(window.title ?? "?")' (\(id)) of \(bundleID ?? "?") back \(String(format: "%.1f", remaining))s — it may go fullscreen")
+            pollingScheduler.schedule(after: remaining + 0.1)
+        }
+        heldBackSince = heldBackSince.filter { Date().timeIntervalSince($0.value) < 30 }
+        return true
     }
 
     /// The workspace a fullscreen window seen for the first time belongs

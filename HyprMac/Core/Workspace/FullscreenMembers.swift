@@ -5,6 +5,7 @@ import Cocoa
 struct FullscreenMember: Equatable {
     let windowID: CGWindowID
     let pid: pid_t
+    var bundleID: String? = nil
     let workspace: Int
     var space: CGSSpaceID
     var displayUUID: String
@@ -44,8 +45,9 @@ final class FullscreenMembers {
                 member.isShowing = o.isShowing
                 byWindow[o.windowID] = member
             } else {
-                let member = FullscreenMember(windowID: o.windowID, pid: o.pid, workspace: assign(o),
-                                              space: o.space, displayUUID: o.displayUUID, isShowing: o.isShowing)
+                let member = FullscreenMember(windowID: o.windowID, pid: o.pid, bundleID: o.bundleID,
+                                              workspace: assign(o), space: o.space,
+                                              displayUUID: o.displayUUID, isShowing: o.isShowing)
                 byWindow[o.windowID] = member
                 added.append(member)
             }

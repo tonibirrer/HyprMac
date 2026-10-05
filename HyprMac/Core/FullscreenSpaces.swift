@@ -27,6 +27,7 @@ struct DisplaySpaceState: Equatable {
 struct FullscreenWindowObservation: Equatable {
     let windowID: CGWindowID
     let pid: pid_t
+    var bundleID: String? = nil
     let space: CGSSpaceID
     let displayUUID: String
     /// Its Space is the one its display shows right now.
@@ -116,7 +117,9 @@ final class FullscreenSpaceReader {
         return largest.sorted { $0.key < $1.key }.compactMap { space, window in
             guard let owner = owners[space] else { return nil }
             return FullscreenWindowObservation(
-                windowID: window.windowID, pid: window.pid, space: space,
+                windowID: window.windowID, pid: window.pid,
+                bundleID: NSRunningApplication(processIdentifier: window.pid)?.bundleIdentifier,
+                space: space,
                 displayUUID: owner.display.displayUUID,
                 isShowing: owner.display.currentSpace == space)
         }

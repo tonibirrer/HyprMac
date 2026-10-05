@@ -206,6 +206,11 @@ class AccessibilityManager {
     /// `nil` adds nothing.
     var windowsBehindFullscreen: ((_ listed: Set<CGWindowID>, _ remembered: [CGWindowID: HyprWindow]) -> [HyprWindow])?
 
+    /// A window to leave out of this snapshot for now — a new window of a
+    /// fullscreen app that may go fullscreen in a moment. Wired by
+    /// `WindowManager`; `nil` holds nothing back.
+    var holdBack: ((HyprWindow) -> Bool)?
+
     /// The last window object each snapshot carried, by id. AX lists only
     /// the windows on Spaces that are showing; this keeps the element of a
     /// window whose Space went out of view. Pruned by `forgetRememberedWindows`.
@@ -354,6 +359,10 @@ class AccessibilityManager {
         // native-fullscreen windows are workspace members, never tiles
         if !excludedWindowIDs.isEmpty {
             windows.removeAll { excludedWindowIDs.contains($0.windowID) }
+        }
+        // a new window that may be about to go fullscreen waits
+        if let holdBack {
+            windows.removeAll(where: holdBack)
         }
         // windows behind a fullscreen Space are off the on-screen list and
         // out of AX's window list, but still there

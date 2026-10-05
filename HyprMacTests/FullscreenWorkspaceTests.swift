@@ -248,3 +248,119 @@ private final class FullscreenTestWindow: HyprWindow {
     override func focus() { focusCount += 1 }
     override func focusWithoutRaise() { }
 }
+
+// MARK: - a replaced session window is held back, not tiled away
+
+final class FullscreenHandoverTests: XCTestCase {
+
+    private var clock = Date(timeIntervalSince1970: 1_000)
+    private var controller: FullscreenSpaceController!
+
+    override func setUp() {
+        controller = FullscreenSpaceController()
+        controller.now = { [unowned self] in clock }
+        controller.workspaceForNewMember = { _ in 4 }
+    }
+
+    private func session(_ id: CGWindowID, pid: pid_t = 50) -> FullscreenWindowObservation {
+        FullscreenWindowObservation(windowID: id, pid: pid, bundleID: "com.citrix.receiver.icaviewer.mac",
+                                    space: 217, displayUUID: "AW", isShowing: true)
+    }
+
+    func testAnAppNeverFullscreenIsNotHeld() {
+        XCTAssertNil(controller.holdRemaining(bundleID: "com.mitchellh.ghostty", firstSeen: clock))
+    }
+
+    func testANewWindowOfAFullscreenAppWaitsAMoment() {
+        controller.apply([session(4367)])
+
+        XCTAssertEqual(controller.holdRemaining(bundleID: "com.citrix.receiver.icaviewer.mac", firstSeen: clock),
+                       FullscreenSpaceController.freshWindowHold)
+        clock += FullscreenSpaceController.freshWindowHold + 0.1
+        XCTAssertNil(controller.holdRemaining(bundleID: "com.citrix.receiver.icaviewer.mac",
+                                              firstSeen: clock - FullscreenSpaceController.freshWindowHold - 0.1))
+    }
+
+    func testAReplacedSessionWindowIsHeldLongerEvenUnderANewProcess() {
+        controller.apply([session(4367, pid: 50)])
+        controller.apply([])   // the login closed the session window
+
+        clock += 1
+        let remaining = controller.holdRemaining(bundleID: "com.citrix.receiver.icaviewer.mac", firstSeen: clock)
+
+        XCTAssertEqual(remaining ?? 0, FullscreenSpaceController.handoverHold - 1, accuracy: 0.001)
+        clock += FullscreenSpaceController.handoverHold
+        XCTAssertNil(controller.holdRemaining(bundleID: "com.citrix.receiver.icaviewer.mac",
+                                              firstSeen: clock - FullscreenSpaceController.freshWindowHold - 1))
+    }
+}
+
+// MARK: - a window that comes back takes its own slot
+
+final class LinkedOrderMemoryTests: XCTestCase {
+
+    private var frames: [CGWindowID: CGRect] = [:]
+    private var clock: TimeInterval = 0
+    private var left: FullscreenTestScreen!
+    private var right: FullscreenTestScreen!
+    private var engine: TilingEngine!
+    private var windows: [FullscreenTestWindow] = []
+
+    override func setUp() {
+        left = FullscreenTestScreen(x: 0, name: "left-order")
+        right = FullscreenTestScreen(x: 1600, name: "right-order")
+        let display = DisplayManager(screenSource: { [left = left!, right = right!] in [left, right] })
+        var io: ((@escaping () -> UInt64) -> FrameSizingIO)?
+        engine = TilingEngine(displayManager: display,
+                              frameSizingIOFactory: { _, generation in io!(generation) })
+        io = { [unowned self] generation in
+            FrameSizingIO(
+                setMessagingTimeout: { _, _ in .success },
+                writeSize: { [unowned self] id, size, _ in frames[id]?.size = size; return .success },
+                writePosition: { [unowned self] id, point, _ in frames[id]?.origin = point; return .success },
+                readPosition: { [unowned self] id, _ in (.success, frames[id]?.origin) },
+                readSize: { [unowned self] id, _ in (.success, frames[id]?.size) },
+                now: { [unowned self] in clock },
+                sleep: { [unowned self] in clock += $0 },
+                currentGeneration: generation)
+        }
+        windows = (1...4).map { FullscreenTestWindow(id: CGWindowID(800 + $0)) }
+        for (i, w) in windows.enumerated() {
+            frames[w.windowID] = CGRect(x: 20 + CGFloat(i) * 10, y: 20, width: 300, height: 300)
+        }
+    }
+
+    private func strip() -> [CGWindowID] {
+        engine.windowIDs(inTreeForWorkspace: 2, screen: left) + engine.windowIDs(inTreeForWorkspace: 2, screen: right)
+    }
+
+    func testAWindowThatLeftAndCameBackTakesItsOwnSlot() {
+        engine.tileLinked(windows, onWorkspace: 2, screens: [left, right])
+        let before = strip()
+        let second = windows[1]
+
+        engine.removeWindowID(second.windowID)   // hidden, or missed by a snapshot
+        engine.tileLinked(windows.filter { $0 !== second }, onWorkspace: 2, screens: [left, right])
+        engine.tileLinked(windows, onWorkspace: 2, screens: [left, right])
+
+        XCTAssertEqual(strip(), before, "not appended at the right end")
+    }
+
+    func testAWindowMovedAwayAndBackIsNew() {
+        engine.tileLinked(windows, onWorkspace: 2, screens: [left, right])
+        let first = windows[0]
+
+        engine.removeWindow(first, fromWorkspace: 2)
+        engine.tileLinked(Array(windows.dropFirst()), onWorkspace: 2, screens: [left, right])
+        engine.tileLinked(Array(windows.dropFirst()) + [first], onWorkspace: 2, screens: [left, right])
+
+        XCTAssertEqual(strip().last, first.windowID, "a window that moved in appends at the right end")
+    }
+
+    func testReinsertionGoesAfterTheNearestRememberedPredecessor() {
+        XCTAssertEqual(TilingEngine.insertingRemembered([2], into: [1, 3, 4], remembered: [1, 2, 3, 4]), [1, 2, 3, 4])
+        XCTAssertEqual(TilingEngine.insertingRemembered([1], into: [3, 4], remembered: [1, 2, 3, 4]), [1, 3, 4])
+        XCTAssertEqual(TilingEngine.insertingRemembered([2], into: [3, 1, 4], remembered: [1, 2, 3, 4]), [3, 1, 2, 4],
+                       "after its predecessor wherever a swap put it")
+    }
+}
