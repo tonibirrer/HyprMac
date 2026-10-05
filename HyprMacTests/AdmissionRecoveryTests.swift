@@ -829,6 +829,59 @@ final class FloatingRaiseRegressionTests: XCTestCase {
         XCTAssertEqual(restoreCount { _, _, controller in controller.isTransientUIActive = { true } }, 0)
         XCTAssertEqual(restoreCount { _, _, controller in controller.isScratchpadVisible = { true } }, 0)
     }
+
+    // macOS keeps a background app's window below the active app's key
+    // window, so a floater over the focused tile cannot be lifted. Seen
+    // live as a raise every poll, five a second, for minutes.
+    func testRaiseThatLeavesFloaterBehindIsNotRepeatedEveryPoll() {
+        let (controller, _, _, focus) = makeController(tiledPID: 100, floatingPID: 200)
+        var raises: [CGWindowID] = []
+        controller.performRaise = { raises.append($0.windowID); return .success }
+        controller.scheduleAfter = { _, _ in }
+        var frontmost: pid_t = 100
+        controller.frontmostPID = { frontmost }
+
+        for _ in 0..<5 { controller.raiseBehind() }
+        XCTAssertEqual(raises, [12], "a raise that changed nothing must not repeat")
+
+        focus.recordFocus(13, reason: "test")
+        focus.recordFocus(11, reason: "test")
+        controller.raiseBehind()
+        controller.raiseBehind()
+        XCTAssertEqual(raises, [12, 12], "a focus change earns one more try")
+
+        frontmost = 300
+        controller.raiseBehind()
+        controller.raiseBehind()
+        XCTAssertEqual(raises, [12, 12, 12], "a front-app change earns one more try")
+    }
+
+    func testFloaterBuriedAgainAfterASuccessfulLiftIsRaisedAgain() {
+        let (controller, _, _, _) = makeController(tiledPID: 100, floatingPID: 200)
+        var raises: [CGWindowID] = []
+        var order: [CGWindowID] = [11, 12]
+        controller.windowListForZOrder = { order.map { [kCGWindowNumber as String: $0] } }
+        controller.performRaise = { raises.append($0.windowID); return .success }
+        controller.scheduleAfter = { _, _ in }
+        controller.frontmostPID = { 100 }
+
+        controller.raiseBehind()
+        order = [12, 11]
+        controller.raiseBehind()
+        order = [11, 12]
+        controller.raiseBehind()
+
+        XCTAssertEqual(raises, [12, 12])
+    }
+}
+
+final class FrameSizingFailureDescriptionTests: XCTestCase {
+    func testAXErrorCodesAppearInTheDescription() {
+        XCTAssertEqual("\(FrameSizingFailure.writeFailed(61531, .cannotComplete))",
+                       "writeFailed(61531, -25204)")
+        let optional: FrameSizingFailure? = .readFailed(7, .attributeUnsupported)
+        XCTAssertEqual("\(String(describing: optional))", "Optional(readFailed(7, -25205))")
+    }
 }
 
 final class MouseTrackingFocusRegressionTests: XCTestCase {

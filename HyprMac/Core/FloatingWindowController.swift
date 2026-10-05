@@ -87,9 +87,26 @@ final class FloatingWindowController {
     // red flash on a float→tile the tree or the screen refused.
     var rejectFloatToTile: ((HyprWindow, TilingEngine.ForceInsertFailure) -> Void)?
 
+    var frontmostPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+
     // same-stack-frame reentrancy guard for raiseBehind. paired with defer.
     // moved here from WindowManager (per §5.5 — not a SuppressionRegistry key).
     private var isRaising = false
+
+    /// The state the last raise was tried in. macOS keeps a background
+    /// app's raised window below the active app's key window, so a floater
+    /// overlapping the focused tile stays behind no matter how often it is
+    /// raised. Meeting the same state again means the last raise did
+    /// nothing; it is not repeated until focus, the front app or the
+    /// stacking changes.
+    private struct RaiseAttempt: Equatable {
+        let floaters: [CGWindowID]
+        let focusGeneration: UInt64
+        let frontmostPID: pid_t?
+        let stacking: [CGWindowID]
+    }
+    private var lastRaiseAttempt: RaiseAttempt?
+    private var reportedIneffectiveRaise = false
 
     init(stateCache: WindowStateCache,
          suppressions: SuppressionRegistry,
@@ -279,7 +296,9 @@ final class FloatingWindowController {
     /// a native menu is tracking — the post-raise focus restore would
     /// dismiss the menu. After raising, focus is restored to the
     /// previously focused tiled window via `focusWithoutRaise` so the
-    /// raise itself does not hijack keyboard focus.
+    /// raise itself does not hijack keyboard focus. A raise that left the
+    /// floater behind is not repeated until the state changes (see
+    /// `RaiseAttempt`); the poll calls this five times a second.
     func raiseBehind() {
         guard !isRaising else { return }
         // scratchpad is quasimodal: it owns the level-0 stack (scrim below,
@@ -293,14 +312,15 @@ final class FloatingWindowController {
         isRaising = true
         defer { isRaising = false }
 
-        let behind = floatingWindowsBehindTiled(
+        let snapshot = stackingSnapshot(
             floatingWindowIDs: stateCache.floatingWindowIDs,
             tiledPositions: stateCache.tiledPositions
         )
+        let behind = snapshot.behind
         let previousFocusID = focusController.lastFocusedID
         let previousFocusGeneration = focusController.generation
         let previousWindow = stateCache.cachedWindows[previousFocusID]
-        let frontmostBefore = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let frontmostBefore = frontmostPID()
         let focusedTiledPID = previousWindow.flatMap {
             stateCache.floatingWindowIDs.contains($0.windowID) ? nil : $0.ownerPID
         }
@@ -309,7 +329,25 @@ final class FloatingWindowController {
             guard let focusedTiledPID else { return true }
             return stateCache.cachedWindows[wid]?.ownerPID != focusedTiledPID
         }
-        guard !toRaise.isEmpty else { return }
+        guard !toRaise.isEmpty else {
+            lastRaiseAttempt = nil
+            reportedIneffectiveRaise = false
+            return
+        }
+
+        let attempt = RaiseAttempt(floaters: toRaise.sorted(),
+                                   focusGeneration: previousFocusGeneration,
+                                   frontmostPID: frontmostBefore,
+                                   stacking: snapshot.stacking)
+        guard attempt != lastRaiseAttempt else {
+            if !reportedIneffectiveRaise {
+                reportedIneffectiveRaise = true
+                hyprLog(.notice, .floating, "raise behind: wids=\(attempt.floaters) still behind after a raise (focus=\(previousFocusID)) — waiting for focus or stacking to change")
+            }
+            return
+        }
+        lastRaiseAttempt = attempt
+        reportedIneffectiveRaise = false
 
         suppressions.suppress("activation-switch", for: 0.5)
         suppressions.suppress("mouse-focus", for: 0.15)
@@ -340,7 +378,7 @@ final class FloatingWindowController {
                       self.workspaceManager.isWindowVisible(previousFocusID),
                       !self.stateCache.floatingWindowIDs.contains(previousFocusID),
                       !self.isTransientUIActive(), !self.isScratchpadVisible() else { return }
-                let frontmostNow = NSWorkspace.shared.frontmostApplication?.processIdentifier
+                let frontmostNow = self.frontmostPID()
                 if frontmostNow != frontmostBefore || frontmostNow != prev.ownerPID {
                     hyprLog(.notice, .floating, "raise behind restore: wid=\(previousFocusID)")
                     self.restoreFocusWithoutRaise(prev)
@@ -383,18 +421,31 @@ final class FloatingWindowController {
         floatingWindowIDs: Set<CGWindowID>,
         tiledPositions: [CGWindowID: CGRect]
     ) -> [CGWindowID] {
+        stackingSnapshot(floatingWindowIDs: floatingWindowIDs, tiledPositions: tiledPositions).behind
+    }
+
+    /// `behind` is `floatingWindowsBehindTiled`; `stacking` is the floaters
+    /// and tiles front to back, empty without z-order info.
+    private func stackingSnapshot(
+        floatingWindowIDs: Set<CGWindowID>,
+        tiledPositions: [CGWindowID: CGRect]
+    ) -> (behind: [CGWindowID], stacking: [CGWindowID]) {
         let visibleFloaters = floatingWindowIDs.filter { workspaceManager.isWindowVisible($0) }
-        guard !visibleFloaters.isEmpty else { return [] }
+        guard !visibleFloaters.isEmpty else { return ([], []) }
 
         guard let infoList = windowListForZOrder() else {
-            return Array(visibleFloaters)
+            return (Array(visibleFloaters), [])
         }
 
         // build z-index map: lower index = closer to front
         var zIndex: [CGWindowID: Int] = [:]
+        var stacking: [CGWindowID] = []
         for (i, info) in infoList.enumerated() {
             if let wid = info[kCGWindowNumber as String] as? CGWindowID {
                 zIndex[wid] = i
+                if visibleFloaters.contains(wid) || tiledPositions[wid] != nil {
+                    stacking.append(wid)
+                }
             }
         }
 
@@ -420,7 +471,7 @@ final class FloatingWindowController {
                 needsRaise.append(wid)
             }
         }
-        return needsRaise
+        return (needsRaise, stacking)
     }
 
 }

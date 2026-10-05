@@ -1136,6 +1136,62 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
             .reduce(into: Set<CGWindowID>()) { $0.formUnion($1.windowIDs) }
     }
 
+    // Zen after a day of uptime: the call after a real resize takes ~160 ms
+    // against the 100 ms per-call timeout, so the restoration times out the
+    // same way the candidate did. That used to skip the slow retry, and
+    // every Hypr+T on the window ended floating again.
+    func testSlowAppThatAlsoTimesOutTheRestorationGetsTheSlowRetry() throws {
+        let f = try fixture()
+        let members = Array(f.windows.prefix(2))
+        f.trace.busyAfterResize[members[0].windowID] = 0.16
+
+        f.engine.tileWindows(members, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(unverifiedIDs(f.engine, workspace: 1), [], "the slow retry verifies the layout")
+        let layout = Dictionary(uniqueKeysWithValues: f.tree.layout(
+            in: f.engine.displayManager.cgRect(for: f.screen),
+            gap: f.engine.gapSize, padding: f.engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        for window in members {
+            XCTAssertEqual(f.trace.frames[window.windowID], layout[window.windowID])
+        }
+    }
+
+    // the sticky carry on a workspace switch: the windows come from their
+    // parked spot, which is no restoration target, so the slow retry has
+    // to run on the layout itself
+    func testSlowAppRevealedFromParkedFramesGetsTheSlowRetry() throws {
+        let f = try fixture()
+        let members = Array(f.windows.prefix(2))
+        let usable = f.engine.displayManager.cgRect(for: f.screen)
+        let parked = CGRect(x: usable.maxX + 200, y: usable.minY + 20, width: 120, height: 120)
+        for window in members { f.trace.frames[window.windowID] = parked }
+        f.trace.busyAfterResize[members[0].windowID] = 0.16
+
+        f.engine.tileWindows(members, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertEqual(unverifiedIDs(f.engine, workspace: 1), [], "the slow retry verifies the layout")
+        let layout = Dictionary(uniqueKeysWithValues: f.tree.layout(
+            in: usable, gap: f.engine.gapSize, padding: f.engine.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        for window in members {
+            XCTAssertEqual(f.trace.frames[window.windowID], layout[window.windowID])
+        }
+    }
+
+    func testHungAppStillEndsUnverifiedWithinTheSlowDeadlines() throws {
+        let f = try fixture()
+        let members = Array(f.windows.prefix(2))
+        f.trace.busyAfterResize[members[0].windowID] = 60
+
+        f.engine.tileWindows(members, onWorkspace: 1, screen: f.screen)
+
+        XCTAssertFalse(unverifiedIDs(f.engine, workspace: 1).isEmpty)
+        // candidate 0.36 + restoration 0.36 + slow restoration 0.75, plus
+        // the one call each deadline check can overrun by
+        XCTAssertLessThan(f.trace.elapsed, 2.0)
+    }
+
     func testDegradedLayoutWithoutWritesKeepsPriorMembership() throws {
         let f = try fixture()
         // no capture for the new window, so the transaction gives up before
@@ -1304,11 +1360,30 @@ private final class MembershipTrace {
     func forgetWrites() { wrote = false }
     private var wrote = false
     private var now: TimeInterval = 0
+    /// how long a window stays unresponsive after a setter actually changes
+    /// its size, the way a heavy browser window relayouts: the next AX call
+    /// waits that out, or times out with `cannotComplete`
+    var busyAfterResize: [CGWindowID: TimeInterval] = [:]
+    private var busyUntil: [CGWindowID: TimeInterval] = [:]
+    /// virtual time the AX calls have consumed so far
+    var elapsed: TimeInterval { now }
+
+    private func waitOut(_ id: CGWindowID, timeout: TimeInterval) -> Bool {
+        let wait = (busyUntil[id] ?? now) - now
+        guard wait > 0 else { return true }
+        guard wait < timeout else { now += timeout; return false }
+        now += wait
+        return true
+    }
 
     func io(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
         var io = FrameSizingIO(setMessagingTimeout: { _, _ in .success },
-                      writeSize: { [self] id, size, _ in
+                      writeSize: { [self] id, size, timeout in
                           onWrite?(); wrote = true; written.insert(id)
+                          guard waitOut(id, timeout: timeout) else { return .cannotComplete }
+                          if let busy = busyAfterResize[id], frames[id]?.size != size {
+                              busyUntil[id] = now + busy
+                          }
                           if failNextSizeWriteID == id {
                               failNextSizeWriteID = nil
                               return .cannotComplete
@@ -1320,18 +1395,23 @@ private final class MembershipTrace {
                                                     height: max(size.height - short, floor.height))
                           return .success
                       },
-                      writePosition: { [self] id, position, _ in
+                      writePosition: { [self] id, position, timeout in
                           onWrite?(); written.insert(id)
+                          guard waitOut(id, timeout: timeout) else { return .cannotComplete }
                           requested[id, default: .zero].origin = position
                           frames[id]?.origin = position
                           return .success
                       },
-                      readPosition: { [self] id, _ in
+                      readPosition: { [self] id, timeout in
+                          guard waitOut(id, timeout: timeout) else { return (.cannotComplete, nil) }
                           if wrote && rejectReadsFor.contains(id) { return (.cannotComplete, nil) }
                           if wrote && rejectNextRead { rejectNextRead = false; return (.cannotComplete, nil) }
                           return (.success, frames[id]?.origin)
                       },
-                      readSize: { [self] id, _ in (.success, frames[id]?.size) },
+                      readSize: { [self] id, timeout in
+                          guard waitOut(id, timeout: timeout) else { return (.cannotComplete, nil) }
+                          return (.success, frames[id]?.size)
+                      },
                       now: { [self] in now }, sleep: { [self] in now += $0 }, currentGeneration: generation)
         io.endFrameWrite = { [self] _, _, _ -> AXFrameWriteBatch.EndResult in
             guard let endError else { return .restored }

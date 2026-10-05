@@ -14,6 +14,21 @@ struct HyprMacApp: App {
     private let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     #endif
 
+    init() {
+        Self.seedMenuBarPosition()
+    }
+
+    /// Items are laid out from the right edge; a larger preferred position sits
+    /// further left. Without a stored value the wide indicator lands left of the
+    /// notch cutoff and its menu becomes unreachable. Seed a small value once;
+    /// a position the user (or macOS) already saved is left alone.
+    private static func seedMenuBarPosition() {
+        let key = "NSStatusItem Preferred Position Item-0"
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: key) == nil else { return }
+        defaults.set(120, forKey: key)
+    }
+
     var body: some Scene {
         MenuBarExtra {
             #if HYPRMAC_DEBUG_VARIANT
