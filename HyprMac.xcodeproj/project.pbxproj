@@ -168,6 +168,7 @@
 		87509383B627C5F0A3B32B23 /* PollingScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4BF3E3B39107A11D98F0575 /* PollingScheduler.swift */; };
 		884A5BB21E7E4D13F3037146 /* FullHeightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 787772BD2B63EB7FAEB9DC58 /* FullHeightTests.swift */; };
 		885B8A821F467AE752F847B4 /* AccordionLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */; };
+		896EC4CDE494AB7BC9B94EAA /* SwitchDroppedTileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3E67A220D36CA8FD9AB3F6A /* SwitchDroppedTileTests.swift */; };
 		8A7450A0AEBA21F9865B5BEA /* DragSwapHandlerInsertionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C3A29473C9D3ECD870EB22 /* DragSwapHandlerInsertionTests.swift */; };
 		8BEC65B84A975386F95AA087 /* TiledDragTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8049A0C6B0FBEF8B6ED25B /* TiledDragTarget.swift */; };
 		8BF6C14CE9CD634B0E97B190 /* GameScreenTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D625AA8593E0235F3D1EF2AB /* GameScreenTests.swift */; };
@@ -442,6 +443,7 @@
 		A034E555A586C182E187021F /* HyprMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyprMacApp.swift; sourceTree = "<group>"; };
 		A202B01AD893174E99223B4E /* LoginItemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemController.swift; sourceTree = "<group>"; };
 		A36D359F723D63F2E6036D15 /* AppLauncherManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLauncherManager.swift; sourceTree = "<group>"; };
+		A3E67A220D36CA8FD9AB3F6A /* SwitchDroppedTileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwitchDroppedTileTests.swift; sourceTree = "<group>"; };
 		A7BD70717FD497B0899FBCE5 /* KeybindOverlayController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindOverlayController.swift; sourceTree = "<group>"; };
 		AAA7A4CC338AF3693AFAB6A7 /* SingleScreenModeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleScreenModeTests.swift; sourceTree = "<group>"; };
 		ACE3FC5B95249CF81BC8F117 /* LayoutTreeRebuildTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutTreeRebuildTests.swift; sourceTree = "<group>"; };
@@ -808,6 +810,7 @@
 				60699CDEB76B9498153F2157 /* StickyWindowsTests.swift */,
 				2D7985CD063C3A77FD0C48EF /* SupportDirectoryImportTests.swift */,
 				306A7B2B7B3F09F08F953F35 /* SuppressionRegistryTests.swift */,
+				A3E67A220D36CA8FD9AB3F6A /* SwitchDroppedTileTests.swift */,
 				2AECFAE9BE1E8270FACA3F28 /* TiledDragEventTests.swift */,
 				4F2117AD40136A8602F18F8B /* TiledDragTargetTests.swift */,
 				9812349B328396A07257C085 /* TiledDragTransactionTests.swift */,
@@ -1309,6 +1312,7 @@
 				6DD01311B1866859DE6569CC /* StickyWindowsTests.swift in Sources */,
 				1F9D6BD162F161D57BF6AE3B /* SupportDirectoryImportTests.swift in Sources */,
 				EDC0EDCDC01F4A5310E4A07E /* SuppressionRegistryTests.swift in Sources */,
+				896EC4CDE494AB7BC9B94EAA /* SwitchDroppedTileTests.swift in Sources */,
 				8456B287CD1B9AC9E86336E5 /* TileScratchpadTests.swift in Sources */,
 				93F279679A1DA953F5BD2707 /* TiledDragEventTests.swift in Sources */,
 				61B6EAC180E12008C04C8D70 /* TiledDragTargetTests.swift in Sources */,
