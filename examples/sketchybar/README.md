@@ -5,8 +5,8 @@ Workspace indicators with per-workspace app icons for [sketchybar](https://githu
 ## How it works
 
 - `scripts/hyprmacctl` (repo root) talks to HyprMac's two unix sockets — `hyprmac.sock` for JSON queries (`workspaces`, `windows <ws>`, `focused`, `dispatch workspace <ws>`) and `hyprmac.events.sock` for the event stream (`workspace>>FOCUSED>>PREV`, `windowschanged>>`). This mirrors Hyprland's `hyprctl` + `socat`-on-socket2 pattern.
-- `plugins/hyprmac_listener.sh` streams those events into sketchybar triggers (`hyprmac_workspace_change`, `hyprmac_update_windows`). It is started by the item script and reconnects if HyprMac restarts.
-- `items/hyprmac.sh` creates one item per workspace; `plugins/hyprmac.sh` handles the focused highlight (workspace accent color when set); `plugins/hyprmac_windows.sh` renders the app-icon strips via your existing `icon_map.sh`.
+- `plugins/hyprmac_listener.sh` streams those events into sketchybar triggers (`hyprmac_workspace_change`, `hyprmac_update_windows`). It is started by the item script and reconnects if HyprMac restarts. Each time it connects, it repaints the whole bar from HyprMac's current state. When HyprMac quits, it hides the workspace items until HyprMac is back.
+- `items/hyprmac.sh` creates one item for each of the ten workspaces, whether or not HyprMac is running yet. sketchybar usually loads first at login, so the items start hidden and the listener paints them. `plugins/hyprmac.sh` handles the focused highlight (workspace accent color when set); `plugins/hyprmac_windows.sh` renders the app-icon strips via your existing `icon_map.sh`.
 
 ## Install
 
