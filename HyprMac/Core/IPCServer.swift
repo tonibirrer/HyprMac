@@ -47,6 +47,9 @@ final class IPCServer {
     private var eventClients: Set<Int32> = []
     private var observers: [NSObjectProtocol] = []
     private var lastFocusedWorkspace: Int = 1
+    /// Native-fullscreen windows of a workspace. They are no tiles but
+    /// belong to it, so a status bar counts and lists them.
+    var fullscreenWindows: (Int) -> [FullscreenMember] = { _ in [] }
     private let ioQueue = DispatchQueue(label: "hyprmac.ipc", qos: .userInitiated)
 
     init(workspaceManager: WorkspaceManager,
@@ -212,6 +215,7 @@ final class IPCServer {
         return (1...workspaceManager.workspaceCount).map { ws in
             let home = workspaceManager.homeScreenForWorkspace(ws)
             let windowIDs = workspaceManager.windowIDs(onWorkspace: ws)
+                .union(fullscreenWindows(ws).map(\.windowID))
             return [
                 "id": ws,
                 "monitor": home?.localizedName ?? "",
@@ -226,7 +230,19 @@ final class IPCServer {
     }
 
     private func windowsPayload(_ ws: Int) -> [[String: Any]] {
-        workspaceManager.windowIDs(onWorkspace: ws).sorted().compactMap { wid in
+        let fullscreen: [[String: Any]] = fullscreenWindows(ws).compactMap { member in
+            guard let app = NSRunningApplication(processIdentifier: member.pid) else { return nil }
+            return [
+                "id": Int(member.windowID),
+                "app": app.localizedName ?? "",
+                "bundleID": app.bundleIdentifier ?? "",
+                "title": "",
+                "hidden": false,
+                "sticky": false,
+                "fullscreen": true,
+            ]
+        }
+        return workspaceManager.windowIDs(onWorkspace: ws).sorted().compactMap { wid -> [String: Any]? in
             guard let pid = stateCache.windowOwners[wid],
                   let app = NSRunningApplication(processIdentifier: pid) else { return nil }
             return [
@@ -237,7 +253,7 @@ final class IPCServer {
                 "hidden": stateCache.hiddenWindowIDs.contains(wid),
                 "sticky": workspaceManager.isStickyWindow(wid),
             ]
-        }
+        } + fullscreen
     }
 
     private func json(_ obj: Any) -> String {

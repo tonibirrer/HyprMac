@@ -195,6 +195,27 @@ class AccessibilityManager {
     /// Their windows stay untracked: never tiled, parked, or floated.
     var ignoredPIDs: Set<pid_t> = []
 
+    /// Windows that never enter a snapshot — native-fullscreen windows,
+    /// which `FullscreenSpaceController` tracks as workspace members.
+    var excludedWindowIDs: Set<CGWindowID> = []
+
+    /// Windows a snapshot must keep although the on-screen list misses
+    /// them: those behind a fullscreen Space. Called with the ids already
+    /// listed and every window a snapshot has carried before, whose AX
+    /// elements still read and write them. Wired by `WindowManager`;
+    /// `nil` adds nothing.
+    var windowsBehindFullscreen: ((_ listed: Set<CGWindowID>, _ remembered: [CGWindowID: HyprWindow]) -> [HyprWindow])?
+
+    /// The last window object each snapshot carried, by id. AX lists only
+    /// the windows on Spaces that are showing; this keeps the element of a
+    /// window whose Space went out of view. Pruned by `forgetRememberedWindows`.
+    private(set) var rememberedWindows: [CGWindowID: HyprWindow] = [:]
+
+    /// Drop remembered windows except `ids` — the ones still tracked.
+    func forgetRememberedWindows(except ids: Set<CGWindowID>) {
+        rememberedWindows = rememberedWindows.filter { ids.contains($0.key) }
+    }
+
     func getAllWindows() -> [HyprWindow] {
         guard AXIsProcessTrusted() else { return [] }
 
@@ -329,6 +350,16 @@ class AccessibilityManager {
                     windows.append(hw)
                 }
             }
+        }
+        // native-fullscreen windows are workspace members, never tiles
+        if !excludedWindowIDs.isEmpty {
+            windows.removeAll { excludedWindowIDs.contains($0.windowID) }
+        }
+        // windows behind a fullscreen Space are off the on-screen list and
+        // out of AX's window list, but still there
+        for w in windows { rememberedWindows[w.windowID] = w }
+        if let windowsBehindFullscreen {
+            windows.append(contentsOf: windowsBehindFullscreen(Set(windows.map(\.windowID)), rememberedWindows))
         }
         return windows
     }

@@ -488,6 +488,23 @@ class TilingEngine {
         }
     }
 
+    /// Empty `workspace`'s tree on `screen` without retiling. Its windows
+    /// stay admitted to the workspace; the next `tileLinked` over the
+    /// remaining screens takes them into its strip. For a linked workspace
+    /// whose native-fullscreen window takes that screen while it is up.
+    ///
+    /// - Returns: the ids that left the tree.
+    @discardableResult
+    func vacateTree(forWorkspace workspace: Int, screen: NSScreen) -> [CGWindowID] {
+        guard let t = trees[TilingKey(workspace: workspace, screen: screen)] else { return [] }
+        let windows = t.allWindows
+        guard !windows.isEmpty else { return [] }
+        invalidatePendingLayout()
+        for w in windows { t.remove(w) }
+        t.root.pruneEmptyNodes()
+        return windows.map(\.windowID)
+    }
+
     /// The bound a fit check should honour for `window`.
     ///
     /// A bypass sets aside an observed bound recorded *before* its own

@@ -85,6 +85,14 @@ class HyprWindow: Equatable, Hashable {
         return n.boolValue
     }
 
+    /// `true` when the window sits minimized in the Dock.
+    var isMinimized: Bool {
+        var value: AnyObject?
+        let err = AXUIElementCopyAttributeValue(element, kAXMinimizedAttribute as CFString, &value)
+        guard err == .success, let n = value as? NSNumber else { return false }
+        return n.boolValue
+    }
+
     /// Set `observedMinSize` from `AXMinimumSize` (or per-bundle-id
     /// fallback) when AX exposes a usable value. No-op when neither
     /// source produces one — `MinSizeMemory` will learn from readback
