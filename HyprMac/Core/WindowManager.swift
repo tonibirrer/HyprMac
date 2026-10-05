@@ -289,6 +289,7 @@ class WindowManager {
         self.workspaceOrchestrator.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
         self.workspaceOrchestrator.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         self.workspaceOrchestrator.tileAllVisibleSpaces = { [weak self] in self?.tileAllVisibleSpaces() }
+        self.workspaceOrchestrator.describeUnlistedWindows = { [weak self] ids in self?.describeUnlistedWindows(ids) ?? "" }
         self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
             self?.animatedRetile(prepare: prepare, completion: completion)
         }
@@ -3228,6 +3229,8 @@ class WindowManager {
             focusedWindowID: focusController.lastFocusedID
         )
         let retileResults = actionDispatcher.applyChanges(changes, allWindows: allWindows)
+        // a tile a workspace switch dropped comes back with the window list
+        workspaceOrchestrator.retileDroppedTiles("poll")
         // a poll is the real event that says a window came back, became
         // readable, or went away — the only thing that can unblock a
         // recovery waiting on evidence
@@ -3354,6 +3357,27 @@ class WindowManager {
             hyprLog(.notice, .lifecycle, "park repair: '\(w.title ?? "?")' (\(w.windowID)) on hidden ws\(ws) reads visible — re-parking")
             workspaceManager.hideInCorner(w, on: screen)
         }
+    }
+
+    /// What the window server, Spaces and AX report for windows a window
+    /// list left out, one entry per window plus the front app. The evidence
+    /// a dropped-tile log line carries: a window on a Space that is not
+    /// showing, one the server reports off-screen, or one AX does not list.
+    private func describeUnlistedWindows(_ ids: Set<CGWindowID>) -> String {
+        let currentSpaces = Set(spaceManager.allCurrentSpaceIDs())
+        let entries = ids.sorted().map { id -> String in
+            var entry = "\(id): \(accessibility.windowServerState(of: id))"
+            if let space = spaceManager.spaceForWindow(id) {
+                entry += " space=\(space)\(currentSpaces.contains(space) ? "" : " (not showing)")"
+            }
+            if let pid = stateCache.windowOwners[id] {
+                let state = accessibility.hiddenWindowState(windowID: id, pid: pid)
+                entry += " ax=\(state.map { "\($0)" } ?? "unreadable")"
+            }
+            return entry
+        }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+        return entries.joined(separator: "; ") + "; front=\(front)"
     }
 
     // MARK: - observers

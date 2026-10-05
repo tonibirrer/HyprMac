@@ -56,6 +56,30 @@ final class WorkspaceOrchestrator {
     var onDidSwitch: (_ workspace: Int, _ screen: NSScreen) -> Void = { _, _ in }
     var excludedBundleIDs: () -> Set<String> = { [] }
     var isScratchpadWindow: (CGWindowID) -> Bool = { _ in false }
+    /// What the window server, AX and Spaces report for windows a window
+    /// list left out. Logged with a dropped tile, as the evidence for why
+    /// the list missed it.
+    var describeUnlistedWindows: (Set<CGWindowID>) -> String = { _ in "" }
+    /// Runs `work` on the main queue after `delay`. A seam so a test can
+    /// drive the dropped-tile retries by hand.
+    var runAfter: (_ delay: TimeInterval, _ work: @escaping () -> Void) -> Void = { delay, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// Tiles the last switch's retile dropped, see `noteDroppedTiles`.
+    private struct DroppedTiles {
+        let workspace: Int
+        var ids: Set<CGWindowID>
+        /// focus as the switch left it. A re-tile moves focus only while it
+        /// is still this, so a window the user picked since is never stolen.
+        let focusAfterSwitch: CGWindowID
+        let switchID: Int
+    }
+    private var droppedTiles: DroppedTiles?
+    private var switchCount = 0
+    /// Retry delays after a dropped tile, ~1 s in total. Past that the
+    /// next poll, or Hypr+N on the workspace, retries.
+    private static let droppedTileRetryDelays: [TimeInterval] = [0.15, 0.3, 0.6]
 
     init(workspaceManager: WorkspaceManager,
          tilingEngine: TilingEngine,
@@ -329,10 +353,15 @@ final class WorkspaceOrchestrator {
         // always has — the flash is the answer to "which workspace am I on".
         onWillSwitch(number, workspaceManager.homeScreenForWorkspace(number) ?? currentScreen)
 
-        let allWindows = self.allWindows()
+        var allWindows = self.allWindows()
         let result = workspaceManager.switchWorkspace(number, cursorScreen: currentScreen)
 
         if result.alreadyVisible {
+            // Hypr+N on the workspace that is up retries a tile its switch
+            // dropped — the one key the user reaches for when it is empty
+            if droppedTiles?.workspace == number, retileDroppedTiles("Hypr+\(number)") {
+                allWindows = self.allWindows()
+            }
             // workspace is showing on result.screen — just focus it. the
             // window the user last had focused there wins over the first
             // tiled window in enumeration order.
@@ -358,6 +387,10 @@ final class WorkspaceOrchestrator {
             onDidSwitch(number, result.screen)
             return
         }
+
+        // a new switch owns the screens now; an older one's retries stop
+        switchCount += 1
+        droppedTiles = nil
 
         // the monitor→workspace mapping just flipped — let the wallpaper
         // swap NOW, before the hide/retile/focus work (frame readback can
@@ -429,6 +462,14 @@ final class WorkspaceOrchestrator {
         if let best, !stateCache.floatingWindowIDs.contains(best.windowID) {
             tilingEngine.accordionFrontOverride = best.windowID
         }
+        // the retile below rebuilds the trees from a fresh window list and
+        // drops every tile that list misses. what was tiled here before it,
+        // and the evidence for any live window this switch's own list
+        // already misses, read while the cause may still be in place.
+        let tiledBefore = tilingEngine.windowIDs(inAnyTreeForWorkspace: number).intersection(toShow)
+        let listed = Set(allWindows.map(\.windowID))
+        let unlisted = tiledBefore.filter { !listed.contains($0) && isLiveTile($0) }
+        let evidence = unlisted.isEmpty ? nil : describeUnlistedWindows(unlisted)
         tileAllVisibleSpaces()
         tilingEngine.accordionFrontOverride = nil
 
@@ -443,8 +484,122 @@ final class WorkspaceOrchestrator {
             focusBorder.hide(); dimmingOverlay.hideAll()
         }
 
+        noteDroppedTiles(tiledBefore, on: number, evidence: evidence)
+
         NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
         onDidSwitch(number, result.screen)
+    }
+
+    // MARK: - dropped tiles
+
+    /// A retile tiles only the windows in the window list it reads, and
+    /// drops every other tile from its tree. Right after a switch, macOS
+    /// has been seen to leave live windows out of that list for a moment:
+    /// right after a ⌘-Tab to an app whose windows are all parked, and
+    /// while a fullscreen Space covers the park screen. The dropped windows
+    /// stay parked, and nothing tiles them again while the workspace is up:
+    /// they are neither new nor returned, and Hypr+N on a visible workspace
+    /// does not retile. Both screens stay empty until the user switches
+    /// away and back. So the switch notes every live tile its retile
+    /// dropped, and retiles again once the window list has it.
+    private func noteDroppedTiles(_ tiledBefore: Set<CGWindowID>, on workspace: Int, evidence: String?) {
+        let dropped = untiledLiveTiles(tiledBefore, on: workspace)
+        guard !dropped.isEmpty else { return }
+        hyprLog(.notice, .lifecycle, "switch: ws\(workspace) retile dropped tiles \(dropped.sorted()) — not in the window list (\(evidence ?? describeUnlistedWindows(dropped))); retrying")
+        droppedTiles = DroppedTiles(workspace: workspace, ids: dropped,
+                                    focusAfterSwitch: focusController.lastFocusedID,
+                                    switchID: switchCount)
+        scheduleDroppedTileRetry(attempt: 0)
+    }
+
+    private func scheduleDroppedTileRetry(attempt: Int) {
+        guard let switchID = droppedTiles?.switchID else { return }
+        let delays = Self.droppedTileRetryDelays
+        runAfter(delays[attempt]) { [weak self] in
+            guard let self, self.droppedTiles?.switchID == switchID else { return }
+            self.retileDroppedTiles("retry \(attempt + 1)")
+            guard let left = self.droppedTiles, left.switchID == switchID else { return }
+            if attempt + 1 < delays.count {
+                self.scheduleDroppedTileRetry(attempt: attempt + 1)
+            } else {
+                hyprLog(.notice, .lifecycle, "switch: ws\(left.workspace) tiles \(left.ids.sorted()) still not in the window list after \(delays.count) retries (\(self.describeUnlistedWindows(left.ids))) — the next poll or Hypr+\(left.workspace) retries")
+            }
+        }
+    }
+
+    /// Retile if a tile the last switch dropped is back in the window list.
+    /// Called by the switch's own retries, by Hypr+N on the workspace, and
+    /// after every discovery poll; a no-op when nothing is pending.
+    ///
+    /// - Returns: whether it retiled.
+    @discardableResult
+    func retileDroppedTiles(_ trigger: String) -> Bool {
+        guard var dropped = droppedTiles else { return false }
+        let missing = untiledLiveTiles(dropped.ids, on: dropped.workspace)
+        guard workspaceManager.isWorkspaceVisible(dropped.workspace), !missing.isEmpty else {
+            droppedTiles = nil
+            return false
+        }
+        let windows = allWindows()
+        guard windows.contains(where: { missing.contains($0.windowID) }) else { return false }
+
+        tileAllVisibleSpaces()
+
+        let stillMissing = untiledLiveTiles(missing, on: dropped.workspace)
+        let placed = missing.subtracting(stillMissing)
+        hyprLog(.notice, .lifecycle, "switch: ws\(dropped.workspace) re-tiled dropped tiles \(placed.sorted()) (\(trigger))"
+                + (stillMissing.isEmpty ? "" : ", still missing \(stillMissing.sorted())"))
+        if stillMissing.isEmpty {
+            droppedTiles = nil
+        } else {
+            dropped.ids = stillMissing
+            droppedTiles = dropped
+        }
+        refocusAfterDroppedTiles(placed, dropped)
+        return true
+    }
+
+    /// Hand focus to a re-tiled window when the switch could not: it
+    /// focused one that was still parked (border and cursor in the park
+    /// corner), or found nothing to focus. A window the switch focused in
+    /// place keeps focus, and so does anything the user focused since.
+    private func refocusAfterDroppedTiles(_ placed: Set<CGWindowID>, _ dropped: DroppedTiles) {
+        let focused = dropped.focusAfterSwitch
+        guard !placed.isEmpty, focusController.lastFocusedID == focused else { return }
+        let targetID: CGWindowID
+        if placed.contains(focused) {
+            targetID = focused
+        } else if workspaceManager.windowIDs(onWorkspace: dropped.workspace).contains(focused) {
+            return
+        } else if let remembered = workspaceManager.lastFocusedWindow(onWorkspace: dropped.workspace),
+                  placed.contains(remembered) {
+            targetID = remembered
+        } else if let first = placed.min() {
+            targetID = first
+        } else {
+            return
+        }
+        guard let window = allWindows().first(where: { $0.windowID == targetID }) else { return }
+        suppressions.suppress("activation-switch", for: 0.5)
+        suppressions.suppress("mouse-focus", for: 0.15)
+        window.focus()
+        cursorManager.warpToCenter(of: window)
+        focusController.recordFocus(window.windowID, reason: "switchWorkspace-dropped-tile")
+        updateFocusBorder(window)
+    }
+
+    /// The ids in `ids` that are live tiles of `workspace` (assigned to it,
+    /// present, neither hidden nor floating) but sit in none of its trees.
+    private func untiledLiveTiles(_ ids: Set<CGWindowID>, on workspace: Int) -> Set<CGWindowID> {
+        let members = workspaceManager.windowIDs(onWorkspace: workspace)
+        let tiled = tilingEngine.windowIDs(inAnyTreeForWorkspace: workspace)
+        return ids.filter { members.contains($0) && !tiled.contains($0) && isLiveTile($0) }
+    }
+
+    private func isLiveTile(_ id: CGWindowID) -> Bool {
+        stateCache.knownWindowIDs.contains(id)
+            && !stateCache.hiddenWindowIDs.contains(id)
+            && !stateCache.floatingWindowIDs.contains(id)
     }
 
     // MARK: - sticky windows

@@ -131,6 +131,19 @@ class AccessibilityManager {
         return (element, pid)
     }
 
+    /// The window server's view of one window, for logs that have to say
+    /// why a window list left it out: on-screen flag, alpha and origin, or
+    /// `cg absent` when the server knows no such window.
+    func windowServerState(of windowID: CGWindowID) -> String {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]])?.first else {
+            return "cg absent"
+        }
+        let onScreen = (info[kCGWindowIsOnscreen as String] as? Bool) ?? false
+        let alpha = info[kCGWindowAlpha as String] as? CGFloat ?? 1
+        let bounds = info[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
+        return "cg onscreen=\(onScreen) alpha=\(alpha) at (\(Int(bounds["X"] ?? 0)),\(Int(bounds["Y"] ?? 0)))"
+    }
+
     /// `pid`'s visible normal-layer windows, straight from the window
     /// server — no AX pairing and none of the discovery filters, so a
     /// window HyprMac never tracks (a native-fullscreen game) still counts.
