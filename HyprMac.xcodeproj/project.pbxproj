@@ -108,6 +108,7 @@
 		4E6923775790B037E457881C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54EA610EADBFADA21DC625C3 /* AppDelegate.swift */; };
 		4F220AC370184B0540805075 /* BSPTreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2796ACDEF732F4AB5C0EC77C /* BSPTreeTests.swift */; };
 		4F7E79CBC44F654BDF24C05B /* ActionDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B096217238208C5F5BCA3E /* ActionDispatcher.swift */; };
+		4F843723F3EF97FD07F1F622 /* CapsLockGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D57EA2F0D94B5301CBDDB5 /* CapsLockGuard.swift */; };
 		5093977D6BDF7A6F17C395E1 /* SortPriorityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C7B5E311DCD9C3D2109A6A /* SortPriorityTests.swift */; };
 		5170A5CEDBB17316A9C54862 /* WelcomeContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 558BA33696C6D6012B47A661 /* WelcomeContentTests.swift */; };
 		527D68624FC4FDB4EAF54FA8 /* ProbeFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DE4B38D2D91458BAC30BCFB /* ProbeFrame.swift */; };
@@ -228,6 +229,7 @@
 		BA09E0BFB424D226994E6A4C /* WelcomeContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EBC04818743A6F6231119AB /* WelcomeContent.swift */; };
 		BBF48B44F78A50AA17A61567 /* WallpapersPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF33E7950389FB08C8D85C2 /* WallpapersPanel.swift */; };
 		BF9B651B475474AE92319DE4 /* DisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593D96A7340421A4588DE5D5 /* DisplayManager.swift */; };
+		BFEDDCA482EE30D340B5C6F4 /* CapsLockGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 738DFFFE0F8635658F80C36D /* CapsLockGuardTests.swift */; };
 		C1CCA6C07D0B273CF3AB3D6C /* HandleDisplayChangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */; };
 		C4C0FB5F11923E54D785E16B /* ConfigUpdateCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E1D4391AFE7A5802FF00C4 /* ConfigUpdateCoordinatorTests.swift */; };
 		C52FF8EE8388578EDD946B49 /* SingleScreenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4147EA62BB03B7B282443AEE /* SingleScreenMode.swift */; };
@@ -311,6 +313,7 @@
 		F9B5B6843894B0557303F503 /* ConfigMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDAAA3743D0898468DBA8EBC /* ConfigMigration.swift */; };
 		F9DAC6038768E4C6FF5600CD /* LayoutMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 704DCC0F96A16AC32FD1A5C0 /* LayoutMatcher.swift */; };
 		FAD487A931194EE440A719EB /* SingleScreenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4147EA62BB03B7B282443AEE /* SingleScreenMode.swift */; };
+		FB43061AE567B8BA3ABAFE11 /* CapsLockGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D57EA2F0D94B5301CBDDB5 /* CapsLockGuard.swift */; };
 		FE951C34FB71D53A601F8EF3 /* AccordionLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */; };
 		FEB773771BE1F8545E28F580 /* ActivationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A583E7C1D53AE97EEFB1ADE /* ActivationGateTests.swift */; };
 		FF545C88698CCEFDF156CDFF /* RetileAllPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5211B4FC8814875264166E19 /* RetileAllPlanner.swift */; };
@@ -420,6 +423,7 @@
 		6EDEEE13B637CED75A9FD8A9 /* TourView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourView.swift; sourceTree = "<group>"; };
 		704DCC0F96A16AC32FD1A5C0 /* LayoutMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutMatcher.swift; sourceTree = "<group>"; };
 		728568405C25B4DD6E5EDD9B /* DestroyRecheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestroyRecheckTests.swift; sourceTree = "<group>"; };
+		738DFFFE0F8635658F80C36D /* CapsLockGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapsLockGuardTests.swift; sourceTree = "<group>"; };
 		7681B5C6FAEC2BFB53A30743 /* KeybindDisplayHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindDisplayHelpers.swift; sourceTree = "<group>"; };
 		772FFAF897AAC136F605737C /* TilingSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TilingSettingsView.swift; sourceTree = "<group>"; };
 		787772BD2B63EB7FAEB9DC58 /* FullHeightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullHeightTests.swift; sourceTree = "<group>"; };
@@ -476,6 +480,7 @@
 		C5A885FA2020A2EFF24C41A7 /* LayoutMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutMatcherTests.swift; sourceTree = "<group>"; };
 		C5ECA897D9C7F4DF25FFE758 /* DefaultKeybinds.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultKeybinds.swift; sourceTree = "<group>"; };
 		C6D1C99A7D03B871E0141DF0 /* AppLauncherEditorSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLauncherEditorSheet.swift; sourceTree = "<group>"; };
+		C6D57EA2F0D94B5301CBDDB5 /* CapsLockGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapsLockGuard.swift; sourceTree = "<group>"; };
 		CB845A902D1A884872996805 /* FocusStateController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusStateController.swift; sourceTree = "<group>"; };
 		CC27FADCFF305913BD49A6CA /* TiledDragTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDragTransaction.swift; sourceTree = "<group>"; };
 		CE7C6CB56D09DB0F05AE6EDC /* ThreadAssertions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadAssertions.swift; sourceTree = "<group>"; };
@@ -623,6 +628,7 @@
 				8B8FB422F1864D03E43BF91E /* AccessibilityManager.swift */,
 				AEBCF3E7A3BD126F2530D8D0 /* ActivationGate.swift */,
 				A36D359F723D63F2E6036D15 /* AppLauncherManager.swift */,
+				C6D57EA2F0D94B5301CBDDB5 /* CapsLockGuard.swift */,
 				5D8E6D4FE4C4E6D244C14D76 /* CommandRunner.swift */,
 				1BB92BD985DAC4292DE1C57F /* CursorManager.swift */,
 				84FD66866CE44F180CAA03C7 /* DimmingOverlay.swift */,
@@ -773,6 +779,7 @@
 				507967F2C119F4BD8E8201CF /* BSPTargetInsertionTests.swift */,
 				1A85F3FF392095FDDB36DAB7 /* BSPTestSupport.swift */,
 				2796ACDEF732F4AB5C0EC77C /* BSPTreeTests.swift */,
+				738DFFFE0F8635658F80C36D /* CapsLockGuardTests.swift */,
 				D180FDED47AD57DF35C3858C /* CommandRunnerTests.swift */,
 				F548FEECDD35DFF1120E2553 /* ConfigMigrationTests.swift */,
 				27E1D4391AFE7A5802FF00C4 /* ConfigUpdateCoordinatorTests.swift */,
@@ -1052,6 +1059,7 @@
 				F2B3AC04608B7F92C811A44A /* BSPTree.swift in Sources */,
 				7FB049BFF3F0B8E61B5D9177 /* BundleIDPicker.swift in Sources */,
 				F2EFDD2E3E1E512D63BCCE74 /* BundleIDUtils.swift in Sources */,
+				4F843723F3EF97FD07F1F622 /* CapsLockGuard.swift in Sources */,
 				0086DBE1974C316B4B7AE242 /* ColorPickerRow.swift in Sources */,
 				9A2732DA57E004BBC2860133 /* CommandRunner.swift in Sources */,
 				4BAA92839847FB4C276C9D23 /* ConfigMigration.swift in Sources */,
@@ -1169,6 +1177,7 @@
 				7A3D3C9A4903361B3B292C7F /* BSPTree.swift in Sources */,
 				3106D31CBD97C1E1940BD4AE /* BundleIDPicker.swift in Sources */,
 				7F5A0952C75959ECEED45DF3 /* BundleIDUtils.swift in Sources */,
+				FB43061AE567B8BA3ABAFE11 /* CapsLockGuard.swift in Sources */,
 				49B97DA976D5A62FE5B243DC /* ColorPickerRow.swift in Sources */,
 				2EEBF9501EECE388899B472D /* CommandRunner.swift in Sources */,
 				F9B5B6843894B0557303F503 /* ConfigMigration.swift in Sources */,
@@ -1282,6 +1291,7 @@
 				A103B6FAC1DFA16554F33D49 /* BSPTargetInsertionTests.swift in Sources */,
 				0A95C40458C159F8851E03E4 /* BSPTestSupport.swift in Sources */,
 				4F220AC370184B0540805075 /* BSPTreeTests.swift in Sources */,
+				BFEDDCA482EE30D340B5C6F4 /* CapsLockGuardTests.swift in Sources */,
 				19AA6221B0B55BFAC6065DE0 /* CommandRunnerTests.swift in Sources */,
 				B82265C32A87C7C47C0921AE /* ConfigMigrationTests.swift in Sources */,
 				C4C0FB5F11923E54D785E16B /* ConfigUpdateCoordinatorTests.swift in Sources */,

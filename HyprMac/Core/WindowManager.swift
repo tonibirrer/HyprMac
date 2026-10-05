@@ -67,6 +67,8 @@ class WindowManager {
     private let gameScreen = GameScreenController()
     /// Native-fullscreen windows as workspace members that take a screen.
     let fullscreen = FullscreenSpaceController()
+    /// Keeps the Caps Lock lock off while Caps Lock is the Hypr key.
+    private let capsLockGuard = CapsLockGuard()
 
     // floating-window lifecycle: float/tile toggle, cycle-focus, raise-behind, auto-float predicate.
     private(set) var floatingController: FloatingWindowController!
@@ -443,6 +445,11 @@ class WindowManager {
         accessibility.cachedWindowLookup = { [weak self] wid in self?.stateCache.cachedWindows[wid] }
 
         wireFullscreen()
+
+        // independent of start/stop: the remap, and with it the stranded
+        // lock, outlives a paused tiler
+        capsLockGuard.isActive = { [weak self] in self?.config.hyprKey.usesCapsLockRemap ?? false }
+        capsLockGuard.start()
 
         // wire up floating controller — closure handles for WM-side helpers.
         floatingController.animatedRetile = { [weak self] prepare in
@@ -3488,9 +3495,10 @@ class WindowManager {
     /// a window with no tile yet has nowhere to go, so it floats and the
     /// user gets the error shake.
     private func refuseTilesWithoutRoom(_ windows: [HyprWindow], onWorkspace workspace: Int) {
-        let tiled = tilingEngine.windowIDs(inAnyTreeForWorkspace: workspace)
-        for window in windows where !tiled.contains(window.windowID)
-            && !stateCache.floatingWindowIDs.contains(window.windowID) {
+        let refused = FullscreenSpaceController.windowsWithoutRoom(
+            windows, tiled: tilingEngine.windowIDs(inAnyTreeForWorkspace: workspace),
+            floating: stateCache.floatingWindowIDs)
+        for window in refused {
             stateCache.floatingWindowIDs.insert(window.windowID)
             window.isFloating = true
             hyprLog(.notice, .orchestration, "ws\(workspace): every screen shows a fullscreen window — '\(window.title ?? "?")' (\(window.windowID)) floats, no room for a tile")
@@ -3542,6 +3550,14 @@ class WindowManager {
     /// 3. Otherwise, schedule a discovery poll and re-raise floating
     ///    windows after a brief settle so they stay visually on top.
     @objc private func appDidActivate(_ notification: Notification) {
+        // an app that syncs the lock on focus (a Citrix session) sets it a
+        // moment after it activates
+        for delay in [0.3, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.capsLockGuard.check(reason: "after app activation")
+            }
+        }
+
         // remember the previous frontmost app before recording this one — a
         // launcher (Dock, Spotlight, Raycast) as the predecessor marks this
         // activation as user-initiated for the dock-affordance gate below.

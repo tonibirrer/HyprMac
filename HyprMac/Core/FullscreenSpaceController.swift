@@ -89,6 +89,14 @@ final class FullscreenSpaceController {
         refresh.newlyShown.map(\.workspace).filter { !visibleWorkspaces.contains($0) }.min()
     }
 
+    /// The windows a workspace with no screen left has to refuse: those
+    /// without a tile yet. Its tiles keep their slots behind the fullscreen
+    /// Space, and floaters float on.
+    static func windowsWithoutRoom(_ windows: [HyprWindow], tiled: Set<CGWindowID>,
+                                   floating: Set<CGWindowID>) -> [HyprWindow] {
+        windows.filter { !tiled.contains($0.windowID) && !floating.contains($0.windowID) }
+    }
+
     // MARK: - snapshot
 
     /// The windows among `candidates` that sit on the desktop Space of a
