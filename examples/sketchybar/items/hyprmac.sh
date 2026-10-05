@@ -10,25 +10,16 @@
 sketchybar --add event hyprmac_workspace_change
 sketchybar --add event hyprmac_update_windows
 
-# relay daemon: streams HyprMac IPC events into the sketchybar triggers.
-# restart it on every sketchybar reload so exactly one instance runs.
-pkill -f "plugins/hyprmac_listener.sh" 2>/dev/null
-nohup "$PLUGIN_DIR/hyprmac_listener.sh" >/dev/null 2>&1 &
+# HyprMac has a fixed set of workspaces, so the items do not depend on
+# HyprMac running: sketchybar usually loads first at login. They start
+# hidden; the listener paints them once it reaches HyprMac.
+WORKSPACE_COUNT=10
 
-WORKSPACES_JSON=$(hyprmacctl workspaces 2>/dev/null || echo '[]')
-
-for sid in $(echo "$WORKSPACES_JSON" | jq -r '.[].id'); do
-  ws=$(echo "$WORKSPACES_JSON" | jq -r ".[] | select(.id == $sid)")
-  windows=$(echo "$ws" | jq -r '.windows')
-  focused=$(echo "$ws" | jq -r '.focused')
-
-  drawing=off
-  if [ "$windows" -gt 0 ] || [ "$focused" = "true" ]; then drawing=on; fi
-
+for sid in $(seq 1 "$WORKSPACE_COUNT"); do
   sketchybar --add item space.$sid left \
     --subscribe space.$sid hyprmac_workspace_change \
     --set space.$sid \
-    drawing=$drawing \
+    drawing=off \
     background.color=0x44ffffff \
     background.corner_radius=10 \
     background.drawing=on \
@@ -57,5 +48,16 @@ sketchybar --add item space_separator left \
   --subscribe space_separator hyprmac_update_windows \
   --subscribe space_separator hyprmac_workspace_change
 
-# initial paint: highlight + app icon strips
-"$PLUGIN_DIR/hyprmac_windows.sh" &
+# relay daemon: streams HyprMac IPC events into the sketchybar triggers
+# and paints the items above. started last, so they exist by then.
+# restart it on every sketchybar reload so exactly one instance runs.
+# pkill -f is async (returns before the target actually exits), so wait for
+# it to actually die before spawning the replacement -- otherwise a fast
+# reload can leave two listeners racing on the same socket.
+pkill -f "plugins/hyprmac_listener.sh" 2>/dev/null
+for i in $(seq 1 20); do
+  pgrep -f "plugins/hyprmac_listener.sh" >/dev/null || break
+  sleep 0.1
+done
+pkill -9 -f "plugins/hyprmac_listener.sh" 2>/dev/null
+nohup "$PLUGIN_DIR/hyprmac_listener.sh" >/dev/null 2>&1 &
