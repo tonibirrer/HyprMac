@@ -65,6 +65,10 @@ class WindowManager {
     // game screen: running games, and carrying their windows over to the
     // configured game monitor while it is reserved.
     private let gameScreen = GameScreenController()
+    /// Native-fullscreen windows as workspace members that take a screen.
+    let fullscreen = FullscreenSpaceController()
+    /// Keeps the Caps Lock lock off while Caps Lock is the Hypr key.
+    private let capsLockGuard = CapsLockGuard()
 
     // floating-window lifecycle: float/tile toggle, cycle-focus, raise-behind, auto-float predicate.
     private(set) var floatingController: FloatingWindowController!
@@ -290,6 +294,14 @@ class WindowManager {
         self.workspaceOrchestrator.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         self.workspaceOrchestrator.tileAllVisibleSpaces = { [weak self] in self?.tileAllVisibleSpaces() }
         self.workspaceOrchestrator.describeUnlistedWindows = { [weak self] ids in self?.describeUnlistedWindows(ids) ?? "" }
+        self.workspaceOrchestrator.presentFullscreenWindows = { [weak self] ws in
+            self?.fullscreen.present(workspace: ws, warpCursor: { rect in
+                CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
+            }) ?? false
+        }
+        self.workspaceOrchestrator.leaveFullscreenSpaces = { [weak self] ws, focused, refocus in
+            self?.leaveFullscreenSpaces(for: ws, focused: focused, refocus: refocus)
+        }
         self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
             self?.animatedRetile(prepare: prepare, completion: completion)
         }
@@ -431,6 +443,13 @@ class WindowManager {
         // CGWindowID against the last discovery snapshot before falling back
         // to a full AX walk.
         accessibility.cachedWindowLookup = { [weak self] wid in self?.stateCache.cachedWindows[wid] }
+
+        wireFullscreen()
+
+        // independent of start/stop: the remap, and with it the stranded
+        // lock, outlives a paused tiler
+        capsLockGuard.isActive = { [weak self] in self?.config.hyprKey.usesCapsLockRemap ?? false }
+        capsLockGuard.start()
 
         // wire up floating controller — closure handles for WM-side helpers.
         floatingController.animatedRetile = { [weak self] prepare in
@@ -770,6 +789,7 @@ class WindowManager {
                               switchWorkspace: { [weak self] ws in
                                   self?.actionDispatcher.dispatch(.switchWorkspace(ws))
                               })
+        ipcServer?.fullscreenWindows = { [weak self] ws in self?.fullscreen.members.members(onWorkspace: ws) ?? [] }
         ipcServer.start()
         config.$workspaceWallpapers
             .dropFirst()
@@ -2453,8 +2473,18 @@ class WindowManager {
             let workspace = workspaceManager.workspaceForScreen(linkedScreens[0])
             let widsOnWorkspace = workspaceManager.windowIDs(onWorkspace: workspace)
             let workspaceWindows = allWindows.filter { widsOnWorkspace.contains($0.windowID) }
-            hyprLog(.debug, .lifecycle, "retile(linked): workspace=\(workspace), \(workspaceWindows.count) windows across \(linkedScreens.count) screens")
-            let results = runAdmission(workspaceWindows, onWorkspace: workspace, screen: linkedScreens[0])
+            // a screen the workspace's own fullscreen window takes holds no tiles
+            let taken = fullscreen.screensTaken(onWorkspace: workspace, among: linkedScreens)
+            let screens = linkedScreens.filter { !taken.contains($0) }
+            hyprLog(.debug, .lifecycle, "retile(linked): workspace=\(workspace), \(workspaceWindows.count) windows across \(screens.count) screens"
+                    + (taken.isEmpty ? "" : " (\(taken.map(\.localizedName)) shows a fullscreen window)"))
+            guard !screens.isEmpty else {
+                refuseTilesWithoutRoom(workspaceWindows, onWorkspace: workspace)
+                updatePositionCache(windows: allWindows)
+                return []
+            }
+            for screen in taken { tilingEngine.vacateTree(forWorkspace: workspace, screen: screen) }
+            let results = runAdmission(workspaceWindows, onWorkspace: workspace, screens: screens)
             updatePositionCache(windows: allWindows)
             offerRecoveryEvidence()
             return results
@@ -2475,6 +2505,11 @@ class WindowManager {
             }
 
             hyprLog(.debug, .lifecycle, "retile: workspace=\(workspace) screen=\(workspaceManager.screenID(for: screen)), \(workspaceWindows.count) windows")
+            // the workspace's own fullscreen window takes its only screen
+            guard fullscreen.screensTaken(onWorkspace: workspace, among: [screen]).isEmpty else {
+                refuseTilesWithoutRoom(workspaceWindows, onWorkspace: workspace)
+                continue
+            }
             // a workspace being shown is where an explicit move to a hidden
             // destination finally gets its one attempt. the marker is spent
             // on this pass whatever it says.
@@ -3209,6 +3244,7 @@ class WindowManager {
         // a hypothetical direct call landing mid-drag.
         guard !mouseButtonDown else { return }
 
+        let fullscreenRefresh = fullscreen.refresh()
         let allWindows = accessibility.getAllWindows()
         let now = Date()
         let gap = lastPollAt.map { "\(Int(now.timeIntervalSince($0) * 1000))ms since last" } ?? "first poll"
@@ -3229,6 +3265,14 @@ class WindowManager {
             focusedWindowID: focusController.lastFocusedID
         )
         let retileResults = actionDispatcher.applyChanges(changes, allWindows: allWindows)
+        accessibility.forgetRememberedWindows(except: stateCache.knownWindowIDs.union(stateCache.hiddenWindowIDs))
+        if followFullscreenShownOutOfTurn(fullscreenRefresh) { return }
+        // a fullscreen window that came or went changes the screens its
+        // workspace tiles on
+        if fullscreenRefresh.membershipChanged {
+            if !changes.needsRetile { animatedRetile(windows: allWindows) }
+            NotificationCenter.default.post(name: .hyprMacWindowsChanged, object: nil)
+        }
         // a tile a workspace switch dropped comes back with the window list
         workspaceOrchestrator.retileDroppedTiles("poll")
         // a poll is the real event that says a window came back, became
@@ -3314,7 +3358,20 @@ class WindowManager {
         guard workspaceManager.linkedMonitors, linkedScreens.count > 1 else {
             return [admissionPass.run(windows, onWorkspace: workspace, screen: screen)]
         }
-        let results = tilingEngine.tileLinked(windows, onWorkspace: workspace, screens: linkedScreens)
+        let taken = fullscreen.screensTaken(onWorkspace: workspace, among: linkedScreens)
+        let screens = linkedScreens.filter { !taken.contains($0) }
+        guard !screens.isEmpty else { return [] }
+        return runAdmission(windows, onWorkspace: workspace, screens: screens)
+    }
+
+    /// A linked pass over exactly `screens` — the enabled screens minus any
+    /// the workspace's fullscreen windows take. One screen is a plain pass.
+    private func runAdmission(_ windows: [HyprWindow], onWorkspace workspace: Int,
+                              screens: [NSScreen]) -> [TilingEngine.AdmissionResult] {
+        guard screens.count > 1 else {
+            return screens.first.map { [admissionPass.run(windows, onWorkspace: workspace, screen: $0)] } ?? []
+        }
+        let results = tilingEngine.tileLinked(windows, onWorkspace: workspace, screens: screens)
         for result in results { admissionRecovery.note(result) }
         return results
     }
@@ -3359,6 +3416,130 @@ class WindowManager {
         }
     }
 
+    // MARK: - native fullscreen
+
+    private func wireFullscreen() {
+        fullscreen.ignoredPIDs = { [weak self] in
+            (self?.accessibility.ignoredPIDs ?? []).union([ProcessInfo.processInfo.processIdentifier])
+        }
+        fullscreen.workspaceForNewMember = { [weak self] in self?.workspaceForFullscreenWindow($0) ?? 1 }
+        fullscreen.memberJoined = { [weak self] in self?.fullscreenMemberJoined($0) }
+        fullscreen.memberLeft = { [weak self] _ in
+            guard let self else { return }
+            self.accessibility.excludedWindowIDs = self.fullscreen.members.windowIDs
+        }
+        accessibility.holdBack = { [weak self] window in self?.holdsBackFullscreenCandidate(window) ?? false }
+        accessibility.windowsBehindFullscreen = { [weak self] listed, remembered in
+            guard let self else { return [] }
+            let candidates = self.stateCache.knownWindowIDs
+                .subtracting(listed)
+                .subtracting(self.fullscreen.members.windowIDs)
+                .compactMap { remembered[$0] }
+            return self.fullscreen.windowsBehindFullscreen(candidates)
+        }
+    }
+
+    /// When each held-back window was first seen.
+    private var heldBackSince: [CGWindowID: Date] = [:]
+
+    /// Leave a new window of a fullscreen app out of the snapshot while it
+    /// may still go fullscreen (`FullscreenSpaceController.holdRemaining`),
+    /// with a poll booked for when the hold ends.
+    private func holdsBackFullscreenCandidate(_ window: HyprWindow) -> Bool {
+        let id = window.windowID
+        guard !stateCache.knownWindowIDs.contains(id), !stateCache.hiddenWindowIDs.contains(id) else {
+            heldBackSince[id] = nil
+            return false
+        }
+        let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+        let firstSeen = heldBackSince[id] ?? Date()
+        guard let remaining = fullscreen.holdRemaining(bundleID: bundleID, firstSeen: firstSeen) else {
+            if heldBackSince.removeValue(forKey: id) != nil {
+                hyprLog(.notice, .discovery, "fullscreen: '\(window.title ?? "?")' (\(id)) of \(bundleID ?? "?") stayed a normal window — tiling it")
+            }
+            return false
+        }
+        if heldBackSince[id] == nil {
+            heldBackSince[id] = firstSeen
+            hyprLog(.notice, .discovery, "fullscreen: holding '\(window.title ?? "?")' (\(id)) of \(bundleID ?? "?") back \(String(format: "%.1f", remaining))s — it may go fullscreen")
+            pollingScheduler.schedule(after: remaining + 0.1)
+        }
+        heldBackSince = heldBackSince.filter { Date().timeIntervalSince($0.value) < 30 }
+        return true
+    }
+
+    /// The workspace a fullscreen window seen for the first time belongs
+    /// to: its app's window rule, else the one it was a tile on, else the
+    /// one up on its screen.
+    private func workspaceForFullscreenWindow(_ window: FullscreenWindowObservation) -> Int {
+        let bundleID = NSRunningApplication(processIdentifier: window.pid)?.bundleIdentifier
+        if let rule = config.windowRules.firstMatch(bundleID: bundleID) { return rule.workspace }
+        if let workspace = workspaceManager.workspaceFor(window.windowID) { return workspace }
+        if let screen = displayManager.screens.first(where: { FullscreenSpaceReader.displayUUID(for: $0) == window.displayUUID }),
+           !workspaceManager.isMonitorDisabled(screen) {
+            return workspaceManager.workspaceForScreen(screen)
+        }
+        return workspaceManager.workspaceForScreen(screenUnderCursor())
+    }
+
+    /// A tile that went fullscreen leaves tiling: forgotten like a closed
+    /// window, so its slot closes and it is admitted afresh once it leaves
+    /// fullscreen. The member keeps the workspace.
+    private func fullscreenMemberJoined(_ member: FullscreenMember) {
+        accessibility.excludedWindowIDs = fullscreen.members.windowIDs
+        guard stateCache.windowOwners[member.windowID] != nil else { return }
+        tilingEngine.removeWindowID(member.windowID)
+        stateCache.forget(member.windowID)
+        applyForgottenIDExternalCleanup(member.windowID)
+    }
+
+    /// Switch to the workspace whose fullscreen window the user just
+    /// brought up (a swipe, ⌘-Tab, Mission Control) while another was up.
+    /// Not within a second of an explicit switch: that one's own Space
+    /// changes are still settling.
+    ///
+    /// - Returns: whether it switched.
+    private func followFullscreenShownOutOfTurn(_ refresh: FullscreenSpaceController.Refresh) -> Bool {
+        let visible = Set(workspaceManager.monitorWorkspace.values)
+        guard let workspace = FullscreenSpaceController.workspaceShownOutOfTurn(refresh, visibleWorkspaces: visible),
+              !suppressions.isSuppressed("activation-switch-hard") else { return false }
+        hyprLog(.notice, .lifecycle, "fullscreen: ws\(workspace)'s fullscreen window came up while ws\(visible.sorted()) was up — switching to ws\(workspace)")
+        workspaceOrchestrator.switchWorkspace(workspace)
+        return true
+    }
+
+    /// Take displays still showing another workspace's fullscreen window
+    /// back to their desktop. Anchors: the workspace's own windows first
+    /// (a tile on that display), then any other window HyprMac tracks.
+    private func leaveFullscreenSpaces(for workspace: Int, focused: HyprWindow?, refocus: @escaping () -> Void) {
+        let own = workspaceManager.windowIDs(onWorkspace: workspace)
+        let remembered = accessibility.rememberedWindows
+        let tracked = stateCache.knownWindowIDs.subtracting(fullscreen.members.windowIDs)
+        let anchors = tracked.filter(own.contains).sorted().compactMap { remembered[$0] }
+            + tracked.subtracting(own).sorted().compactMap { remembered[$0] }
+        fullscreen.leaveForeignSpaces(for: workspace, focused: focused, anchors: anchors, refocus: refocus)
+    }
+
+    /// Every screen `workspace` would tile on shows one of its fullscreen
+    /// windows. Its tiles stay in their trees behind the fullscreen Space;
+    /// a window with no tile yet has nowhere to go, so it floats and the
+    /// user gets the error shake.
+    private func refuseTilesWithoutRoom(_ windows: [HyprWindow], onWorkspace workspace: Int) {
+        let refused = FullscreenSpaceController.windowsWithoutRoom(
+            windows, tiled: tilingEngine.windowIDs(inAnyTreeForWorkspace: workspace),
+            floating: stateCache.floatingWindowIDs)
+        for window in refused {
+            stateCache.floatingWindowIDs.insert(window.windowID)
+            window.isFloating = true
+            hyprLog(.notice, .orchestration, "ws\(workspace): every screen shows a fullscreen window — '\(window.title ?? "?")' (\(window.windowID)) floats, no room for a tile")
+            NSSound.beep()
+            if let frame = window.frame {
+                focusBorder.flashError(around: frame, windowID: window.windowID, window: window,
+                                       message: "No room for a tile: every screen shows a full-screen window")
+            }
+        }
+    }
+
     /// What the window server, Spaces and AX report for windows a window
     /// list left out, one entry per window plus the front app. The evidence
     /// a dropped-tile log line carries: a window on a Space that is not
@@ -3399,6 +3580,14 @@ class WindowManager {
     /// 3. Otherwise, schedule a discovery poll and re-raise floating
     ///    windows after a brief settle so they stay visually on top.
     @objc private func appDidActivate(_ notification: Notification) {
+        // an app that syncs the lock on focus (a Citrix session) sets it a
+        // moment after it activates
+        for delay in [0.3, 1.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.capsLockGuard.check(reason: "after app activation")
+            }
+        }
+
         // remember the previous frontmost app before recording this one — a
         // launcher (Dock, Spotlight, Raycast) as the predecessor marks this
         // activation as user-initiated for the dock-affordance gate below.
@@ -3460,7 +3649,9 @@ class WindowManager {
             // only consider windows still tracked (not hidden/closed)
             let appWindows = stateCache.windowOwners
                 .filter { $0.value == pid && stateCache.knownWindowIDs.contains($0.key) && !stateCache.hiddenWindowIDs.contains($0.key) }
+            // a native-fullscreen window is no tracked window but belongs to a workspace
             let appWorkspaces = appWindows.compactMap { (wid, _) in workspaceManager.workspaceFor(wid) }
+                + fullscreen.members.workspaces(ownedBy: pid).sorted()
             let hasVisibleWindow = appWorkspaces.contains {
                 visibleWorkspaces.contains($0) || ($0 == ScratchpadController.workspace && scratchpad.isVisible)
             }
@@ -3588,6 +3779,10 @@ class WindowManager {
     /// left a fullscreen app's Space. Re-evaluate chrome visibility from
     /// the new focus target.
     @objc private func activeSpaceDidChange(_ notification: Notification) {
+        // a swipe or ⌘-Tab into a workspace's fullscreen window is a switch
+        // to that workspace, the way activating any of its windows is
+        if isRunning, followFullscreenShownOutOfTurn(fullscreen.refresh()) { return }
+        pollingScheduler.schedule()
         if isFullscreenSuppressed(focused: currentFocusedWindow()) {
             focusBorder.hide()
             focusBorder.hideFloatingBorders()

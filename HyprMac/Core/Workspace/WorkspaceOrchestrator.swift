@@ -60,6 +60,15 @@ final class WorkspaceOrchestrator {
     /// list left out. Logged with a dropped tile, as the evidence for why
     /// the list missed it.
     var describeUnlistedWindows: (Set<CGWindowID>) -> String = { _ in "" }
+    /// Bring up `workspace`'s native-fullscreen windows (activating each
+    /// app shows its Space). Returns whether the workspace has any; the
+    /// switch then leaves focus with the fullscreen window.
+    var presentFullscreenWindows: (_ workspace: Int) -> Bool = { _ in false }
+    /// Take every display still showing another workspace's fullscreen
+    /// window back to its desktop. `focused` is the window the switch
+    /// focused; `refocus` runs when focus had to pass through an anchor.
+    var leaveFullscreenSpaces: (_ workspace: Int, _ focused: HyprWindow?,
+                                _ refocus: @escaping () -> Void) -> Void = { _, _, _ in }
     /// Runs `work` on the main queue after `delay`. A seam so a test can
     /// drive the dropped-tile retries by hand.
     var runAfter: (_ delay: TimeInterval, _ work: @escaping () -> Void) -> Void = { delay, work in
@@ -369,9 +378,14 @@ final class WorkspaceOrchestrator {
             // an explicit target (overview pick, dedicated-workspace move) wins;
             // otherwise the window the user last had focused here
             let remembered = preferredWindowID ?? workspaceManager.lastFocusedWindow(onWorkspace: number)
-            if let best = visibleWindows.first(where: { $0.windowID == remembered })
+            let best = visibleWindows.first(where: { $0.windowID == remembered })
                 ?? visibleWindows.first(where: { !stateCache.floatingWindowIDs.contains($0.windowID) })
-                ?? visibleWindows.first {
+                ?? visibleWindows.first
+            // its fullscreen window comes back up if the user left its Space
+            let fullscreenUp = preferredWindowID == nil && presentFullscreenWindows(number)
+            if fullscreenUp {
+                focusBorder.hide(); dimmingOverlay.hideAll()
+            } else if let best {
                 best.focus()
                 cursorManager.warpToCenter(of: best)
                 focusController.recordFocus(best.windowID, reason: "switchWorkspace-already-visible")
@@ -381,6 +395,7 @@ final class WorkspaceOrchestrator {
                 CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
                 focusBorder.hide(); dimmingOverlay.hideAll()
             }
+            leaveForeignFullscreen(number, focused: fullscreenUp ? nil : best)
             // focused workspace changed even though nothing was hidden or
             // shown — IPC subscribers (status bars) still need the event.
             NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
@@ -473,7 +488,13 @@ final class WorkspaceOrchestrator {
         tileAllVisibleSpaces()
         tilingEngine.accordionFrontOverride = nil
 
-        if let best {
+        // a workspace with a native-fullscreen window shows it: its app
+        // takes focus and its Space comes up on the screen it takes. an
+        // explicit target (overview pick, dedicated move) still wins.
+        let fullscreenUp = preferredWindowID == nil && presentFullscreenWindows(number)
+        if fullscreenUp {
+            focusBorder.hide(); dimmingOverlay.hideAll()
+        } else if let best {
             best.focus()
             cursorManager.warpToCenter(of: best)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")
@@ -484,10 +505,37 @@ final class WorkspaceOrchestrator {
             focusBorder.hide(); dimmingOverlay.hideAll()
         }
 
+        leaveForeignFullscreen(number, focused: fullscreenUp ? nil : best)
         noteDroppedTiles(tiledBefore, on: number, evidence: evidence)
 
         NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
         onDidSwitch(number, result.screen)
+    }
+
+    // MARK: - native fullscreen
+
+    /// A display still showing another workspace's fullscreen window goes
+    /// back to its desktop, so the tiles placed there show. Focus ends
+    /// where the switch put it — on `focused`, or the workspace's own
+    /// fullscreen window — unless the user focused something since.
+    private func leaveForeignFullscreen(_ workspace: Int, focused: HyprWindow?) {
+        let focusAfterSwitch = focusController.lastFocusedID
+        leaveFullscreenSpaces(workspace, focused) { [weak self] in
+            guard let self, self.workspaceManager.isWorkspaceVisible(workspace) else { return }
+            if let focused {
+                guard self.focusController.lastFocusedID == focusAfterSwitch else { return }
+                self.suppressions.suppress("activation-switch", for: 0.5)
+                focused.focus()
+                self.updateFocusBorder(focused)
+            } else {
+                self.suppressions.suppress("activation-switch", for: 0.5)
+                // an empty workspace: the anchor (a parked window, often)
+                // must not keep the keyboard. HyprMac has no window to type into.
+                if !self.presentFullscreenWindows(workspace) {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
+        }
     }
 
     // MARK: - dropped tiles

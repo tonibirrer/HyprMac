@@ -208,6 +208,15 @@ class TilingEngine {
     private var trees: [TilingKey: BSPTree] = [:]
     // verified admission survives a temporary hide and a screen migration.
     private var admittedWindowIDs: [Int: Set<CGWindowID>] = [:]
+
+    /// Each linked workspace's left-to-right strip as the last linked pass
+    /// left it, with windows that have left since — hidden, missed by a
+    /// snapshot, off a screen a fullscreen window took — kept at their
+    /// place. A window that comes back takes its own slot again instead of
+    /// the right end. Present windows are never reordered by it: their
+    /// order is the trees', so a swap or drag sticks.
+    private var linkedOrder: [Int: [CGWindowID]] = [:]
+    private static let linkedOrderLimit = 64
     private var pendingInsertedWindowIDs: [TilingKey: [CGWindowID]] = [:]
     /// Keys whose last layout attempt did not produce verified geometry.
     /// Set by any non-accepted attempt, cleared by an accepted one or by
@@ -486,6 +495,23 @@ class TilingEngine {
             t.root.pruneEmptyNodes()
             return
         }
+    }
+
+    /// Empty `workspace`'s tree on `screen` without retiling. Its windows
+    /// stay admitted to the workspace; the next `tileLinked` over the
+    /// remaining screens takes them into its strip. For a linked workspace
+    /// whose native-fullscreen window takes that screen while it is up.
+    ///
+    /// - Returns: the ids that left the tree.
+    @discardableResult
+    func vacateTree(forWorkspace workspace: Int, screen: NSScreen) -> [CGWindowID] {
+        guard let t = trees[TilingKey(workspace: workspace, screen: screen)] else { return [] }
+        let windows = t.allWindows
+        guard !windows.isEmpty else { return [] }
+        invalidatePendingLayout()
+        for w in windows { t.remove(w) }
+        t.root.pruneEmptyNodes()
+        return windows.map(\.windowID)
     }
 
     /// The bound a fit check should honour for `window`.
@@ -2055,6 +2081,20 @@ class TilingEngine {
                 return a.windowID < b.windowID
             }
         }
+        // a window coming back to the workspace takes its old slot; only a
+        // window the workspace never had appends at the right end. a window
+        // no longer admitted here (moved away, or a recycled id) is new.
+        let admitted = admittedWindowIDs[workspace, default: []]
+        let remembered = (linkedOrder[workspace] ?? []).filter(admitted.contains)
+        let rememberedSet = Set(remembered)
+        let returning = incoming.filter { rememberedSet.contains($0.windowID) }
+        if !returning.isEmpty {
+            let byID = Dictionary(uniqueKeysWithValues: (strip + returning).map { ($0.windowID, $0) })
+            let returningIDs = remembered.filter { id in returning.contains { $0.windowID == id } }
+            strip = Self.insertingRemembered(returningIDs, into: strip.map(\.windowID), remembered: remembered)
+                .compactMap { byID[$0] }
+            incoming.removeAll { rememberedSet.contains($0.windowID) }
+        }
         strip.append(contentsOf: incoming)
 
         // sort priorities apply to the whole strip, so "higher = further
@@ -2070,6 +2110,11 @@ class TilingEngine {
                     .map { $0.element.0 }
             }
         }
+
+        let order = strip.map(\.windowID)
+        let absent = remembered.filter { !order.contains($0) }
+        linkedOrder[workspace] = Array(Self.insertingRemembered(absent, into: order, remembered: remembered)
+            .prefix(Self.linkedOrderLimit))
 
         let weights = screens.map { max(1, displayManager.cgRect(for: $0).width * displayManager.cgRect(for: $0).height) }
         let capacities = screens.map { 1 << maxDepth(for: $0) }
@@ -2092,6 +2137,21 @@ class TilingEngine {
                                        alsoRestoringWithin: reach))
         }
         return results
+    }
+
+    /// `strip` with each of `ids` put back right after the nearest window
+    /// that preceded it in `remembered`, or at the front when none did.
+    /// `ids` come in `remembered` order and are not in `strip`.
+    static func insertingRemembered(_ ids: [CGWindowID], into strip: [CGWindowID],
+                                    remembered: [CGWindowID]) -> [CGWindowID] {
+        var result = strip
+        for id in ids {
+            guard let index = remembered.firstIndex(of: id) else { result.append(id); continue }
+            let predecessor = remembered[..<index].reversed().first { result.contains($0) }
+            let at = predecessor.flatMap { result.firstIndex(of: $0).map { $0 + 1 } } ?? 0
+            result.insert(id, at: at)
+        }
+        return result
     }
 
     /// Cut `count` windows into contiguous per-screen chunk sizes
