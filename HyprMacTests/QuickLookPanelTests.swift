@@ -260,12 +260,7 @@ final class QuickLookPanelTests: XCTestCase {
     }
 }
 
-private final class QuickLookTestScreen: NSScreen {
-    override func isEqual(_ object: Any?) -> Bool {
-        guard let screen = object as? NSScreen else { return false }
-        return self === screen
-    }
-    override var hash: Int { ObjectIdentifier(self).hashValue }
+private final class QuickLookTestScreen: SyntheticScreen {
     override var frame: NSRect { NSRect(x: 0, y: 0, width: 1600, height: 1000) }
     override var visibleFrame: NSRect { frame }
     override var localizedName: String { "quick-look-test" }
