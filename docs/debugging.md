@@ -205,7 +205,14 @@ logs no trace line; it appears only in typed results. Four line names:
   success. `write` covers the write pass, `read` the settle loop,
   `settle` just the sleeps inside it, and `headroom` is what was left
   of the attempt's deadline: 0.36 s, or 1 s for a pass that moves a window
-  across a backing scale change.
+  across a backing scale change, grown for the targets and cut to what is
+  left of the two-second pass budget (`docs/tiling-algorithm.md`
+  "Two-pass layout").
+- `frame attempt: phase=candidate gen=<n> wids=[…] verdict=accepted in
+  place — every window is already on its target in two reads, nothing
+  written` — at debug, instead of the line above, for a first pass whose
+  targets the capture already found in place and a second read
+  confirmed. No setter went out and nothing was waited for.
 
 `FrameReadbackPoller` logs one `min evidence:` line per window it treats
 as a min-size conflict, under the same category and tier:
@@ -281,6 +288,19 @@ within a third of the deadline is sized anyway, and says so:
 ```
 position settle cut short: wid=<id> phase=candidate after=<n>ms samples=<n> last=(x,y) target=(x,y) — writing size anyway
 ```
+
+The admission recovery's narrowing lines, all `[notice] [tiling]`:
+
+- `admission retry tiles what fits: refused=[…] ws<N> — the known minima
+  do not fit them beside the rest` — the retry dropped the fewest
+  newcomers the known floors rule out and ran the pass for the rest,
+  before writing or after an attempt that learned the floors. The dropped
+  ones come back refused and float without another attempt, as
+  `noFittingSlot`.
+- `admission recovery narrowed: floating […] ws<N> cause=<failure> —
+  retrying […] without them (round <n> of 3)` — the retry was refused on
+  some of its newcomers: those float, the rest get the pass again inside
+  the same retry. After three rounds the rest float as before.
 
 The admission recovery's timeout lines, all `[notice] [tiling]`:
 
@@ -1155,7 +1175,8 @@ default ratios.
 
 Two kinds of missing window are held rather than judged: kept known, on
 their workspace and in their tree, with no frame written to them, so the
-neighbours keep their slots. All `[notice] [discovery]`:
+neighbours keep their slots and the return is usually a pass whose frames
+already stand, accepted in place. All `[notice] [discovery]`:
 
 ```
 holding 1 unreadable window(s) in place: [21915] — on screen, but their app did not answer AX

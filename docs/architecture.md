@@ -332,6 +332,9 @@ another monitor and macOS's rescale-to-neighbor bug cannot fire.
 
 Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.
+Two screens on one x, a stacked desk, keep the order `NSScreen.screens`
+lists them in, which puts the primary display first, so a stacked desk
+keeps the homes it had. Retile All fills the screens in the same order.
 Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
 `moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
@@ -374,7 +377,27 @@ visible-workspace mapping refreshes (`initializeMonitors`), BSP trees
 migrate to each workspace's current home
 (`TilingEngine.handleDisplayChange`), hidden-workspace windows
 re-park at the (possibly moved) global corner, and visible workspaces
-retile. Workspace assignments and the floating set are preserved —
+retile. Each display remembers the workspace it last showed, by name, and
+also by name and frame for two displays of one model. A display that
+comes back shows that workspace again when it is still one of its own;
+otherwise it falls back to its lowest home workspace. The fingerprint that
+gates the reconcile is the sorted list of display names and frames plus
+usable bounds. A display id that changes across a wake, or
+`NSScreen.screens` in another order, is the same desk. When the desk
+comes back with the fingerprint it had before the transition, the
+visible workspaces still retile once, since macOS moved windows while a
+display was away; over frames that already stand that pass only reads.
+
+Within twenty seconds of a sleep, wake, lock or unlock the settle beat is
+five seconds instead of two, since displays reattach one at a time. A
+reconcile that comes due while the session is still locked or the
+displays sleep waits and settles again; when the interruption ends, the
+beat restarts from there. Polls are held off for the whole beat, every
+time it is re-armed, and workspace and layout actions pressed meanwhile
+are dropped with a beep. A park write that fails asks for the repair poll for the
+first three failures in a row only; after that the ordinary poll retries.
+
+Workspace assignments and the floating set are preserved —
 full redistribution (`distributeWindowsAcrossWorkspaces`) runs only at
 first launch and on explicit "Retile All". Discovery polling is
 suppressed through the settle window so drift detection cannot
