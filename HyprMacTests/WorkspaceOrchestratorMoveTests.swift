@@ -52,7 +52,7 @@ final class WorkspaceOrchestratorMoveTests: XCTestCase {
             suppressions: SuppressionRegistry(),
             revalidation: revalidation)
         orchestrator.animatedRetile = { prepare, completion in prepare?(); completion?() }
-        orchestrator.tileAllVisibleSpaces = { }
+        orchestrator.tileAllVisibleSpaces = { _ in }
         orchestrator.screenUnderCursor = { [weak self] in self?.screen ?? NSScreen.main! }
 
         source = workspaceManager.workspaceForScreen(screen)
@@ -90,6 +90,33 @@ final class WorkspaceOrchestratorMoveTests: XCTestCase {
     private func hugeMinimum() -> CGSize {
         let usable = displayManager.cgRect(for: screen)
         return CGSize(width: usable.width * 1.2, height: 0)
+    }
+
+    /// the mover leaves the source by membership only: the one retile after
+    /// the move lays the source out once the window has gone. a retile at
+    /// the removal grew the neighbour under the window while it still stood
+    /// there, and then wrote every remaining tile a second time
+    func testAMoveToAHiddenWorkspaceWritesTheSourceNothingBeforeThePark() throws {
+        let mover = makeWindow(id: 811)
+        let neighbour = makeWindow(id: 812)
+        let usable = displayManager.cgRect(for: screen)
+        trace.frames[mover.windowID] = CGRect(x: usable.minX + 20, y: usable.minY + 20, width: 120, height: 120)
+        trace.frames[neighbour.windowID] = CGRect(x: usable.minX + 200, y: usable.minY + 20, width: 120, height: 120)
+        for w in [mover, neighbour] {
+            workspaceManager.assignWindow(w.windowID, toWorkspace: source)
+            stateCache.cachedWindows[w.windowID] = w
+        }
+        XCTAssertTrue(tilingEngine.tileWindows([mover, neighbour], onWorkspace: source, screen: screen).published)
+        orchestrator.currentFocusedWindow = { mover }
+        orchestrator.allWindows = { [mover, neighbour] }
+        trace.written = []
+
+        orchestrator.moveToWorkspace(destination)
+
+        XCTAssertEqual(workspaceManager.workspaceFor(mover.windowID), destination)
+        XCTAssertEqual(tilingEngine.existingTree(forWorkspace: source, screen: screen)?.allWindows.map(\.windowID),
+                       [neighbour.windowID], "the mover left the tree")
+        XCTAssertTrue(trace.written.isEmpty, "no frame went out before the park: \(trace.written)")
     }
 
     func testALearnedBoundOnAHiddenTenantParksAMarkerInsteadOfWriting() throws {

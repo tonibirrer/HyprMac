@@ -83,7 +83,9 @@ These types decompose what would otherwise be a monolithic
   (`activation-switch`, `mouse-focus`, `workspace-transition`).
 - **`PollingScheduler`** owns a slow (10s) reconcile timer plus a
   coalescing token that funnels event-driven `schedule(after:)` requests
-  down to a single in-flight call. The timer is a safety net — it catches
+  down to a single in-flight call. A request for an earlier fire moves
+  that call up, so a hold's five-second expiry poll never delays an event
+  poll. The timer is a safety net — it catches
   apps that refuse AX observers, notifications the observer layer missed,
   and external moves nothing else reports; `AXNotificationService` events
   are the primary trigger. WindowManager suppresses polling while the mouse
@@ -148,6 +150,35 @@ PollingScheduler.timer (10s reconcile net)     ┘        (coalesced)
 
 Per-app AXObserver notifications are the primary discovery trigger; the
 10s timer only backstops missed events and observer-refusing apps.
+A window the walk could not read — its app failed the window-list read,
+or its frame read failed — is reported on
+`AccessibilityManager.unreadableWindowIDs` while the window server still
+shows it. Discovery holds such a window in every store: not gone, not
+hidden, not returned. The tile pass keeps its leaf and writes no frame to
+it, and the poll that reads it again retiles its key once. The walk sets
+a 0.25 s messaging timeout on the elements it reads, so a stalled app
+costs a quarter second and is held rather than judged. An app whose
+window list timed out is not asked again until a backoff is up, half a
+second doubling to eight (`StallBackoff`), and only one stalled app is
+asked per walk, so a walk pays at most one timeout however many apps
+are stalled; before, every walk asked every stalled app anew, on every
+poll, event, switch and move. The walk logs its duration and what it
+skipped at debug (`AX walk:`). A missing
+window its app still lists, neither minimized nor hidden with the app —
+another Space, a native full-screen excursion, a stale snapshot — is held
+the same way for five seconds (`WindowDiscoveryService.listedHoldSpan`)
+and hidden as before once it passes; a tile pass in between keeps its
+leaf, so the excursion leaves the layout untouched, and the poll that
+ends the hold is asked for when it runs out. `TilingEngine` owns the
+hold: `heldWindowIDsSource` names the windows the walk could not hand
+over, every pass asks it and holds the members its list does not carry,
+so a retile, a move onto the workspace, a scratchpad show, the recovery's
+passes and the drift re-apply all keep the held leaf, and no caller can
+forget it. A pass given no list (a removal such as a send to the
+scratchpad, a resize, a swap, a split toggle, a force insert) holds every
+member of its tree the source names, so it neither reads a hung app's
+window nor writes to one on another Space. A layout restore keeps a held
+member of the live tree as an incumbent instead of dropping its leaf.
 While the session is locked, the displays sleep, or the user session is
 switched out, `computeChanges` treats a missing window as no evidence and
 skips the cycle, and `pollWindowChanges` stops there;
@@ -301,6 +332,9 @@ another monitor and macOS's rescale-to-neighbor bug cannot fire.
 
 Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.
+Two screens on one x, a stacked desk, keep the order `NSScreen.screens`
+lists them in, which puts the primary display first, so a stacked desk
+keeps the homes it had. Retile All fills the screens in the same order.
 Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
 `moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
@@ -343,7 +377,27 @@ visible-workspace mapping refreshes (`initializeMonitors`), BSP trees
 migrate to each workspace's current home
 (`TilingEngine.handleDisplayChange`), hidden-workspace windows
 re-park at the (possibly moved) global corner, and visible workspaces
-retile. Workspace assignments and the floating set are preserved —
+retile. Each display remembers the workspace it last showed, by name, and
+also by name and frame for two displays of one model. A display that
+comes back shows that workspace again when it is still one of its own;
+otherwise it falls back to its lowest home workspace. The fingerprint that
+gates the reconcile is the sorted list of display names and frames plus
+usable bounds. A display id that changes across a wake, or
+`NSScreen.screens` in another order, is the same desk. When the desk
+comes back with the fingerprint it had before the transition, the
+visible workspaces still retile once, since macOS moved windows while a
+display was away; over frames that already stand that pass only reads.
+
+Within twenty seconds of a sleep, wake, lock or unlock the settle beat is
+five seconds instead of two, since displays reattach one at a time. A
+reconcile that comes due while the session is still locked or the
+displays sleep waits and settles again; when the interruption ends, the
+beat restarts from there. Polls are held off for the whole beat, every
+time it is re-armed, and workspace and layout actions pressed meanwhile
+are dropped with a beep. A park write that fails asks for the repair poll for the
+first three failures in a row only; after that the ordinary poll retries.
+
+Workspace assignments and the floating set are preserved —
 full redistribution (`distributeWindowsAcrossWorkspaces`) runs only at
 first launch and on explicit "Retile All". Discovery polling is
 suppressed through the settle window so drift detection cannot
@@ -364,7 +418,9 @@ constrained vertical monitors.
 Max BSP depth is 3 (smallest slot = 1/8 of screen). Beyond that, smart
 insert finds no fitting leaf. The pass reports the window as refused on its
 `AdmissionResult`; nothing routes it elsewhere, and `AdmissionRecovery`
-gives it one bounded retry and then floats it where it stands.
+gives it one bounded retry and then floats it where it stands. A retry
+refused on some of its newcomers floats only those and runs the pass again
+for the rest, at most three times.
 
 Two-pass layout via `HyprWindow.setFrameWithReadback`:
 1. Pass 1 applies target frames and reads back actual sizes.
@@ -567,8 +623,17 @@ this list is the index.
   do not yet. A click on a tile still lifts it natively; the click re-raise
   puts the floater back about 40 ms after mouse-up and hands focus back to
   the tile without lifting it, so the covered part of the floater blinks
-  once per click. That works only for a floater of the tile's own app. When a raise does nothing, the dim shows the floater only
-  where it is in front. See `docs/debugging.md` "Floaters, open menus and
+  once per click. That works only for a floater of the tile's own app. A
+  floater whose app takes the front when raised is cooled down at once
+  after that click, and each such loop doubles the cooldown up to ten
+  minutes, so it blinks on one click and not on every one. A pair that
+  stays quiet for five minutes after its cooldown ends starts that
+  escalation over. No raise is scheduled off an app activation while a
+  press or a click is in flight. The refocus that follows a click honours
+  the quiet window after a keyboard action; the refocus a keyboard action
+  asks for itself does not, so a send-to-scratchpad does not leave focus
+  on the window it just parked. When a raise does nothing, the dim shows
+  the floater only where it is in front. See `docs/debugging.md` "Floaters, open menus and
   no-raise focus".
 - **Squishy-sibling swap rejection** — when a swap squishes a
   sibling app that has no AX-reported or readback-confirmed minimum

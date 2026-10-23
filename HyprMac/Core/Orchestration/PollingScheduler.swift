@@ -36,6 +36,7 @@ final class PollingScheduler {
     private var isStarted = false
     private var pendingPoll = false
     private var pendingDelay: TimeInterval?
+    private var pendingDeadline: DispatchTime?
     private var scheduleGeneration: UInt64 = 0
     private let onPoll: () -> Void
 
@@ -63,6 +64,7 @@ final class PollingScheduler {
             self.onPoll()
         }
         if pendingPoll, let delay = pendingDelay {
+            pendingDeadline = .now() + delay
             armFire(after: delay, generation: scheduleGeneration)
         }
     }
@@ -74,13 +76,17 @@ final class PollingScheduler {
         isStarted = false
         pendingPoll = false
         pendingDelay = nil
+        pendingDeadline = nil
         scheduleGeneration &+= 1
     }
 
     /// Schedule a single coalesced poll `delay` seconds from now.
     ///
     /// If a poll is already pending, the new request is dropped — the
-    /// pending one fires first and captures whatever changed. A fire that
+    /// pending one fires first and captures whatever changed — unless it
+    /// asks for an earlier fire. Then the pending one is re-armed at the
+    /// earlier deadline, so a long wait (a hold running out) never holds
+    /// back an event poll. A fire that
     /// is requested before `start()` remains pending until startup finishes.
     /// This keeps launch notifications from racing the initial snapshot.
     /// A fire that
@@ -91,11 +97,20 @@ final class PollingScheduler {
     /// suppression is time-bounded (≤4s), so the deferral terminates;
     /// `stop()` clears `pendingPoll`, which cancels a deferral in flight.
     func schedule(after delay: TimeInterval = 0.2) {
-        guard !pendingPoll else { return }
+        let deadline = DispatchTime.now() + delay
+        if pendingPoll {
+            // only a sooner request re-arms. a deferred fire's deadline is
+            // already past, so it is never re-armed
+            let sooner = isStarted
+                ? pendingDeadline.map { deadline < $0 } ?? false
+                : pendingDelay.map { delay < $0 } ?? false
+            guard sooner else { return }
+        }
         pendingPoll = true
         pendingDelay = delay
         scheduleGeneration &+= 1
         if isStarted {
+            pendingDeadline = deadline
             armFire(after: delay, generation: scheduleGeneration)
         }
     }
@@ -112,6 +127,7 @@ final class PollingScheduler {
             }
             self.pendingPoll = false
             self.pendingDelay = nil
+            self.pendingDeadline = nil
             self.onPoll()
         }
     }

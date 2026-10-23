@@ -266,6 +266,7 @@
 		EA8FC0F77CB146BAD8B35CBE /* WindowStateCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 901F153AA3906FE161498E58 /* WindowStateCacheTests.swift */; };
 		EABEFF5EE2EE6EEABE6956EB /* FrameSizingTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D8F5AAFA837B55AEB2831E8 /* FrameSizingTransaction.swift */; };
 		EAD93287EB51947EF49B40DE /* ForceInsertWindowFallbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0C8D3EAFB70C82B163D2DAA /* ForceInsertWindowFallbackTests.swift */; };
+		EAF0DF45A4741C259DF350CA /* ForgottenWindowCleanupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFF82BFB0DD5A67058F96BE9 /* ForgottenWindowCleanupTests.swift */; };
 		EBAA92AE4FF80ED33B39219A /* WindowCornerRadius.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6FC3298BBD003F3AD7DAC44 /* WindowCornerRadius.swift */; };
 		EBB19C09B6086F4E063069CC /* FocusBorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38E1F4DBD1DB2807610AB4E /* FocusBorder.swift */; };
 		ED9AA2A6F6F62A2DBB5D3FF9 /* ProbeFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DE4B38D2D91458BAC30BCFB /* ProbeFrame.swift */; };
@@ -440,6 +441,7 @@
 		BB697B2619BEB7E2434E157E /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		BB8DE37F0110F3E975EE8BB9 /* StateDumpFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateDumpFormatterTests.swift; sourceTree = "<group>"; };
 		BE062173D513A1A60A3E704D /* ConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigStore.swift; sourceTree = "<group>"; };
+		BFF82BFB0DD5A67058F96BE9 /* ForgottenWindowCleanupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForgottenWindowCleanupTests.swift; sourceTree = "<group>"; };
 		C065112E8478DA1E16DC4D64 /* TiledFocusRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledFocusRouter.swift; sourceTree = "<group>"; };
 		C0C8D3EAFB70C82B163D2DAA /* ForceInsertWindowFallbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForceInsertWindowFallbackTests.swift; sourceTree = "<group>"; };
 		C4BF3E3B39107A11D98F0575 /* PollingScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PollingScheduler.swift; sourceTree = "<group>"; };
@@ -734,6 +736,7 @@
 				5C3932D77600EA8C6056C2E3 /* FloatingFocusStackingTests.swift */,
 				084CC77D9BC9594A5E7DE366 /* FocusStateControllerTests.swift */,
 				C0C8D3EAFB70C82B163D2DAA /* ForceInsertWindowFallbackTests.swift */,
+				BFF82BFB0DD5A67058F96BE9 /* ForgottenWindowCleanupTests.swift */,
 				3E74E9F8AA97C6653000640F /* FrameReadbackPollerTests.swift */,
 				3F7802C236774AA24452B3E1 /* FrameSizingTransactionTests.swift */,
 				56823428D522E6724F9CB840 /* FullscreenWorkspaceTransferTests.swift */,
@@ -1221,6 +1224,7 @@
 				BC3FDA5074F38001F6917FBB /* FloatingFocusStackingTests.swift in Sources */,
 				EDF1F6BE9094C220921182DC /* FocusStateControllerTests.swift in Sources */,
 				EAD93287EB51947EF49B40DE /* ForceInsertWindowFallbackTests.swift in Sources */,
+				EAF0DF45A4741C259DF350CA /* ForgottenWindowCleanupTests.swift in Sources */,
 				12B84235B0C9B244D9366F35 /* FrameReadbackPollerTests.swift in Sources */,
 				4C307BB05F3FA6FC89B4A9F5 /* FrameSizingTransactionTests.swift in Sources */,
 				F9857D1EBAD4EB6F9113B6E1 /* FullscreenWorkspaceTransferTests.swift in Sources */,

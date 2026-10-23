@@ -116,6 +116,23 @@ final class LayoutTreeRebuildTests: XCTestCase {
 
     // MARK: - missing and extra windows
 
+    /// a restore while a member is held (its app hung, or it is off on
+    /// another space) is not given that member: the walk could not list
+    /// it. the rebuild keeps it in the tree instead of dropping its leaf
+    func testAHeldMemberSurvivesARebuildThatWasNotGivenIt() {
+        _ = engine.prepareTileLayout(ids([1, 2, 3]), onWorkspace: 1, screen: screen)
+        engine.heldWindowIDsSource = { [3] }
+        let saved = LayoutNode.split(override: nil, ratio: 0.5, userSet: false, left: leaf(2), right: leaf(1))
+
+        let outcome = engine.rebuildTree(forWorkspace: 1, screen: screen, from: saved,
+                                         windows: ids([1, 2]), applyFrames: true, resolve: byID)
+
+        XCTAssertEqual(outcome, .rebuilt(inserted: 1, refusedNewcomers: []))
+        XCTAssertEqual(Set(live()!.allWindows.map(\.windowID)), [1, 2, 3])
+        XCTAssertEqual(engine.releaseHeldWindows(readable: [1, 2, 3]), [3],
+                       "the poll that reads it again gives it its new slot")
+    }
+
     func testMissingWindowCollapsesItsSplit() {
         let saved = LayoutNode.split(
             override: nil, ratio: 0.6, userSet: true,

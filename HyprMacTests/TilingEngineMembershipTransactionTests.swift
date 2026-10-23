@@ -25,6 +25,561 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(engine.unverifiedLayouts.contains { $0.windowIDs.contains(incumbent.windowID) })
     }
 
+    /// a member whose app did not answer the discovery walk is absent from
+    /// the pass's list but held by the caller: its leaf stays, so every
+    /// other slot stays, and no frame goes out to it
+    func testAHeldMemberKeepsItsLeafAndIsNotWritten() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 951), makeWindow(id: 952), makeWindow(id: 953)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        let shape = engine.existingTree(forWorkspace: 1, screen: screen)?.structuralFingerprint()
+        let slots = engine.intendedTileRects()
+        // the two that answered stand off their slots, so the pass writes
+        // them instead of taking the layout as it stands
+        for id in [CGWindowID(951), 952] { trace.frames[id] = rect.insetBy(dx: 100, dy: 100) }
+        trace.written = []
+
+        engine.heldWindowIDsSource = { [953] }
+        let result = engine.tileWindows(Array(windows.prefix(2)), onWorkspace: 1, screen: screen)
+
+        XCTAssertTrue(result.published)
+        XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.structuralFingerprint(), shape)
+        XCTAssertEqual(trace.written, [951, 952], "nothing goes out to the app that did not answer")
+        XCTAssertEqual(engine.intendedTileRects(), slots, "every slot is where it was")
+        // the poll that reads 953 again asks for the retile, once
+        XCTAssertEqual(engine.releaseHeldWindows(readable: [951, 952]), [])
+        XCTAssertEqual(engine.releaseHeldWindows(readable: [951, 952, 953]), [953])
+        XCTAssertEqual(engine.releaseHeldWindows(readable: [951, 952, 953]), [])
+    }
+
+    /// a send to the scratchpad takes a window out and retiles the rest.
+    /// that pass is given no list, so it asks the source too: a hung app's
+    /// window keeps its leaf and is not read, and the retile is accepted.
+    /// it used to fail on the read and leave the key unverified
+    func testARemovalRetilesAroundAHeldMember() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 961), makeWindow(id: 962), makeWindow(id: 963)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        trace.written = []
+
+        // 963's app stops answering
+        trace.frames[963] = nil
+        engine.heldWindowIDsSource = { [963] }
+        engine.removeWindow(windows[0], fromWorkspace: 1)
+
+        XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.map(\.windowID).sorted(),
+                       [962, 963])
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty, "the retile is accepted around the held member")
+        XCTAssertTrue(trace.written.contains(962), "the survivor takes the freed room")
+        XCTAssertFalse(trace.written.contains(963))
+        XCTAssertEqual(engine.releaseHeldWindows(readable: [962, 963]), [963])
+    }
+
+    /// a window off on another space still reads, so a pass without the
+    /// hold wrote to it there. a swap, a split toggle and a resize on its
+    /// workspace keep its leaf and write it nothing
+    func testRearrangingATreeWritesNothingToAHeldMember() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 966), b = makeWindow(id: 967), held = makeWindow(id: 968)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, held] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, held], onWorkspace: 1, screen: screen).published)
+        trace.written = []
+
+        engine.heldWindowIDsSource = { [held.windowID] }
+        XCTAssertTrue(engine.swapWindows(a, b, onWorkspace: 1, screen: screen))
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        engine.resizeInDirection(a, direction: .left, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(Set(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.map(\.windowID) ?? []),
+                       [966, 967, 968])
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty)
+        XCTAssertTrue(trace.written.contains(a.windowID))
+        XCTAssertFalse(trace.written.contains(held.windowID), "nothing goes out to a window on another space")
+    }
+
+    /// a window that rounds a cell wider than its slot passes its own match
+    /// and eats the gap. the pass gets the adjusted layout with room for the
+    /// rounding instead of rolling back, and learns no floor from it
+    func testARoundingOvershootGetsTheAdjustedPassWithoutTeachingAFloor() {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1001), b = makeWindow(id: 1002)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        // the 50/50 slot is 948 wide; the app answers with one cell more
+        let slot = (rect.width - 2 * engine.outerPadding - engine.gapSize) / 2
+        trace.minSize[a.windowID] = CGSize(width: slot + 8, height: 0)
+
+        let result = engine.tileWindows([a, b], onWorkspace: 1, screen: screen)
+
+        XCTAssertTrue(result.published)
+        XCTAssertGreaterThanOrEqual(engine.intendedTileRects()[a.windowID]!.width + 1, slot + 8)
+        XCTAssertNotEqual(engine.knownMinimumSizes[a.windowID]?.provenance, .observed,
+                          "a cell of rounding is not a floor")
+    }
+
+    /// a rollback puts each window back where it was. an original a point
+    /// past the edge of the screen, the slack the rollback's own readback
+    /// is allowed, is where it was; it used to make the whole key's
+    /// rollback refused, leaving the failed candidate's frames on screen
+    /// under the old tree
+    func testAnOriginalAPointPastTheEdgeIsStillPutBack() {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1011), b = makeWindow(id: 1012)
+        let usable = engine.displayManager.cgRect(for: screen)
+        for w in [a, b] { trace.frames[w.windowID] = usable.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        // a sits against the right edge and one point past it
+        let protruding = CGRect(x: usable.maxX - 400, y: usable.minY + 8, width: 401, height: 500)
+        trace.frames[a.windowID] = protruding
+        trace.frames[b.windowID] = CGRect(x: usable.minX + 8, y: usable.minY + 8, width: 500, height: 500)
+        trace.failNextSizeWriteID = b.windowID
+
+        let result = engine.tileWindows([a, b], onWorkspace: 1, screen: screen)
+
+        XCTAssertFalse(result.published)
+        XCTAssertTrue(result.restorationVerified,
+                      "failure=\(String(describing: result.failure)) restored=\(result.restoredIDs.sorted())")
+        XCTAssertEqual(trace.frames[a.windowID], protruding)
+    }
+
+    /// a member discovery took out for a poll (an AX read that failed, a
+    /// minimize, Cmd-H) comes back to the slot it left, so nothing else
+    /// moves. it used to be re-inserted wherever smart insert found room,
+    /// which rearranged every window after it
+    func testAMemberThatLeavesForOnePollComesBackToItsSlot() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 971), b = makeWindow(id: 972), c = makeWindow(id: 973), d = makeWindow(id: 974)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c, d] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, c, d], onWorkspace: 1, screen: screen).published)
+        let before = engine.intendedTileRects()
+
+        engine.removeWindowID(b.windowID)
+        XCTAssertTrue(engine.tileWindows([a, c, d], onWorkspace: 1, screen: screen).published)
+        XCTAssertNotEqual(engine.intendedTileRects(), before, "the neighbour took the slot meanwhile")
+        XCTAssertTrue(engine.tileWindows([a, b, c, d], onWorkspace: 1, screen: screen).published)
+
+        XCTAssertEqual(engine.intendedTileRects(), before)
+    }
+
+    /// two members that leave together (an app's two windows hidden with
+    /// it) come back together, and one's remembered neighbour is the other:
+    /// the one that can be restored goes first, whatever the list order,
+    /// and the other then finds it in the tree
+    func testTwoMembersThatLeaveTogetherComeBackToTheirSlots() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 991), b = makeWindow(id: 992), c = makeWindow(id: 993), d = makeWindow(id: 994)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c, d] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, c, d], onWorkspace: 1, screen: screen).published)
+        let before = engine.intendedTileRects()
+
+        // c leaves first, so its neighbour was d; d's neighbour is then b
+        engine.removeWindowID(c.windowID)
+        engine.removeWindowID(d.windowID)
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, b, c, d], onWorkspace: 1, screen: screen).published)
+
+        XCTAssertEqual(engine.intendedTileRects(), before)
+    }
+
+    /// discovery removes a window before the pass runs, so the pass saw
+    /// no membership change and kept the ratios: a split skewed for a
+    /// min-size app stayed skewed after that app was gone
+    func testARatioSkewedForAMinSizeAppResetsOnceItIsGone() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1021), b = makeWindow(id: 1022), c = makeWindow(id: 1023)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        // b needs most of the width, so the root split between a and the
+        // b/c column leans its way
+        trace.minSize[b.windowID] = CGSize(width: rect.width * 0.7, height: 0)
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.left?.window, a)
+        XCTAssertLessThan(root.splitRatio, 0.4, "skewed for b")
+
+        engine.removeWindowID(b.windowID)
+        XCTAssertTrue(engine.tileWindows([a, c], onWorkspace: 1, screen: screen).published)
+
+        // a and c still share the split b skewed, so the ratio is the one
+        // the reset had to reach, not a fresh leaf's default
+        let after = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertFalse(after.isLeaf)
+        XCTAssertEqual(after.splitRatio, TilingConfig.defaultRatio, accuracy: 0.0001,
+                       "the skew left with the app")
+    }
+
+    /// a screen rotated in place keeps its tree's key, so the migration's
+    /// drop of the axes pinned for the other orientation never ran
+    func testAutomaticPinsDropWhenTheScreenTurnsInPlace() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 1031), makeWindow(id: 1032)]
+        for w in windows { trace.frames[w.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .horizontal, "landscape: side by side, pinned")
+        XCTAssertTrue(root.splitOverrideIsAutomatic)
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+
+        let turned = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertNotEqual(turned.splitOverride, .horizontal, "the landscape pin is gone")
+        let rects = engine.intendedTileRects()
+        XCTAssertEqual(rects[1031]!.minX, rects[1032]!.minX, accuracy: 0.5, "stacked on the portrait screen")
+    }
+
+    /// two windows whose minimum widths cannot sit side by side stack on a
+    /// landscape screen. the next pass dropped smart insert's vertical pin
+    /// as one against the screen, put them side by side again, and every
+    /// retile after that was refused
+    func testAFallbackAxisStaysPinnedAcrossPasses() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1061), b = makeWindow(id: 1062)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b] {
+            trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100)
+            trace.minSize[w.windowID] = CGSize(width: 900, height: 0)
+            w.observedMinSize = CGSize(width: 900, height: 0)
+        }
+
+        for pass in 1...3 {
+            XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published,
+                          "pass \(pass)")
+            let rects = engine.intendedTileRects()
+            XCTAssertEqual(rects[a.windowID]?.minX ?? -1, rects[b.windowID]?.minX ?? 1, accuracy: 0.5,
+                           "stacked on pass \(pass)")
+        }
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical)
+        XCTAssertTrue(root.splitOverrideIsAutomatic)
+    }
+
+    /// the same after a turn: the tree accepted for the portrait screen has
+    /// to remember it was laid out there, or the next pass takes the turn
+    /// for a new one and drops the axis chosen on the portrait screen
+    func testAFallbackAxisPinnedAfterATurnStays() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1071), b = makeWindow(id: 1072)
+        trace.frames[a.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        // too tall to stack on the portrait screen
+        trace.frames[b.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100)
+        for w in [a, b] {
+            trace.minSize[w.windowID] = CGSize(width: 0, height: 900)
+            w.observedMinSize = CGSize(width: 0, height: 900)
+        }
+
+        for pass in 1...3 {
+            XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published,
+                          "pass \(pass)")
+            let rects = engine.intendedTileRects()
+            XCTAssertEqual(rects[a.windowID]?.minY ?? -1, rects[b.windowID]?.minY ?? 1, accuracy: 0.5,
+                           "side by side on pass \(pass)")
+        }
+    }
+
+    /// a user pin on the root kept the whole tree from being checked, so
+    /// the automatic pins under it kept the landscape axes after a turn.
+    /// the user's own pin stays through the same pass and every other
+    func testATurnDropsTheAutomaticPinsUnderAUserPin() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1081), b = makeWindow(id: 1082), c = makeWindow(id: 1083)
+        for w in [a, b, c] { trace.frames[w.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical, "the user stacked a over the rest")
+        XCTAssertFalse(root.splitOverrideIsAutomatic)
+        XCTAssertEqual(root.right?.splitOverride, .vertical, "same screen: the inner pin stays")
+        XCTAssertEqual(root.right?.splitOverrideIsAutomatic, true)
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+
+        let turned = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(turned.splitOverride, .vertical, "the user's pin stays")
+        XCTAssertFalse(turned.splitOverrideIsAutomatic)
+        XCTAssertNil(turned.right?.splitOverride, "the landscape pin under it is gone")
+        let rects = engine.intendedTileRects()
+        XCTAssertEqual(rects[b.windowID]?.minY ?? -1, rects[c.windowID]?.minY ?? 1, accuracy: 0.5,
+                       "side by side in the wide bottom half")
+    }
+
+    /// a pin the user set with togglesplit came back as smart insert's own
+    /// after a minimize and a return, and a migration could drop it
+    func testAUserPinSurvivesAReturn() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1041), b = makeWindow(id: 1042)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        let pinned = try XCTUnwrap(root.splitOverride)
+        XCTAssertFalse(root.splitOverrideIsAutomatic)
+
+        engine.removeWindowID(b.windowID)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+
+        let back = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(back.splitOverride, pinned)
+        XCTAssertFalse(back.splitOverrideIsAutomatic, "still the user's pin")
+    }
+
+    /// the same through a leaf's memory: a new window taking the slot of
+    /// one that left a togglesplit split got the user's axis back as smart
+    /// insert's own, and the next turn dropped it
+    func testAUserPinALeafRemembersComesBackAsTheUsers() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1091), b = makeWindow(id: 1092), c = makeWindow(id: 1093)
+        for w in [a, b, c] { trace.frames[w.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        engine.resizeInDirection(a, direction: .down, onWorkspace: 1, screen: screen)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical)
+        XCTAssertTrue(root.userSetRatio, "the resize makes the leaf remember the split")
+
+        engine.removeWindowID(b.windowID)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, c], onWorkspace: 1, screen: screen).published)
+        let back = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(back.splitOverride, .vertical)
+        XCTAssertFalse(back.splitOverrideIsAutomatic, "still the user's pin")
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows([a, c], onWorkspace: 1, screen: screen).published)
+        let turned = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(turned.splitOverride, .vertical, "a turn keeps the user's pin")
+        XCTAssertFalse(turned.splitOverrideIsAutomatic)
+    }
+
+    /// a saved layout comes back in the same shape. an automatic pin on the
+    /// axis the rect gives anyway is not saved, the user's are, and so is
+    /// smart insert's fallback axis: the first two windows cannot sit side
+    /// by side and were stacked on the landscape screen, which the rect
+    /// alone would never give back
+    func testASavedLayoutRestoresToTheSameShape() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 1051), makeWindow(id: 1052), makeWindow(id: 1053)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        for w in windows.prefix(2) {
+            trace.minSize[w.windowID] = CGSize(width: 900, height: 0)
+            w.observedMinSize = CGSize(width: 900, height: 0)
+        }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical, "stacked against the landscape screen")
+        XCTAssertTrue(root.splitOverrideIsAutomatic)
+        engine.toggleSplit(windows[2], onWorkspace: 1, screen: screen)
+        engine.resizeInDirection(windows[0], direction: .down, onWorkspace: 1, screen: screen)
+        XCTAssertTrue(root.userSetRatio)
+        let before = engine.intendedTileRects()
+        let saved = try XCTUnwrap(engine.layoutTree(forWorkspace: 1, ref: {
+            SavedWindowRef(bundleID: "app.\($0.windowID)", title: "")
+        }))
+
+        let again = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                 frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let fresh = windows.map { makeWindow(id: $0.windowID) }
+        let outcome = again.rebuildTree(forWorkspace: 1, screen: screen, from: saved, windows: fresh,
+                                        applyFrames: false) { ref in
+            fresh.first { "app.\($0.windowID)" == ref.bundleID }
+        }
+        guard case .rebuilt = outcome else { return XCTFail("expected a rebuilt tree, got \(outcome)") }
+        let tree = try XCTUnwrap(again.existingTree(forWorkspace: 1, screen: screen))
+        let restored = Dictionary(uniqueKeysWithValues: tree.layout(
+            in: rect, gap: again.gapSize, padding: again.outerPadding
+        ).map { ($0.0.windowID, $0.1) })
+        XCTAssertEqual(restored, before, "the same shape, slot for slot")
+    }
+
+    /// a window that comes back to its slot spends the boundary its
+    /// neighbour remembered when it left. the neighbour kept it, so the
+    /// next new window to split that neighbour took the old window's side
+    /// and the user's ratio
+    func testARestoreSpendsTheNeighboursRememberedBoundary() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1111), b = makeWindow(id: 1112), c = makeWindow(id: 1113)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        for _ in 0..<2 { engine.resizeInDirection(a, direction: .right, onWorkspace: 1, screen: screen) }
+
+        // a leaves from the left, so b remembers a user-set boundary with
+        // the departed window on the left
+        engine.removeWindowID(a.windowID)
+        XCTAssertTrue(engine.tileWindows([b], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        let tree = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
+        XCTAssertEqual(tree.root.left?.window, a, "back in its slot")
+        let leaf = try XCTUnwrap(tree.root.find(b))
+        XCTAssertNil(leaf.savedSplitRatio, "the restore spent it")
+        XCTAssertNil(leaf.savedChildWasLeft)
+        XCTAssertNil(leaf.savedSplitOverride)
+
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        let rects = engine.intendedTileRects()
+        XCTAssertEqual(rects[c.windowID]?.minX ?? -1, rects[b.windowID]?.minX ?? 1, accuracy: 0.5,
+                       "c splits b the dwindle way, below it")
+        XCTAssertGreaterThan(rects[c.windowID]?.minY ?? 0, rects[b.windowID]?.minY ?? 0)
+    }
+
+    /// the same for a manual resize: a window opening or coming back no
+    /// longer wipes every ratio the user set on the workspace
+    func testAReturningMemberKeepsTheManualResizes() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 981), b = makeWindow(id: 982), c = makeWindow(id: 983)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        for _ in 0..<3 { engine.resizeInDirection(a, direction: .right, onWorkspace: 1, screen: screen) }
+        let resized = engine.intendedTileRects()
+        XCTAssertGreaterThan(resized[a.windowID]!.width, rect.width / 2, "the resize took")
+
+        engine.removeWindowID(c.windowID)
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+
+        XCTAssertEqual(engine.intendedTileRects(), resized)
+    }
+
+    func testANewWindowKeepsTheRatioTheUserSet() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 991), b = makeWindow(id: 992), c = makeWindow(id: 993)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        for _ in 0..<3 { engine.resizeInDirection(a, direction: .right, onWorkspace: 1, screen: screen) }
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        let ratio = root.splitRatio
+        XCTAssertTrue(root.userSetRatio)
+
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+
+        let after = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(after.splitRatio, ratio, accuracy: 0.0001)
+        XCTAssertTrue(after.userSetRatio)
+    }
+
+    /// a minimum the memory knows shapes the first pass. the engine used to
+    /// lay out 50/50, watch the refusal, and write everything a second time
+    /// on every retile of the workspace
+    func testAKnownMinimumIsAppliedBeforeTheFirstWrite() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 861), makeWindow(id: 862)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        trace.minSize[862] = CGSize(width: rect.width * 0.7, height: 0)
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        XCTAssertNotNil(windows[1].observedMinSize, "the first tile learned the floor")
+        var writes = 0
+        trace.onWrite = { writes += 1 }
+
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+
+        XCTAssertLessThanOrEqual(writes, 6, "two windows, three setters each, one pass")
+        let wide = engine.intendedTileRects()[862]!
+        XCTAssertGreaterThanOrEqual(wide.width + TilingConfig.frameToleranceXPx, rect.width * 0.7)
+    }
+
+    /// without a hold, a member missing from the list leaves the tree as it
+    /// always has: a close, a minimize, a move
+    func testAMemberMissingWithoutAHoldLeavesTheTree() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 961), makeWindow(id: 962), makeWindow(id: 963)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+
+        let result = engine.tileWindows(Array(windows.prefix(2)), onWorkspace: 1, screen: screen)
+
+        XCTAssertTrue(result.published)
+        XCTAssertEqual(result.publishedIDs, [961, 962])
+        XCTAssertTrue(engine.releaseHeldWindows(readable: [963]).isEmpty)
+    }
+
     func testARecycledWindowIDIsJudgedAsANewcomerNotAnIncumbent() {
         let screen = MembershipTestScreen()
         let trace = MembershipTrace()
@@ -83,6 +638,9 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
         XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
         trace.minSize[822] = CGSize(width: rect.width * 0.95, height: 0)
+        // off their slots again, so the pass writes instead of accepting the
+        // layout the windows stand on
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
         var writes = 0
         trace.onWrite = { writes += 1 }
 
@@ -157,6 +715,8 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let window = f.windows[0]
         XCTAssertTrue(f.engine.tileWindows([window], onWorkspace: 1, screen: f.screen).published)
         f.engine.removeWindow(window, fromWorkspace: 1)
+        // it left, so it stands elsewhere when it comes back
+        f.trace.frames[window.windowID] = f.trace.frames[window.windowID]!.insetBy(dx: 100, dy: 100)
         f.trace.forgetWrites()
         f.trace.rejectNextRead = true
 
@@ -698,6 +1258,63 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(retry.refusedIDs, [newcomer.windowID])
         XCTAssertEqual(retry.publishedIDs, [tenant.windowID])
         XCTAssertTrue(retry.insertedIDs.isEmpty)
+    }
+
+    /// Most retiles are over a key nothing changed on. The second pass over
+    /// the same members reads the frames it captured, accepts them, and
+    /// writes nothing; the key stays verified.
+    func testARetileOverUnchangedMembersWritesNothingAndStaysVerified() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 32901), makeWindow(id: 32902)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        XCTAssertEqual(trace.written, Set(windows.map(\.windowID)))
+        trace.written = []
+
+        let again = engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+
+        XCTAssertTrue(again.published, "failure=\(String(describing: again.failure))")
+        XCTAssertTrue(trace.written.isEmpty, "the capture was the readback: \(trace.written)")
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty)
+        XCTAssertEqual(Set(engine.windowIDs(inTreeForWorkspace: 1, screen: screen)),
+                       Set(windows.map(\.windowID)))
+    }
+
+    /// the fit check judges the arrangement the pass would produce, and the
+    /// pass keeps a held member's leaf; a check that dropped it accepted a
+    /// newcomer into a slot the pass then could not give it
+    func testTheFitCheckKeepsAHeldMembersLeaf() {
+        let screen = MembershipTestScreen()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }))
+        let tenant = makeWindow(id: 32951)
+        let held = makeWindow(id: 32952)
+        _ = engine.prepareTileLayout([tenant, held], onWorkspace: 1, screen: screen)
+        // side by side at 796 by 1000 each, and neither leaf can be split
+        // for a third either way: both floors need 700 on both axes. with
+        // the held member's leaf dropped the tenant would have the whole
+        // width to share
+        for w in [tenant, held] {
+            w.observedMinSize = CGSize(width: 700, height: 700)
+            w.minSizeProvenance = .observed
+        }
+        // and the newcomer needs room of its own, or a sliver beside the
+        // tenant would do for it
+        let newcomer = makeWindow(id: 32953)
+        newcomer.observedMinSize = CGSize(width: 400, height: 400)
+        newcomer.minSizeProvenance = .observed
+        engine.primeMinimumSizes([tenant, held, newcomer])
+
+        XCTAssertEqual(engine.projectedAdmissionOutlook([tenant, newcomer], incoming: [newcomer.windowID],
+                                                        onWorkspace: 1, screen: screen), .fits,
+                       "without the hold the absent member's slot is free")
+        engine.heldWindowIDsSource = { [held.windowID] }
+        let withHold = engine.projectedAdmissionOutlook([tenant, newcomer], incoming: [newcomer.windowID],
+                                                        onWorkspace: 1, screen: screen)
+        XCTAssertNotEqual(withHold, .fits, "the held member keeps its leaf, and its floor leaves no room")
     }
 
     /// The second Outlook window. The first one taught the engine a floor
@@ -1290,7 +1907,7 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
                                            onWorkspace: 1, screen: f.screen))
         XCTAssertFalse(f.trace.written.isEmpty)
         XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
-                          ?? .infinity, 1500)
+                          ?? .infinity, 1700)
     }
 
     func testSwapProbesPastAnAppHintAndAdoptsItsOwnAcceptedSize() throws {
@@ -1301,7 +1918,7 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
         XCTAssertEqual(f.engine.knownMinimumSizes[f.windows[0].windowID]?.provenance,
                        .observed)
         XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
-                          ?? .infinity, 1500)
+                          ?? .infinity, 1700)
     }
 
     func testPreparedSwapCarriesItsScopedRevalidationIntoFinalApply() throws {
@@ -1311,7 +1928,7 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
                                                     onWorkspace: 1, screen: f.screen))
         XCTAssertTrue(f.engine.applyComputedLayout(onWorkspace: 1, screen: f.screen))
         XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
-                          ?? .infinity, 1500)
+                          ?? .infinity, 1700)
     }
 
     func testSupersededPreparedSwapCannotReuseItsBypassOrWriteStaleFrames() throws {
@@ -1321,7 +1938,7 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
 
         _ = f.engine.beginLayoutGeneration()
         f.engine.forgetMinimumSize(windowID: f.windows[0].windowID)
-        f.windows[0].observedMinSize = CGSize(width: 1500, height: 0)
+        f.windows[0].observedMinSize = CGSize(width: 1700, height: 0)
         f.windows[0].minSizeProvenance = .seeded
         f.engine.primeMinimumSizes(f.windows)
         f.trace.written = []
@@ -1382,7 +1999,9 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
         trace.frames = Dictionary(uniqueKeysWithValues: tree.layout(
             in: rect, gap: engine.gapSize, padding: engine.outerPadding
         ).map { ($0.0.windowID, $0.1) })
-        windows[0].observedMinSize = CGSize(width: 1500, height: 0)
+        // wider than the 85 % the left column can grow to, so no ratio
+        // adjustment accommodates it and only a probe past the bound can
+        windows[0].observedMinSize = CGSize(width: 1700, height: 0)
         windows[0].minSizeProvenance = provenance
         trace.written = []
         return (engine, tree, windows, screen, trace)
@@ -1450,6 +2069,12 @@ private final class MembershipTrace {
         }
         return io
     }
+}
+
+private final class RotatableScreen: SyntheticScreen {
+    var bounds = NSRect(x: 4000, y: 0, width: 1600, height: 1000)
+    override var frame: NSRect { bounds }
+    override var visibleFrame: NSRect { bounds }
 }
 
 private final class MembershipTestScreen: SyntheticScreen {

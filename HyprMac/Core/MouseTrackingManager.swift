@@ -259,7 +259,13 @@ class MouseTrackingManager {
     /// When the cursor is not over any tiled window the border is left
     /// alone so `ensureFocusInvariant` can pick a fallback target on
     /// the next pass.
-    func refocusUnderCursor() {
+    /// `afterMouseUp` is the refocus that follows a click by 200 ms; it
+    /// honours the quiet window after a keyboard action, since a click on a
+    /// menu or the Dock used to refocus the tile under the cursor through
+    /// it. The other callers run right after a keyboard action themselves
+    /// (a window hidden, a scratchpad toggle) and must not be gated by it,
+    /// or a send-to-scratchpad left focus on the window it had just parked.
+    func refocusUnderCursor(afterMouseUp: Bool = false) {
         mainThreadOnly()
         // the synthetic click in focusForFFM would close an open menu
         if let popup = openPopup(maxAge: 0) {
@@ -267,6 +273,12 @@ class MouseTrackingManager {
                     + "pid=\(popup.ownerPID) layer=\(popup.layer)")
             return
         }
+        // the same gates the live hover path honours: a native menu, a Dock
+        // popup, and, after a mouse-up only, the moment after a keyboard
+        // action. a click on a menu or the Dock used to refocus the tile
+        // under the cursor through them
+        guard !menuTracking, !dockIsActive else { return }
+        if afterMouseUp, isMouseFocusSuppressed() { return }
         let mouseNS = mouseLocationNS()
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
@@ -303,9 +315,11 @@ class MouseTrackingManager {
                 return
             }
         }
-        // cursor not over any tiled window — clear FFM state but leave the
-        // border alone so the invariant check can put it on a sensible target
-        recordFocus(0, "refocus-under-cursor-clear")
+        // cursor not over any tiled window: the menu bar, the Dock, the
+        // desktop, a window HyprMac does not manage. focus stays where it
+        // was. clearing it here blanked the dim for a moment and sent the
+        // next hover over the old tile through the slow path with a
+        // synthetic click
     }
 
     /// Short-TTL cache of the window list. `CGWindowListCopyWindowInfo` is

@@ -305,6 +305,7 @@ class TilingEngine {
     /// window is forgotten by the discovery layer.
     func forgetMinimumSize(windowID: CGWindowID) {
         forgetAdmittedIdentity(windowID: windowID)
+        slotMemory.removeValue(forKey: windowID)
         minSizes.forget(windowID: windowID)
         observedMinimumGeneration.removeValue(forKey: windowID)
     }
@@ -343,11 +344,18 @@ class TilingEngine {
     /// (Cmd-H, minimize, missed AX poll) doesn't reshuffle the tree.
     /// No-op when no tree contains `windowID`.
     func removeWindowID(_ windowID: CGWindowID) {
-        for (_, t) in trees {
+        forgetHeld(windowID)
+        for (key, t) in trees {
             guard let w = t.allWindows.first(where: { $0.windowID == windowID }) else { continue }
             invalidatePendingLayout()
+            rememberSlot(of: w, in: t, key: key)
             t.remove(w)
             t.root.pruneEmptyNodes()
+            // the membership changed here, not in the pass that follows, so
+            // the pass would keep the ratios: a split skewed for a min-size
+            // app stayed skewed after that app was gone. user-set ratios
+            // stay, as on every reset
+            t.root.resetSplitRatios()
             return
         }
     }
@@ -434,9 +442,30 @@ class TilingEngine {
         let candidates = trees.filter { $0.key.workspace == workspace && !$0.value.allWindows.isEmpty }
             .sorted { ($1.value.allWindows.count, $0.key.screenID) < ($0.value.allWindows.count, $1.key.screenID) }
         for (_, t) in candidates {
-            if let root = Self.serialize(t.root, ref: ref) { return root }
+            if let root = Self.serialize(t.root, keeping: fallbackPins(in: t), ref: ref) { return root }
         }
         return nil
+    }
+
+    /// The automatic pins on the other axis from the one dwindle reads off
+    /// their rect: smart insert's fallback for a pair that did not fit the
+    /// usual way. A rebuild from the snapshot would read the rect again and
+    /// lose that axis, so these are saved.
+    private func fallbackPins(in tree: BSPTree) -> Set<ObjectIdentifier> {
+        guard let rect = tree.lastLayoutRect else { return [] }
+        var pins = Set<ObjectIdentifier>()
+        func walk(_ node: BSPNode) {
+            guard let left = node.left, let right = node.right else { return }
+            if node.splitOverrideIsAutomatic, let pinned = node.splitOverride,
+               let nodeRect = tree.rectForNode(node, in: rect, gap: gapSize, padding: outerPadding),
+               pinned != (nodeRect.width >= nodeRect.height ? .horizontal : .vertical) {
+                pins.insert(ObjectIdentifier(node))
+            }
+            walk(left)
+            walk(right)
+        }
+        walk(tree.root)
+        return pins
     }
 
     /// Outcome of `rebuildTree`.
@@ -465,8 +494,10 @@ class TilingEngine {
     /// `windows`, a floater, or a window already placed collapses that
     /// leaf's split exactly as closing it would. Every window in
     /// `windows` the snapshot did not name is smart-inserted around the
-    /// restored shape, incumbents before newcomers. Ratios, user-set flags
-    /// and overrides come through verbatim — nothing is reset.
+    /// restored shape, incumbents before newcomers. A held member of the
+    /// live tree (see `heldWindowIDsSource`) is one of those incumbents
+    /// and gets no frame. Ratios, user-set flags and overrides come through
+    /// verbatim — nothing is reset.
     ///
     /// An incumbent (admitted on the workspace, or in one of its trees)
     /// that finds no slot rejects the rebuild with `.refusedIncumbents`
@@ -482,13 +513,19 @@ class TilingEngine {
     func rebuildTree(forWorkspace workspace: Int, screen: NSScreen, from root: LayoutNode,
                      windows: [HyprWindow], applyFrames: Bool,
                      resolve: (SavedWindowRef) -> HyprWindow?) -> LayoutRebuildOutcome {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
         let key = TilingKey(workspace: workspace, screen: screen)
         let rect = layoutRect(for: key, screen: screen)
-        let tileable = windows.filter { !$0.isFloating }
+        // a held member of the live tree is not in the list. it stays in
+        // as an incumbent and gets no frame, so the restore does not drop it
+        let held = trees[key]?.allWindows.filter { heldWindowIDs.contains($0.windowID) } ?? []
+        let tileable = windows.filter { !$0.isFloating } + held
         let tileableIDs = Set(tileable.map(\.windowID))
-        primeMinimumSizes(tileable)
+        primeMinimumSizes(windows.filter { !$0.isFloating })
 
         var placed = Set<CGWindowID>()
         let candidate = BSPTree()
@@ -544,7 +581,9 @@ class TilingEngine {
             admit(candidate.allWindows.map(\.windowID), toWorkspace: workspace)
         }
 
-        if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+        if let live = trees[key] { live.adopt(candidate) } else { trees[key] = candidate }
+        // the poll that reads a held member again gives it its new slot
+        if !held.isEmpty { heldByKey[key, default: []].formUnion(held.map(\.windowID)) }
         if !applyFrames {
             // parked windows: the tree speaks for nothing on screen until a show verifies it
             mark(key, windowIDs: Set(candidate.allWindows.map(\.windowID)),
@@ -605,18 +644,24 @@ class TilingEngine {
         }
     }
 
-    private static func serialize(_ node: BSPNode, ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
+    private static func serialize(_ node: BSPNode, keeping fallbacks: Set<ObjectIdentifier>,
+                                  ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
         if let window = node.window {
             return ref(window).map(LayoutNode.leaf)
         }
         guard let left = node.left, let right = node.right else { return nil }
-        switch (serialize(left, ref: ref), serialize(right, ref: ref)) {
+        switch (serialize(left, keeping: fallbacks, ref: ref), serialize(right, keeping: fallbacks, ref: ref)) {
         case (nil, nil):
             return nil
         case (let only?, nil), (nil, let only?):
             return only
         case (let l?, let r?):
-            return .split(override: node.splitOverride, ratio: node.splitRatio,
+            // an axis smart insert pinned is this screen's, and the rect
+            // gives it back; only togglesplit goes into the snapshot, and a
+            // fallback axis the rect would not give back
+            let leftOut = node.splitOverrideIsAutomatic && !fallbacks.contains(ObjectIdentifier(node))
+            return .split(override: leftOut ? nil : node.splitOverride,
+                          ratio: node.splitRatio,
                           userSet: node.userSetRatio, left: l, right: r)
         }
     }
@@ -828,10 +873,13 @@ class TilingEngine {
         return .committed(candidate: candidate, actualFrames: actualFrames, progress: progress)
     }
 
-    /// A drag is a layout attempt too. Anything short of a committed drop
-    /// leaves the dragged tile somewhere the tree did not put it, or the
-    /// originals written back over it, so the key stops speaking for its
-    /// geometry until a layout is accepted again.
+    /// A drag is a layout attempt too. A drop that was refused after its
+    /// writes, or degraded, leaves the dragged tile somewhere the tree did
+    /// not put it, or the originals written back over it, so the key stops
+    /// speaking for its geometry until a layout is accepted again. A
+    /// preflight refusal, whatever its reason, wrote nothing and marks
+    /// nothing. Only the beep is narrower: `TiledDragFeedbackPolicy` keeps
+    /// it for every preflight reason but a release with nowhere to land.
     private func noteDragGeometry(_ outcome: TiledDragDropOutcome, snapshot: TiledDragSnapshot) {
         switch outcome {
         case .ignored, .superseded, .committed, .acrossTrees: return
@@ -839,7 +887,15 @@ class TilingEngine {
         }
         guard let key = trees.first(where: { $0.value === snapshot.sourceTree })?.key else { return }
         var restored = false
-        if case .rejectedRestored = outcome { restored = true }
+        if case let .rejectedRestored(reason, _) = outcome {
+            // nothing was written before a preflight refusal, any of them,
+            // and the verified rollback put the dragged window back on its
+            // slot: the tree still speaks for the key. marking it here
+            // switched drift watching off for the workspace on every
+            // release in a gap
+            if case .preflight = reason { return }
+            restored = true
+        }
         mark(key, windowIDs: snapshot.context.memberIDs, insertedIDs: [], restored: restored)
     }
 
@@ -1089,6 +1145,8 @@ class TilingEngine {
                              homeScreenForWorkspace: (Int) -> NSScreen?) {
         // resolution and usable bounds can change without changing a tree key.
         invalidatePendingLayout()
+        // the reconcile retiles every visible key; a hold from before it is moot
+        heldByKey.removeAll()
         var migrations: [(old: TilingKey, dest: NSScreen)] = []
         var orphans: [TilingKey] = []
 
@@ -1120,6 +1178,8 @@ class TilingEngine {
         for (oldKey, newScreen) in migrations {
             guard let tree = trees.removeValue(forKey: oldKey) else { continue }
             let newKey = TilingKey(workspace: oldKey.workspace, screen: newScreen)
+            // axes pinned for a landscape screen would stack a portrait one
+            tree.dropAutomaticSplitOverrides(ifTurnedTo: layoutRect(for: newKey, screen: newScreen))
             // the mark belongs to the tree, not to the coordinates. dropping
             // it on migration would let the same unverified windows start
             // advertising intended rects under the new key without a single
@@ -1179,6 +1239,54 @@ class TilingEngine {
         ioFactory: frameSizingIOFactory
     )
 
+    /// The most the forward passes of one verified layout attempt may hold
+    /// the main thread: the candidate, its adjusted pass, the topology
+    /// recovery and the timeout recovery's retry share it. Summed, their
+    /// own deadlines came to more than three seconds, plus the per-target
+    /// and scale-change growth. Each is capped at what is left when it
+    /// starts; a pass after the candidate with less than `passBudgetFloor`
+    /// left does not start, and the rollback follows instead.
+    ///
+    /// The rollbacks are outside it. A rollback is the safety net that puts
+    /// every window back, and one cut short stops mid-write with some
+    /// windows still on candidate frames under the old tree. Each keeps its
+    /// own deadline: 0.75 s plus 80 ms per target past three, or the
+    /// scale-change budget when it carries a window back across scales.
+    ///
+    /// The clock runs from the attempt's start, so a rollback's time counts
+    /// against the passes after it, but nothing cuts the rollback itself.
+    /// The real worst case for one attempt is the capture before it
+    /// (0.36 s), 2 s of passes, and one last rollback on its own deadline,
+    /// plus one AX call past each pass's last check (100 ms, 250 ms on the
+    /// timeout retry). Eight windows on one scale: 0.36 + 2 + 1.15, about
+    /// 3.5 s.
+    static let passBudget: TimeInterval = 2.0
+    /// The least a pass gets: the candidate is never cut below it, and a
+    /// later pass that would be is skipped.
+    static let passBudgetFloor: TimeInterval = 0.25
+
+    /// When set, every verified attempt draws on the one `passBudget`
+    /// started then instead of starting its own.
+    private var sharedPassBudgetStart: TimeInterval?
+
+    /// Run `body` with every verified attempt in it sharing one
+    /// `passBudget`, started now. The admission recovery runs a key's
+    /// narrowing rounds in one, so four rounds cannot hold the main thread
+    /// for four budgets. The rollbacks keep their own deadlines.
+    func sharingOnePassBudget<T>(_ body: () -> T) -> T {
+        let previous = sharedPassBudgetStart
+        sharedPassBudgetStart = previous ?? readbackPoller.now
+        defer { sharedPassBudgetStart = previous }
+        return body()
+    }
+
+    /// Whether the shared budget still has the floor left for another
+    /// attempt. Always true outside `sharingOnePassBudget`.
+    var passBudgetLeft: Bool {
+        guard let start = sharedPassBudgetStart else { return true }
+        return Self.passBudget - (readbackPoller.now - start) >= Self.passBudgetFloor
+    }
+
     private lazy var timeoutRecoveryPoller: FrameReadbackPoller = {
         FrameReadbackPoller(
             configuration: FrameSizingConfiguration().withTimeoutRecoveryBudget,
@@ -1197,6 +1305,19 @@ class TilingEngine {
                                     originalFrames: [CGWindowID: CGRect]? = nil,
                                     restorationUsableFrame: CGRect? = nil,
                                     topologyRecoveryMaxDepth: Int? = nil) -> LayoutApplicationOutcome {
+        // a pass that only rearranges the tree (a removal, a resize, a swap,
+        // a split toggle, a force insert) was given no list. it holds what
+        // the source names in the tree, or it reads a hung app's window and
+        // fails, or writes to one on another space
+        let treeOnly = passHeldIDs == nil
+        if treeOnly {
+            passHeldIDs = heldWindowIDsSource().intersection(tree.allWindows.map(\.windowID))
+        }
+        defer { if treeOnly { passHeldIDs = nil } }
+        if treeOnly, !heldWindowIDs.isEmpty {
+            heldByKey[key, default: []].formUnion(heldWindowIDs)
+            hyprLog(.notice, .tiling, "layout: ws\(key.workspace) holds \(heldWindowIDs.sorted()) — leaves kept, no frame written")
+        }
         // a rebuild names incumbents among its inserts; those still roll back
         let newcomers = Set(inserted)
             .subtracting(admittedWindowIDs[key.workspace] ?? [])
@@ -1278,9 +1399,11 @@ class TilingEngine {
     ///
     /// Only an accepted layout publishes. Acceptance is the one state that
     /// carries every condition at once: all three setters returned success
-    /// for every target, the final readback was complete and stable, every
-    /// window matched its target within the per-window tolerances, and the
-    /// aggregate geometry passed `validateFrames`. Anything else — a
+    /// for every target, or the in-place pass sent none because every
+    /// window already stood on its target in two matching reads; the final
+    /// readback was complete and stable, every window matched its target
+    /// within the per-window tolerances, and the aggregate geometry passed
+    /// `validateFrames`. Anything else — a
     /// partial write, an unreadable or unsettled readback, a cleanup error
     /// after clean-looking frames, a window that stopped 340 points short —
     /// keeps the prior membership and ratios and leaves the key unverified.
@@ -1404,10 +1527,13 @@ class TilingEngine {
                                             restorationUsableFrame suppliedRestorationFrame: CGRect?,
                                             topologyRecoveryMaxDepth: Int?,
                                             newcomerIDs: Set<CGWindowID>) -> LayoutApplicationOutcome {
-        let windows = tree.allWindows
+        // a held member is in the tree but not in this pass: nothing is read
+        // from it or written to it
+        let windows = tree.allWindows.filter { !heldWindowIDs.contains($0.windowID) }
         let restorationFrame = suppliedRestorationFrame ?? rect
         let originalFrames: [CGWindowID: CGRect]
-        if let suppliedOriginalFrames {
+        // a prepared pass may have captured a member held since
+        if let suppliedOriginalFrames = suppliedOriginalFrames?.filter({ !heldWindowIDs.contains($0.key) }) {
             guard suppliedOriginalFrames.count == windows.count,
                   windows.allSatisfy({ suppliedOriginalFrames[$0.windowID] != nil }) else {
                 let missing = windows.first { suppliedOriginalFrames[$0.windowID] == nil }
@@ -1433,13 +1559,39 @@ class TilingEngine {
         }
 
         let candidate = tree.deepClone()
-        let firstLayouts = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
+        // a minimum the memory already knows is applied before the first
+        // write. asking the app to take a slot it refused last time repeats
+        // the resize the user watched, and then the adjusted pass anyway
+        let known = knownMinimumConflicts(in: candidate, rect: rect)
+        if !known.isEmpty {
+            candidate.adjustForMinSizes(known, in: rect, gap: gapSize, padding: outerPadding)
+        }
+        let firstLayouts = writable(candidate.layout(in: rect, gap: gapSize, padding: outerPadding))
         // a window arriving from a screen with a different backing scale
         // makes its app redraw at the new scale while our calls queue behind
         // it. that pass, and a rollback carrying it back, get the longer
         // budget; nothing else does.
         let scaleChanges = scaleChanges(originalFrames, destination: rect)
-        let poller = scaleChanges.isEmpty ? readbackPoller : readbackPoller.withScaleChangeBudget()
+        // one budget for the forward passes, see `passBudget`. the
+        // rollbacks are not in it
+        let passStarted = sharedPassBudgetStart ?? readbackPoller.now
+        func remaining() -> TimeInterval { Self.passBudget - (readbackPoller.now - passStarted) }
+        func budgeted(_ poller: FrameReadbackPoller) -> FrameReadbackPoller {
+            poller.withRemainingBudget(max(Self.passBudgetFloor, remaining()))
+        }
+        // a pass after the candidate: capped at what is left, or nil when
+        // that is under the floor
+        func laterPass(_ poller: FrameReadbackPoller, _ name: String) -> FrameReadbackPoller? {
+            let left = remaining()
+            guard left >= Self.passBudgetFloor else {
+                hyprLog(.notice, .tiling, "verified layout \(name) skipped: "
+                        + "\(Int((left * 1000).rounded()))ms of the pass budget left")
+                return nil
+            }
+            return poller.withRemainingBudget(left)
+        }
+        let scalePoller = scaleChanges.isEmpty ? readbackPoller : readbackPoller.withScaleChangeBudget()
+        let poller = budgeted(scalePoller)
         if !scaleChanges.isEmpty {
             hyprLog(.notice, .tiling, "verified layout scale change: ids=["
                     + scaleChanges.keys.sorted().map { id in
@@ -1450,14 +1602,19 @@ class TilingEngine {
         }
         let positionFirstIDs = positionFirstWindowIDs(originalFrames, layouts: firstLayouts,
                                                       destination: rect)
+        // the first pass gets the captured originals: a layout every window
+        // already stands on is accepted from them, without a write
         let first = !positionFirstIDs.isEmpty
             ? reconcile(poller.applyWorkspaceReveal(firstLayouts,
                                                     positionFirstWindowIDs: positionFirstIDs,
                                                     usableFrame: rect, gap: gapSize,
-                                                    generation: generation),
+                                                    generation: generation,
+                                                    originalFrames: originalFrames),
                         generation: generation)
-            : applyLayout(firstLayouts, usableFrame: rect, generation: generation, poller: poller)
+            : applyLayout(firstLayouts, usableFrame: rect, generation: generation, poller: poller,
+                          originalFrames: originalFrames)
         if case .accepted = first.verdict {
+            if !known.isEmpty { copyVerifiedRatios(from: candidate.root, to: tree.root) }
             return .accepted(actualFrames: first.actualFrames,
                              progress: FrameSizingProgressReport(candidate: first.progress))
         }
@@ -1470,8 +1627,9 @@ class TilingEngine {
         if case .rejected = first.verdict, !first.conflicts.isEmpty,
            layoutGeneration == generation {
             let conflicts = first.conflicts.map { (window: $0.window, actual: $0.actual) }
-            candidate.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding)
-            let adjusted = candidate.layout(in: rect, gap: gapSize, padding: outerPadding)
+            candidate.adjustForMinSizes(conflicts, in: rect, gap: gapSize, padding: outerPadding,
+                                        givingWayOnUserSet: true)
+            let adjusted = writable(candidate.layout(in: rect, gap: gapSize, padding: outerPadding))
             let frames = Dictionary(uniqueKeysWithValues: adjusted.map { ($0.0.windowID, $0.1) })
             let tolerance = FrameSizingConfiguration().sizeOvershootTolerance
             let resolves = first.observations.allSatisfy { observation in
@@ -1479,10 +1637,10 @@ class TilingEngine {
                 return (!observation.widthConflict || observation.actual.width <= frame.width + tolerance)
                     && (!observation.heightConflict || observation.actual.height <= frame.height + tolerance)
             }
-            if resolves {
+            if resolves, let adjustedPoller = laterPass(poller, "adjusted pass") {
                 terminalLayouts = adjusted
                 terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation,
-                                            poller: poller)
+                                            poller: adjustedPoller)
                 adoptTerminal = { self.copyVerifiedRatios(from: candidate.root, to: tree.root) }
                 if case .accepted = terminal.verdict {
                     copyVerifiedRatios(from: candidate.root, to: tree.root)
@@ -1496,13 +1654,13 @@ class TilingEngine {
                 topologyRecoveredTree(windows, in: rect, maxDepth: maxDepth)
             }
             if adjustedStillRefused, layoutGeneration == generation,
-               let recovered {
+               let recovered, let recoveryPoller = laterPass(poller, "topology recovery") {
                 hyprLog(.notice, .tiling, "admission topology recovery: ids="
                         + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
                 let layouts = recovered.layout(in: rect, gap: gapSize, padding: outerPadding)
                 terminalLayouts = layouts
                 terminal = applyLayoutFinal(layouts, usableFrame: rect, generation: generation,
-                                            poller: poller)
+                                            poller: recoveryPoller)
                 adoptTerminal = { tree.root = recovered.root }
                 if case .accepted = terminal.verdict {
                     tree.root = recovered.root
@@ -1551,12 +1709,22 @@ class TilingEngine {
         // writes went out, where it was if they never reached it. an
         // ordinary pass reports it stranded for the admission recovery;
         // other callers decide for themselves. the incumbents still go back.
+        // an original is a restoration target when it lies within the
+        // restoration rect by the same slack the rollback's own validation
+        // grants its readback. a parked one is a sliver past the edge, and
+        // one on another screen is not there at all; one a point over the
+        // edge, a half-point rounding or a min-height window against the
+        // Dock, is exactly where the window was and goes back there. strict
+        // containment refused the rollback of the whole key for that point
+        // and left the candidate frames on screen under the old tree
+        let reach = restorationFrame.insetBy(dx: -FrameSizingConfiguration().aggregateSafetySlack,
+                                             dy: -FrameSizingConfiguration().aggregateSafetySlack)
         let leftInPlace = newcomerIDs.filter { id in
-            originalFrames[id].map { !restorationFrame.contains($0) } ?? false
+            originalFrames[id].map { !reach.contains($0) } ?? false
         }
         if let invalidOriginalID = originalFrames.keys.sorted().first(where: { windowID in
             !leftInPlace.contains(windowID)
-                && (originalFrames[windowID].map { !restorationFrame.contains($0) } ?? true)
+                && (originalFrames[windowID].map { !reach.contains($0) } ?? true)
         }) {
             // an original parked off the usable frame is not a restoration
             // target, so the candidate writes stay where they landed. the
@@ -1579,26 +1747,31 @@ class TilingEngine {
         // only a rollback that carries a window back across the scale
         // boundary is slow for the same reason the candidate was
         let restoresAcrossScales = originals.contains { scaleChanges[$0.0.windowID] != nil }
-        let restorationPoller = restoresAcrossScales ? poller : readbackPoller
+        // the safety net keeps its own deadline, whatever the passes before
+        // it spent: see `passBudget`
+        let restorationPoller = restoresAcrossScales ? scalePoller : readbackPoller
         let restored = restorationPoller.applyRestoration(originals, usableFrame: restorationFrame,
                                                           gap: gapSize, generation: generation)
         var progress = candidateProgress
         progress.restoration = restored.progress
         progress.restorationOverlaps = restored.overlaps
         if case .accepted = restored.verdict {
+            let relaxedScalePoller = scaleChanges.isEmpty
+                ? timeoutRecoveryPoller : timeoutRecoveryPoller.withScaleChangeBudget()
             if terminal.progress.phase == .candidate,
                terminal.progress.timeoutShapedCannotComplete,
                reason.isDirectCannotComplete,
-               layoutGeneration == generation {
+               layoutGeneration == generation,
+               let relaxedPoller = laterPass(relaxedScalePoller, "AX timeout recovery") {
                 hyprLog(.notice, .tiling, "verified layout AX timeout recovery: reason=\(reason) ids="
                         + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
-                let relaxedPoller = scaleChanges.isEmpty
-                    ? timeoutRecoveryPoller : timeoutRecoveryPoller.withScaleChangeBudget()
                 let relaxedRestorationPoller = restoresAcrossScales
-                    ? relaxedPoller : timeoutRecoveryPoller
-                let retry = relaxedPoller.applyLayout(
-                    firstLayouts, usableFrame: rect, gap: gapSize, generation: generation
-                )
+                    ? relaxedScalePoller : timeoutRecoveryPoller
+                // a pass like any other: what it reads back about a floor is
+                // kept, or the admission retry 250 ms later writes the same
+                // refused frames again and learns them a second time
+                let retry = applyLayout(firstLayouts, usableFrame: rect, generation: generation,
+                                        poller: relaxedPoller)
                 if case .accepted = retry.verdict {
                     hyprLog(.notice, .tiling, "verified layout AX timeout recovery accepted")
                     return .accepted(actualFrames: retry.actualFrames,
@@ -1664,6 +1837,18 @@ class TilingEngine {
         return layoutCanAccommodateKnownMinimums(recovered, rect: rect) ? recovered : nil
     }
 
+    /// The members whose observed minimum does not fit the slot the tree
+    /// gives them, with that minimum as the size to make room for.
+    private func knownMinimumConflicts(in tree: BSPTree, rect: CGRect) -> [(window: HyprWindow, actual: CGSize)] {
+        let slack = TilingConfig.minSizeConflictSlackPx
+        return tree.layout(in: rect, gap: gapSize, padding: outerPadding).compactMap { window, frame in
+            guard minSizes.entry(for: window.windowID)?.provenance == .observed else { return nil }
+            let minimum = minimumSize(for: window)
+            guard minimum.width > frame.width + slack || minimum.height > frame.height + slack else { return nil }
+            return (window, minimum)
+        }
+    }
+
     private func copyVerifiedRatios(from source: BSPNode, to destination: BSPNode) {
         destination.splitRatio = source.splitRatio
         if let sourceLeft = source.left, let destinationLeft = destination.left {
@@ -1679,9 +1864,11 @@ class TilingEngine {
     // BSPTree.adjustForMinSizes.
     private func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                              generation: UInt64,
-                             poller: FrameReadbackPoller) -> FrameReadbackPoller.Result {
+                             poller: FrameReadbackPoller,
+                             originalFrames: [CGWindowID: CGRect]? = nil) -> FrameReadbackPoller.Result {
         reconcile(poller.applyLayout(layouts, usableFrame: usableFrame,
-                                     gap: gapSize, generation: generation),
+                                     gap: gapSize, generation: generation,
+                                     originalFrames: originalFrames),
                   generation: generation)
     }
 
@@ -1909,6 +2096,22 @@ class TilingEngine {
     // tree shape), smart-inserts new windows in a stable order
     // (auto-floating those that don't fit), and resets split ratios.
     // pure with respect to AX — only mutates the tree and engine state.
+    /// The order a batch is inserted in: incumbents first, then left to
+    /// right by current frame, then by id. The retry's fit check and its
+    /// choice of the newcomer to give up on use the same order, so they
+    /// judge what the pass will do.
+    private func insertionOrder(_ a: HyprWindow, _ b: HyprWindow,
+                                frames: [CGWindowID: CGRect], workspace: Int) -> Bool {
+        let aIncumbent = admittedWindowIDs[workspace]?.contains(a.windowID) ?? false
+        let bIncumbent = admittedWindowIDs[workspace]?.contains(b.windowID) ?? false
+        if aIncumbent != bIncumbent { return aIncumbent }
+        let fa = frames[a.windowID] ?? .zero
+        let fb = frames[b.windowID] ?? .zero
+        if fa.origin.x != fb.origin.x { return fa.origin.x < fb.origin.x }
+        if fa.origin.y != fb.origin.y { return fa.origin.y < fb.origin.y }
+        return a.windowID < b.windowID
+    }
+
     private func updateTreeMembership(_ windows: [HyprWindow],
                                       onWorkspace workspace: Int,
                                       screen: NSScreen, candidate: BSPTree? = nil) -> TileMembershipResult {
@@ -1917,44 +2120,70 @@ class TilingEngine {
         let t = candidate ?? tree(for: key)
         let rect = layoutRect(for: key, screen: screen)
 
+        // a screen rotated in place keeps its key, so the migration's drop
+        // of the axes pinned for the other orientation never ran: the pins
+        // stacked a landscape layout on the portrait screen. only a turn
+        // drops them: a pin merely against the rect is smart insert's
+        // fallback for a pair that did not fit the other way
+        t.dropAutomaticSplitOverrides(ifTurnedTo: rect)
+
         let tileWindows = windows.filter { !$0.isFloating }
         let treeWindows = t.allWindows
         let currentIDs = Set(tileWindows.map { $0.windowID })
         let treeIDs = Set(treeWindows.map { $0.windowID })
 
-        for w in treeWindows where !currentIDs.contains(w.windowID) { t.remove(w) }
+        // a member the caller holds is absent from the list only because its
+        // app did not answer; it keeps its leaf
+        var removed = 0
+        for w in treeWindows where !currentIDs.contains(w.windowID) && !heldWindowIDs.contains(w.windowID) {
+            t.remove(w)
+            removed += 1
+        }
 
         t.root.pruneEmptyNodes()
         // no compact on removal — BSPNode.remove promotes the sibling with
         // ratios/overrides intact. compacting here rebuilt the whole tree,
         // reshuffling unrelated windows every time anything closed or hid.
 
+        var toInsert = tileWindows.filter { !treeIDs.contains($0.windowID) }
+
         // reset before insert decisions: fittingLeaf judges candidate rects
         // with live ratios, and a stale pass-2 adjustment (0.85/0.15) from a
-        // previous cycle would skew which leaf accepts the window.
-        t.root.resetSplitRatios()
+        // previous cycle would skew which leaf accepts the window. only when
+        // the membership changed: a pass over the same members keeps the
+        // ratios the last accepted pass found, so a known minimum is not
+        // probed again on every retile.
+        if removed > 0 || !toInsert.isEmpty { t.root.resetSplitRatios() }
 
         // deterministic batch order: left-to-right by current frame, id
         // tiebreak. AX enumeration order shifts with focus/z churn, which
         // made multi-window inserts land differently every time.
-        var toInsert = tileWindows.filter { !treeIDs.contains($0.windowID) }
         if toInsert.count > 1 {
             let frames = Dictionary(uniqueKeysWithValues: toInsert.map { ($0.windowID, $0.frame ?? .zero) })
-            toInsert.sort { a, b in
-                let aIncumbent = admittedWindowIDs[workspace]?.contains(a.windowID) ?? false
-                let bIncumbent = admittedWindowIDs[workspace]?.contains(b.windowID) ?? false
-                if aIncumbent != bIncumbent { return aIncumbent }
-                let fa = frames[a.windowID] ?? .zero
-                let fb = frames[b.windowID] ?? .zero
-                if fa.origin.x != fb.origin.x { return fa.origin.x < fb.origin.x }
-                if fa.origin.y != fb.origin.y { return fa.origin.y < fb.origin.y }
-                return a.windowID < b.windowID
-            }
+            toInsert.sort { insertionOrder($0, $1, frames: frames, workspace: workspace) }
         }
 
+        // members that left for a poll or two go back where they were. two
+        // that left together come back together, and one's remembered
+        // neighbour may be the other: the restores run until none is left
+        // that can, and the first that cannot is inserted in the batch
+        // order, after which the next restore may find its neighbour in
+        // the tree. one pass in list order put the second window wherever
+        // smart insert found room.
         var insertedWindows: [HyprWindow] = []
         var refusedWindows: [HyprWindow] = []
-        for w in toInsert {
+        var pending = toInsert
+        while !pending.isEmpty {
+            if let index = pending.firstIndex(where: { w in
+                restoreRememberedSlot(for: w, in: t, key: key, rect: rect,
+                                      maxDepth: maxDepth(for: screen))
+            }) {
+                insertedWindows.append(pending.remove(at: index))
+                continue
+            }
+            let w = pending.removeFirst()
+            // wherever it lands now is its place; the old one is spent
+            slotMemory.removeValue(forKey: w.windowID)
             let insert = {
                 self.smartInsertFitting(w, into: t, maxDepth: self.maxDepth(for: screen), rect: rect)
             }
@@ -1968,10 +2197,10 @@ class TilingEngine {
             }
         }
 
-        if !insertedWindows.isEmpty {
-            t.root.clearUserSetRatios()
-            t.root.resetSplitRatios()
-        }
+        // a fresh split starts at the default ratio; the splits around it
+        // keep what the user set. every manual resize on the workspace used
+        // to go with any window that opened or came back
+        if !insertedWindows.isEmpty { t.root.resetSplitRatios() }
         t.root.applySavedRatios()
 
         return TileMembershipResult(key: key, tree: t, rect: rect,
@@ -1997,6 +2226,9 @@ class TilingEngine {
     @discardableResult
     func tileWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen,
                      alsoRestoringWithin extraReach: CGRect? = nil) -> AdmissionResult {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
         let live = trees[TilingKey(workspace: workspace, screen: screen)]
@@ -2031,7 +2263,7 @@ class TilingEngine {
                                              ? maxDepth(for: screen) : nil)
         let keptTimeout = keepsTimedOutAdmission ? Self.timeoutWithoutRollback(outcome) : nil
         if publishes(outcome) || keptTimeout != nil, layoutGeneration == generation {
-            if let live { live.root = candidate.root } else { trees[key] = candidate }
+            if let live { live.adopt(candidate) } else { trees[key] = candidate }
             admit(candidate.allWindows.map(\.windowID), toWorkspace: workspace)
             if let keptTimeout {
                 // applyTrackedLayout already marked the key, and only an
@@ -2040,6 +2272,14 @@ class TilingEngine {
                         + candidate.allWindows.map { String($0.windowID) }.joined(separator: ", ")
                         + "] reason=\(keptTimeout) — tiled, key marked unverified")
             }
+        }
+        // whatever this pass did, its held members are still in the live
+        // tree without a frame from it. remember them for the retile that
+        // follows the poll that reads them again
+        let heldHere = heldWindowIDs.intersection(t.allWindows.map(\.windowID))
+        if !heldHere.isEmpty {
+            heldByKey[key, default: []].formUnion(heldHere)
+            hyprLog(.notice, .tiling, "retile: ws\(workspace) holds \(heldHere.sorted()) — leaves kept, no frame written")
         }
 
         // clean up empty trees for this workspace on other screens
@@ -2130,6 +2370,9 @@ class TilingEngine {
                         refusingImpossibleArrangements: Bool = false,
                         keepingUnverifiedOnTimeout: Bool = false,
                         restorationReach: CGRect? = nil) -> AdmissionResult {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         let previous = minimaBypass
         let previousTopologyRecovery = admissionTopologyRecovery
         let previousKeep = keepsTimedOutAdmission
@@ -2148,9 +2391,14 @@ class TilingEngine {
             // ordinary pass would simply leave it out.
             let key = TilingKey(workspace: workspace, screen: screen)
             let published = Set(trees[key]?.allWindows.map(\.windowID) ?? [])
-            let judged = windows.filter {
+            var judged = windows.filter {
                 !$0.isFloating && (published.contains($0.windowID) || bypass[$0.windowID] != nil)
             }
+            // in the order the pass inserts, so the check and the choice of
+            // the newcomer to give up on judge what the pass will do, and
+            // not the order the window server listed the windows in
+            let judgedFrames = Dictionary(uniqueKeysWithValues: judged.map { ($0.windowID, $0.frame ?? .zero) })
+            judged.sort { insertionOrder($0, $1, frames: judgedFrames, workspace: workspace) }
             if !fitWindows(judged, onWorkspace: workspace, screen: screen) {
                 if let dropped = newcomersToRefuse(judged, newcomers: Set(bypass.keys).subtracting(published),
                                                    onWorkspace: workspace, screen: screen) {
@@ -2256,6 +2504,9 @@ class TilingEngine {
     /// - Returns: the windows that didn't fit (stay floating members).
     @discardableResult
     func tileScratchpad(_ windows: [HyprWindow], screen: NSScreen, in rect: CGRect) -> [HyprWindow] {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
         primeMinimumSizes(windows)
@@ -2268,7 +2519,11 @@ class TilingEngine {
         let treeIDs = Set(treeWindows.map { $0.windowID })
 
         // membership diff: remove gone (sibling promotion keeps shape), insert new
-        for w in treeWindows where !currentIDs.contains(w.windowID) { t.remove(w) }
+        // a member the caller holds is absent from the list only because its
+        // app did not answer; it keeps its leaf
+        for w in treeWindows where !currentIDs.contains(w.windowID) && !heldWindowIDs.contains(w.windowID) {
+            t.remove(w)
+        }
         t.root.pruneEmptyNodes()
         t.root.resetSplitRatios()
 
@@ -2289,7 +2544,7 @@ class TilingEngine {
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
                                          restorationUsableFrame: displayManager.cgRect(for: screen))
         if publishes(outcome), layoutGeneration == generation {
-            if let live { live.root = t.root } else { trees[key] = t }
+            if let live { live.adopt(t) } else { trees[key] = t }
             // discard the old monitor's tree only once the destination holds
             // the candidate frames
             for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
@@ -2339,6 +2594,9 @@ class TilingEngine {
     /// - Returns: `[(window, frame)]` pairs in tree iteration order. Empty
     ///   array if the tree ends up empty.
     func prepareTileLayout(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> [(HyprWindow, CGRect)] {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         _ = beginLayoutGeneration()
         pendingSwapRevert = nil
         let m = updateTreeMembership(windows, onWorkspace: workspace, screen: screen)
@@ -2415,12 +2673,17 @@ class TilingEngine {
     /// surviving arrangement), then retiles the affected screen.
     func removeWindow(_ window: HyprWindow, fromWorkspace workspace: Int) {
         admittedWindowIDs[workspace]?.remove(window.windowID)
+        forgetHeld(window.windowID)
+        // an explicit departure: a move, a float, a send. it is a newcomer
+        // wherever it lands next
+        slotMemory.removeValue(forKey: window.windowID)
         // search all trees for this workspace
         for (key, t) in trees where key.workspace == workspace {
             if t.contains(window) {
                 let generation = invalidatePendingLayout()
                 t.remove(window)
                 t.root.pruneEmptyNodes()
+                t.root.resetSplitRatios()
                 if let screen = displayManager.screens.first(where: {
                     TilingKey(workspace: workspace, screen: $0) == key
                 }) {
@@ -2879,6 +3142,127 @@ class TilingEngine {
         withMinimaBypass(revalidationBypass(incoming: incoming, key: key), body)
     }
 
+    /// The windows the walk could not hand over although the window server
+    /// still shows them: the ones their app did not answer for, and the
+    /// ones off the screen their app still lists. Wired by `WindowManager`
+    /// to discovery and the walk. Every pass asks it, so no caller of the
+    /// engine can forget the hold: a pass that ran over a fresh walk
+    /// without it dropped the held member from its tree, grew the
+    /// neighbour over its slot, and put it back somewhere else when it
+    /// read again.
+    var heldWindowIDsSource: () -> Set<CGWindowID> = { [] }
+
+    /// The held members of the pass under way: named by the source and
+    /// absent from the list the pass was given. One the list carries is
+    /// back, and not held. They keep their leaves, so the other members
+    /// keep their slots, and no frame is written to them. A pass given no
+    /// list holds what the source names in its tree (`applyTrackedLayout`).
+    /// nil outside a pass.
+    private var passHeldIDs: Set<CGWindowID>?
+    private var heldWindowIDs: Set<CGWindowID> { passHeldIDs ?? [] }
+
+    private func passHold(for windows: [HyprWindow]) -> Set<CGWindowID> {
+        heldWindowIDsSource().subtracting(windows.map(\.windowID))
+    }
+
+    /// Held members per key, so the poll that reads them again can ask for
+    /// the retile that gives them their frames.
+    private var heldByKey: [TilingKey: Set<CGWindowID>] = [:]
+
+    /// The held members among `readable`, dropped from the record. The
+    /// caller retiles their keys; a retile that already ran this cycle wrote
+    /// them, so there is nothing to do for it beyond forgetting the hold.
+    func releaseHeldWindows(readable: Set<CGWindowID>) -> Set<CGWindowID> {
+        var released: Set<CGWindowID> = []
+        for (key, held) in heldByKey {
+            let back = held.intersection(readable)
+            guard !back.isEmpty else { continue }
+            released.formUnion(back)
+            let rest = held.subtracting(back)
+            if rest.isEmpty { heldByKey.removeValue(forKey: key) } else { heldByKey[key] = rest }
+        }
+        return released
+    }
+
+    private func forgetHeld(_ windowID: CGWindowID) {
+        for (key, held) in heldByKey where held.contains(windowID) {
+            let rest = held.subtracting([windowID])
+            if rest.isEmpty { heldByKey.removeValue(forKey: key) } else { heldByKey[key] = rest }
+        }
+    }
+
+    /// The targets of a pass without its held members: their leaves stay
+    /// reserved, their frames are not written.
+    private func writable(_ layouts: [(HyprWindow, CGRect)]) -> [(HyprWindow, CGRect)] {
+        heldWindowIDs.isEmpty ? layouts : layouts.filter { !heldWindowIDs.contains($0.0.windowID) }
+    }
+
+    /// Where a member sat when discovery took it out of its tree: the
+    /// member it shared a split with, the side it was on, and the split's
+    /// axis and ratio. A window that leaves for a poll or two, minimized,
+    /// hidden with its app, or unread, goes back beside that member instead
+    /// of wherever dwindle finds room.
+    private struct SlotMemory {
+        let key: TilingKey
+        /// the windows of the subtree it shared the split with
+        let besideIDs: Set<CGWindowID>
+        let wasLeft: Bool
+        let direction: SplitDirection?
+        /// whether the axis was smart insert's pin, not the user's togglesplit
+        let directionIsAutomatic: Bool
+        let ratio: CGFloat
+        let userSet: Bool
+    }
+
+    private var slotMemory: [CGWindowID: SlotMemory] = [:]
+
+    private func rememberSlot(of window: HyprWindow, in tree: BSPTree, key: TilingKey) {
+        slotMemory.removeValue(forKey: window.windowID)
+        guard let node = tree.root.find(window), let parent = node.parent else { return }
+        let wasLeft = parent.left === node
+        guard let sibling = wasLeft ? parent.right : parent.left else { return }
+        let besideIDs = Set(sibling.allWindows().map(\.windowID))
+        guard !besideIDs.isEmpty else { return }
+        slotMemory[window.windowID] = SlotMemory(key: key, besideIDs: besideIDs, wasLeft: wasLeft,
+                                                 direction: parent.splitOverride,
+                                                 directionIsAutomatic: parent.splitOverrideIsAutomatic,
+                                                 ratio: parent.splitRatio, userSet: parent.userSetRatio)
+    }
+
+    /// Put `window` back beside the subtree it left, when those windows
+    /// still form one in this tree, with depth and room for the pair. The
+    /// memory is spent once its neighbours are in the tree, whatever the
+    /// outcome, and by a memory for another key. While the neighbours are
+    /// not in the tree it is kept: a window that left together with its
+    /// neighbour tries again once the neighbour is back in.
+    private func restoreRememberedSlot(for window: HyprWindow, in tree: BSPTree,
+                                       key: TilingKey, rect: CGRect, maxDepth: Int) -> Bool {
+        guard let memory = slotMemory[window.windowID] else { return false }
+        guard memory.key == key else {
+            slotMemory.removeValue(forKey: window.windowID)
+            return false
+        }
+        guard let target = tree.node(holdingExactly: memory.besideIDs) else { return false }
+        slotMemory.removeValue(forKey: window.windowID)
+        guard let deepest = target.allLeavesRightToLeft().map(\.depth).max(), deepest < maxDepth,
+              let targetRect = tree.rectForNode(target, in: rect, gap: gapSize, padding: outerPadding)
+        else { return false }
+        let direction = memory.direction ?? target.direction(for: targetRect)
+        // a minimum learned since it left can make the old pair impossible.
+        // a subtree is judged by the largest minimum among its members
+        let tenantMinimum = target.allWindows().map { minimumSize(for: $0) }.reduce(CGSize.zero) {
+            CGSize(width: max($0.width, $1.width), height: max($0.height, $1.height))
+        }
+        guard layoutEngine.pairFit(tenantMinimum, minimumSize(for: window),
+                                   in: targetRect, dir: direction).fits else { return false }
+        tree.insert(window, beside: target, onLeft: memory.wasLeft, direction: direction,
+                    automatic: memory.direction == nil || memory.directionIsAutomatic,
+                    ratio: memory.ratio, userSet: memory.userSet)
+        hyprLog(.notice, .tiling, "slot restored: \(window.windowID) back beside "
+                + "\(memory.besideIDs.sorted()) on ws\(key.workspace)")
+        return true
+    }
+
     private func withMinimaBypass<T>(_ bypass: [CGWindowID: UInt64],
                                      _ body: () -> T) -> T {
         let previous = minimaBypass
@@ -2930,6 +3314,9 @@ class TilingEngine {
     func revalidateAdmission(_ windows: [HyprWindow], incoming: Set<CGWindowID>,
                              onWorkspace workspace: Int, screen: NSScreen,
                              restorationReach: CGRect? = nil) -> AdmissionResult {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         let key = TilingKey(workspace: workspace, screen: screen)
         let bypass = revalidationBypass(incoming: incoming, key: key)
         hyprLog(.notice, .tiling, "minima revalidation attempt: ws\(workspace)"
@@ -3129,9 +3516,11 @@ class TilingEngine {
     /// would add a second layout between verification and the switch.
     func removeWindowMembershipOnly(_ window: HyprWindow, fromWorkspace workspace: Int) {
         admittedWindowIDs[workspace]?.remove(window.windowID)
+        forgetHeld(window.windowID)
         for (key, tree) in trees where key.workspace == workspace && tree.contains(window) {
             tree.remove(window)
             tree.root.pruneEmptyNodes()
+            tree.root.resetSplitRatios()
             pendingInsertedWindowIDs[key]?.removeAll { $0 == window.windowID }
             if tree.allWindows.isEmpty {
                 trees.removeValue(forKey: key)
@@ -3145,7 +3534,10 @@ class TilingEngine {
     /// memory as it stands, never on a bypass belonging to whatever pass it
     /// was called from.
     func canFitWindows(_ windows: [HyprWindow], onWorkspace workspace: Int, screen: NSScreen) -> Bool {
-        withoutMinimaBypass { fitWindows(windows, onWorkspace: workspace, screen: screen) }
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
+        return withoutMinimaBypass { fitWindows(windows, onWorkspace: workspace, screen: screen) }
     }
 
     /// `admissionOutlook` for a whole projected membership. `windows` is
@@ -3155,6 +3547,9 @@ class TilingEngine {
     /// verdict carries no refusal facts; a batch only needs the verdict.
     func projectedAdmissionOutlook(_ windows: [HyprWindow], incoming: Set<CGWindowID>,
                                    onWorkspace workspace: Int, screen: NSScreen) -> AdmissionOutlook {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         if canFitWindows(windows, onWorkspace: workspace, screen: screen) { return .fits }
         let key = TilingKey(workspace: workspace, screen: screen)
         let bypassed = withRevalidationBypass(incoming: incoming, key: key) {
@@ -3168,7 +3563,12 @@ class TilingEngine {
         guard ids.count == windows.count else { return false }
         let key = TilingKey(workspace: workspace, screen: screen)
         let candidate = trees[key]?.deepClone() ?? BSPTree()
-        for window in candidate.allWindows where !ids.contains(window.windowID) { candidate.remove(window) }
+        // a held member is absent from the list only because its app did
+        // not answer; the pass keeps its leaf, so the check does too
+        for window in candidate.allWindows
+        where !ids.contains(window.windowID) && !heldWindowIDs.contains(window.windowID) {
+            candidate.remove(window)
+        }
         candidate.root.pruneEmptyNodes()
         candidate.root.resetSplitRatios()
         primeMinimumSizes(windows)
@@ -3241,7 +3641,7 @@ class TilingEngine {
             hyprLog(.notice, .tiling, "force insert refused for \(window.windowID): \(reason)")
             return .failed(.layoutRejected(reason))
         }
-        if let live { live.root = candidate.root } else { trees[key] = candidate }
+        if let live { live.adopt(candidate) } else { trees[key] = candidate }
         admit(candidate.allWindows.map(\.windowID), toWorkspace: key.workspace)
         return success
     }

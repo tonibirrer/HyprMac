@@ -180,15 +180,17 @@ final class DisplaySnapshotTests: XCTestCase {
         XCTAssertNotEqual(manager.refreshedFingerprint(), before)
     }
 
-    func testUsableBoundsAndPhysicalIdentityChangeTheFingerprint() {
+    func testUsableBoundsChangeTheFingerprintAndTheDisplayIDDoesNot() {
         let screen = SnapshotScreen()
         let manager = DisplayManager(screenSource: { [screen] })
         let before = manager.refreshedFingerprint()
         screen.usable = screen.bounds.insetBy(dx: 0, dy: 25)
         let inset = manager.refreshedFingerprint()
         XCTAssertNotEqual(inset, before)
+        // the id a display comes back with after a wake is not a new desk;
+        // the same name at the same frame is the same monitor
         screen.displayID = 42
-        XCTAssertNotEqual(manager.refreshedFingerprint(), inset)
+        XCTAssertEqual(manager.refreshedFingerprint(), inset)
     }
 }
 
@@ -201,5 +203,120 @@ private final class SnapshotScreen: SyntheticScreen {
     override var localizedName: String { "Test display" }
     override var deviceDescription: [NSDeviceDescriptionKey: Any] {
         [NSDeviceDescriptionKey("NSScreenNumber"): NSNumber(value: displayID)]
+    }
+}
+
+private final class DeskScreen: SyntheticScreen {
+    let bounds: NSRect
+    let name: String?
+    init(x: CGFloat, y: CGFloat = 0, width: CGFloat, name: String? = nil) {
+        bounds = NSRect(x: x, y: y, width: width, height: 900)
+        self.name = name
+        super.init()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var frame: NSRect { bounds }
+    override var visibleFrame: NSRect { bounds }
+    override var localizedName: String { name ?? super.localizedName }
+}
+
+final class DisplayReturnTests: XCTestCase {
+    /// an external monitor that leaves for a sleep and comes back showed
+    /// its lowest home workspace on return, which hid the one the user was
+    /// on and parked its windows. it shows what it showed before it left
+    func testAReturningScreenShowsTheWorkspaceItLastShowed() {
+        let laptop = DeskScreen(x: 0, width: 1400)
+        let external = DeskScreen(x: 1400, width: 1920)
+        var live: [NSScreen] = [laptop, external]
+        let display = DisplayManager(screenSource: { live })
+        let workspaces = WorkspaceManager(displayManager: display)
+        workspaces.initializeMonitors()
+        _ = workspaces.switchWorkspace(4, cursorScreen: external)
+        XCTAssertEqual(workspaces.workspaceForScreen(external), 4)
+
+        live = [laptop]
+        display.refresh()
+        workspaces.initializeMonitors()
+        XCTAssertFalse(workspaces.isWorkspaceVisible(4), "one screen: ws4 is hidden")
+
+        live = [laptop, external]
+        display.refresh()
+        workspaces.initializeMonitors()
+
+        XCTAssertEqual(workspaces.workspaceForScreen(external), 4)
+        XCTAssertEqual(workspaces.workspaceForScreen(laptop), 1)
+    }
+
+    /// two displays of one model share a name. the one that leaves comes
+    /// back on its own workspace, not on the other's
+    func testTwoSameNamedDisplaysRememberTheirWorkspacesApart() {
+        let laptop = DeskScreen(x: 0, width: 1400)
+        let left = DeskScreen(x: 1400, width: 1920, name: "LG HDR 4K")
+        let right = DeskScreen(x: 3320, width: 1920, name: "LG HDR 4K")
+        var live: [NSScreen] = [laptop, left, right]
+        let display = DisplayManager(screenSource: { live })
+        let workspaces = WorkspaceManager(displayManager: display)
+        workspaces.initializeMonitors()
+        _ = workspaces.switchWorkspace(5, cursorScreen: left)
+        _ = workspaces.switchWorkspace(6, cursorScreen: right)
+        XCTAssertEqual(workspaces.workspaceForScreen(left), 5)
+        XCTAssertEqual(workspaces.workspaceForScreen(right), 6)
+
+        live = [laptop, left]
+        display.refresh()
+        workspaces.initializeMonitors()
+        live = [laptop, left, right]
+        display.refresh()
+        workspaces.initializeMonitors()
+
+        XCTAssertEqual(workspaces.workspaceForScreen(right), 6)
+        XCTAssertEqual(workspaces.workspaceForScreen(left), 5)
+    }
+
+    /// a park write the app refuses asks for the repair poll a few times,
+    /// not every 0.3 s for as long as the app refuses
+    func testAParkWriteThatKeepsFailingAsksForTheRepairPollAFewTimes() {
+        let screen = DeskScreen(x: 0, width: 1400)
+        let workspaces = WorkspaceManager(displayManager: DisplayManager(screenSource: { [screen] }))
+        var requests = 0
+        workspaces.onParkFailed = { requests += 1 }
+        // its AX element answers nothing, so every write fails
+        let window = makeWindow(id: 4711)
+
+        for _ in 0..<(WorkspaceManager.parkRepairRequests + 3) {
+            workspaces.hideInCorner(window, on: screen)
+        }
+
+        XCTAssertEqual(requests, WorkspaceManager.parkRepairRequests)
+    }
+
+    /// a stacked desk, two screens on one x: the primary display keeps the
+    /// first homes, as it has, whatever its y
+    func testAStackedDeskKeepsThePrimaryDisplaysHomesFirst() {
+        let primary = DeskScreen(x: 0, y: 900, width: 1400)
+        let below = DeskScreen(x: 0, y: 0, width: 1400)
+        let workspaces = WorkspaceManager(displayManager: DisplayManager(screenSource: { [primary, below] }))
+        workspaces.initializeMonitors()
+        XCTAssertTrue(workspaces.homeScreenForWorkspace(1) === primary)
+        XCTAssertTrue(workspaces.homeScreenForWorkspace(2) === below)
+        let swapped = WorkspaceManager(displayManager: DisplayManager(screenSource: { [below, primary] }))
+        swapped.initializeMonitors()
+        XCTAssertTrue(swapped.homeScreenForWorkspace(1) === below, "the list's first is the primary")
+    }
+
+    /// NSScreen.screens comes back in another order after some wakes, and
+    /// the display id changes; neither is a new desk
+    func testTheDisplayFingerprintIgnoresScreenOrderAndIDs() {
+        let a = DeskScreen(x: 0, width: 1400, name: "Built-in")
+        let b = DeskScreen(x: 1400, width: 1920, name: "External")
+        let forward = DisplayManager(screenSource: { [a, b] }).refreshedFingerprint()
+        let backward = DisplayManager(screenSource: { [b, a] }).refreshedFingerprint()
+        XCTAssertEqual(forward, backward)
+        // same names and frames, new display ids
+        let a2 = DeskScreen(x: 0, width: 1400, name: "Built-in")
+        let b2 = DeskScreen(x: 1400, width: 1920, name: "External")
+        XCTAssertNotEqual(a.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                          a2.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+        XCTAssertEqual(DisplayManager(screenSource: { [a2, b2] }).refreshedFingerprint(), forward)
     }
 }

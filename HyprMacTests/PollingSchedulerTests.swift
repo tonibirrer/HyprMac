@@ -40,6 +40,22 @@ final class PollingSchedulerTests: XCTestCase {
         XCTAssertEqual(fireCount, 1)
     }
 
+    func testSoonerScheduleReArmsAPendingLaterOne() {
+        var fireCount = 0
+        let scheduler = PollingScheduler { fireCount += 1 }
+        let exp = expectation(description: "sooner request fired")
+
+        // a hold running out asks for a poll seconds away. an event poll
+        // asked for after it must not wait behind it
+        scheduler.start()
+        scheduler.schedule(after: 5.0)
+        scheduler.schedule(after: 0.2)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exp.fulfill() }
+        wait(for: [exp], timeout: 2.0)
+        scheduler.stop()
+        XCTAssertEqual(fireCount, 1, "the 0.2 s request must fire, not wait for the 5 s one")
+    }
+
     func testScheduleAfterPollFiresAgain() {
         var fireCount = 0
         let scheduler = PollingScheduler { fireCount += 1 }

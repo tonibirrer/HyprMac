@@ -66,7 +66,7 @@ private final class BatchMoveRig {
         revalidation.workspaceFor = { [workspaceManager] in workspaceManager.workspaceFor($0) }
         io = { [unowned self] generation in self.frameIO(generation) }
         orchestrator.allWindows = { [unowned self] in self.windows.values.sorted { $0.windowID < $1.windowID } }
-        orchestrator.tileAllVisibleSpaces = { [unowned self] in self.retileVisible() }
+        orchestrator.tileAllVisibleSpaces = { [unowned self] _ in self.retileVisible() }
     }
 
     private func frameIO(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
@@ -175,6 +175,27 @@ final class WorkspaceBatchMoveTests: XCTestCase {
         XCTAssertEqual(rig.treeIDs(visible), [1002, 1003, 1004, 2001])
         XCTAssertEqual(rig.treeIDs(hidden), [2002, 2003, 2004])
         rig.assertNoHalfMoves()
+    }
+
+    /// the destination holds a member whose app did not answer the walk
+    /// the move runs over. the engine owns the hold, so the move's pass
+    /// keeps that member's leaf and writes it nothing, as the retile does
+    func testAMoveOntoAWorkspaceWithAHeldMemberKeepsItsLeaf() {
+        let rig = BatchMoveRig()
+        let visible = rig.visible(on: 0)
+        let hidden = rig.hidden(on: 0)
+        rig.fill(visible, [1001, 1002])
+        rig.fill(hidden, [2001])
+        let heldFrame = rig.frames[1002]
+        // the walk no longer carries 1002; the window server still shows it
+        rig.windows.removeValue(forKey: 1002)
+        rig.engine.heldWindowIDsSource = { [1002] }
+
+        let result = rig.orchestrator.moveWindows([(rig.window(2001), visible)])
+
+        XCTAssertEqual(result.moved, [2001: visible])
+        XCTAssertEqual(rig.treeIDs(visible), [1001, 1002, 2001], "the held member keeps its leaf")
+        XCTAssertEqual(rig.frames[1002], heldFrame, "and gets no frame from the pass")
     }
 
     func testSwapBetweenTwoFullHiddenWorkspacesMoves() {
