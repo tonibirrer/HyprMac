@@ -378,6 +378,39 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertFalse(back.splitOverrideIsAutomatic, "still the user's pin")
     }
 
+    /// the same through a leaf's memory: a new window taking the slot of
+    /// one that left a togglesplit split got the user's axis back as smart
+    /// insert's own, and the next turn dropped it
+    func testAUserPinALeafRemembersComesBackAsTheUsers() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1091), b = makeWindow(id: 1092), c = makeWindow(id: 1093)
+        for w in [a, b, c] { trace.frames[w.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        engine.resizeInDirection(a, direction: .down, onWorkspace: 1, screen: screen)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical)
+        XCTAssertTrue(root.userSetRatio, "the resize makes the leaf remember the split")
+
+        engine.removeWindowID(b.windowID)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, c], onWorkspace: 1, screen: screen).published)
+        let back = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(back.splitOverride, .vertical)
+        XCTAssertFalse(back.splitOverrideIsAutomatic, "still the user's pin")
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows([a, c], onWorkspace: 1, screen: screen).published)
+        let turned = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(turned.splitOverride, .vertical, "a turn keeps the user's pin")
+        XCTAssertFalse(turned.splitOverrideIsAutomatic)
+    }
+
     /// a saved layout comes back in the same shape: automatic pins are not
     /// saved and are pinned again from the same rect, the user's are saved
     func testASavedLayoutRestoresToTheSameShape() throws {

@@ -81,6 +81,10 @@ class BSPNode {
     /// had no override. Written and cleared with `savedSplitRatio`.
     var savedSplitOverride: SplitDirection?
 
+    /// Whether `savedSplitOverride` was smart insert's pin rather than the
+    /// user's, so the axis comes back as whichever it was.
+    var savedSplitOverrideIsAutomatic = false
+
     /// Ratio the node should adopt once it has children again. Set by
     /// `insert` on the node it just split, consumed by
     /// `applySavedRatios` after the reset pass. Kept separate from
@@ -92,6 +96,10 @@ class BSPNode {
     /// real value here (the old split had no override), so
     /// `pendingSplitRatio` is the gate for both.
     var pendingSplitOverride: SplitDirection?
+
+    /// Whose pin `pendingSplitOverride` is, carried from
+    /// `savedSplitOverrideIsAutomatic`.
+    var pendingSplitOverrideIsAutomatic = false
 
     /// `true` for terminal nodes — see file-level invariants.
     var isLeaf: Bool { window != nil || (left == nil && right == nil) }
@@ -130,6 +138,7 @@ class BSPNode {
         // savedSplitRatio alone says whether a restore is pending
         let restoredRatio = self.savedSplitRatio
         let restoredOverride = self.savedSplitOverride
+        let restoredOverrideIsAutomatic = self.savedSplitOverrideIsAutomatic
         let newWindowGoesLeft = restoredRatio != nil && self.savedChildWasLeft == true
 
         self.window = nil
@@ -140,8 +149,10 @@ class BSPNode {
         self.savedSplitRatio = nil
         self.savedChildWasLeft = nil
         self.savedSplitOverride = nil
+        self.savedSplitOverrideIsAutomatic = false
         self.pendingSplitRatio = nil
         self.pendingSplitOverride = nil
+        self.pendingSplitOverrideIsAutomatic = false
 
         if newWindowGoesLeft {
             self.left = BSPNode(window: newWindow)
@@ -157,6 +168,7 @@ class BSPNode {
         if let ratio = restoredRatio {
             self.pendingSplitRatio = ratio
             self.pendingSplitOverride = restoredOverride
+            self.pendingSplitOverrideIsAutomatic = restoredOverrideIsAutomatic
         }
     }
 
@@ -184,6 +196,7 @@ class BSPNode {
         let remembers = parent.userSetRatio && sibling?.isLeaf == true
         let lostRatio = parent.splitRatio
         let lostOverride = parent.splitOverride
+        let lostOverrideIsAutomatic = parent.splitOverrideIsAutomatic
 
         parent.window = sibling?.window
         parent.left = sibling?.left
@@ -194,16 +207,19 @@ class BSPNode {
         parent.splitOverrideIsAutomatic = sibling?.splitOverrideIsAutomatic ?? false
         parent.pendingSplitRatio = sibling?.pendingSplitRatio
         parent.pendingSplitOverride = sibling?.pendingSplitOverride
+        parent.pendingSplitOverrideIsAutomatic = sibling?.pendingSplitOverrideIsAutomatic ?? false
 
         if remembers {
             parent.savedSplitRatio = lostRatio
             parent.savedChildWasLeft = wasLeft
             parent.savedSplitOverride = lostOverride
+            parent.savedSplitOverrideIsAutomatic = lostOverrideIsAutomatic
         } else {
             // the promoted node keeps whatever it was already remembering
             parent.savedSplitRatio = sibling?.savedSplitRatio
             parent.savedChildWasLeft = sibling?.savedChildWasLeft
             parent.savedSplitOverride = sibling?.savedSplitOverride
+            parent.savedSplitOverrideIsAutomatic = sibling?.savedSplitOverrideIsAutomatic ?? false
         }
 
         parent.left?.parent = parent
@@ -229,13 +245,15 @@ class BSPNode {
             self.splitRatio = ratio
             self.userSetRatio = true
             // a boundary with no override of its own keeps the axis the
-            // split was just pinned to
+            // split was just pinned to. a togglesplit axis comes back as the
+            // user's, so a turn keeps it
             if let restored = pendingSplitOverride {
                 self.splitOverride = restored
-                self.splitOverrideIsAutomatic = true
+                self.splitOverrideIsAutomatic = pendingSplitOverrideIsAutomatic
             }
             self.pendingSplitRatio = nil
             self.pendingSplitOverride = nil
+            self.pendingSplitOverrideIsAutomatic = false
         }
         left?.applySavedRatios()
         right?.applySavedRatios()

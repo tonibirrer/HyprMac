@@ -79,8 +79,10 @@ class BSPTree {
             copy.savedSplitRatio = source.savedSplitRatio
             copy.savedChildWasLeft = source.savedChildWasLeft
             copy.savedSplitOverride = source.savedSplitOverride
+            copy.savedSplitOverrideIsAutomatic = source.savedSplitOverrideIsAutomatic
             copy.pendingSplitRatio = source.pendingSplitRatio
             copy.pendingSplitOverride = source.pendingSplitOverride
+            copy.pendingSplitOverrideIsAutomatic = source.pendingSplitOverrideIsAutomatic
             if let left = source.left { copy.left = clone(left, parent: copy) }
             if let right = source.right { copy.right = clone(right, parent: copy) }
             return copy
@@ -196,8 +198,10 @@ class BSPTree {
         target.savedSplitRatio = nil
         target.savedChildWasLeft = nil
         target.savedSplitOverride = nil
+        target.savedSplitOverrideIsAutomatic = false
         target.pendingSplitRatio = nil
         target.pendingSplitOverride = nil
+        target.pendingSplitOverrideIsAutomatic = false
     }
 
     /// Split `target`, a leaf or a whole subtree, with `window` on the side
@@ -218,8 +222,10 @@ class BSPTree {
         tenant.savedSplitRatio = target.savedSplitRatio
         tenant.savedChildWasLeft = target.savedChildWasLeft
         tenant.savedSplitOverride = target.savedSplitOverride
+        tenant.savedSplitOverrideIsAutomatic = target.savedSplitOverrideIsAutomatic
         tenant.pendingSplitRatio = target.pendingSplitRatio
         tenant.pendingSplitOverride = target.pendingSplitOverride
+        tenant.pendingSplitOverrideIsAutomatic = target.pendingSplitOverrideIsAutomatic
 
         let added = BSPNode(window: window)
         target.window = nil
@@ -236,8 +242,10 @@ class BSPTree {
         target.savedSplitRatio = nil
         target.savedChildWasLeft = nil
         target.savedSplitOverride = nil
+        target.savedSplitOverrideIsAutomatic = false
         target.pendingSplitRatio = nil
         target.pendingSplitOverride = nil
+        target.pendingSplitOverrideIsAutomatic = false
     }
 
     /// The node whose subtree holds exactly `ids`, or nil when those
@@ -693,8 +701,10 @@ class BSPTree {
             let savedSplitRatio: CGFloat?
             let savedChildWasLeft: Bool?
             let savedSplitOverride: SplitDirection?
+            let savedSplitOverrideIsAutomatic: Bool
             let pendingSplitRatio: CGFloat?
             let pendingSplitOverride: SplitDirection?
+            let pendingSplitOverrideIsAutomatic: Bool
         }
     }
 
@@ -710,8 +720,10 @@ class BSPTree {
                                              savedSplitRatio: node.savedSplitRatio,
                                              savedChildWasLeft: node.savedChildWasLeft,
                                              savedSplitOverride: node.savedSplitOverride,
+                                             savedSplitOverrideIsAutomatic: node.savedSplitOverrideIsAutomatic,
                                              pendingSplitRatio: node.pendingSplitRatio,
-                                             pendingSplitOverride: node.pendingSplitOverride))
+                                             pendingSplitOverride: node.pendingSplitOverride,
+                                             pendingSplitOverrideIsAutomatic: node.pendingSplitOverrideIsAutomatic))
             if let left = node.left { walk(left) }
             if let right = node.right { walk(right) }
         }
@@ -729,8 +741,10 @@ class BSPTree {
             state.node.savedSplitRatio = state.savedSplitRatio
             state.node.savedChildWasLeft = state.savedChildWasLeft
             state.node.savedSplitOverride = state.savedSplitOverride
+            state.node.savedSplitOverrideIsAutomatic = state.savedSplitOverrideIsAutomatic
             state.node.pendingSplitRatio = state.pendingSplitRatio
             state.node.pendingSplitOverride = state.pendingSplitOverride
+            state.node.pendingSplitOverrideIsAutomatic = state.pendingSplitOverrideIsAutomatic
         }
     }
 }
