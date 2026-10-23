@@ -52,7 +52,7 @@ final class PrepareLayoutMutationTests: XCTestCase {
         XCTAssertEqual(tree()?.allWindows.map(\.windowID), [1])
     }
 
-    func testPrepareTileLayoutResetsNonUserSetRatios() {
+    func testPrepareTileLayoutKeepsRatiosUntilTheMembershipChanges() {
         let w1 = makeWindow(id: 1)
         let w2 = makeWindow(id: 2)
         engine.prepareTileLayout([w1, w2], onWorkspace: 1, screen: screen)
