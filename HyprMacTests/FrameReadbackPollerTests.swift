@@ -642,6 +642,35 @@ final class FrameReadbackPollerInPlaceTests: XCTestCase {
         XCTAssertTrue(operations.contains("size"), "the ordinary pass ran: \(operations)")
     }
 
+    /// in place is all or nothing: one window off its slot runs the
+    /// ordinary pass, and that pass writes every window, the one already
+    /// standing on its slot too
+    func testOneWindowOffItsTargetWritesEveryWindow() {
+        let desk = Desk()
+        var frames = desk.frames
+        frames[42] = CGRect(x: 508, y: 8, width: 400, height: 784)
+        let originals = frames
+        var sized: Set<CGWindowID> = []
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { id, size, _ in sized.insert(id); frames[id]?.size = size; return .success },
+            writePosition: { id, position, _ in frames[id]?.origin = position; return .success },
+            readPosition: { id, _ in (.success, frames[id]?.origin) },
+            readSize: { id, _ in (.success, frames[id]?.size) },
+            now: { time }, sleep: { time += $0 }, currentGeneration: { 1 })
+        let poller = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+
+        let result = poller.applyLayout([(desk.a, desk.left), (desk.b, desk.right)],
+                                        usableFrame: desk.usable, gap: 8, generation: 1,
+                                        originalFrames: originals)
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertFalse(result.progress.verifiedInPlace)
+        XCTAssertEqual(sized, [41, 42], "one pass, every target written")
+        XCTAssertEqual(result.progress.writesCompleted, [41, 42])
+    }
+
     func testWithoutTheOriginalsThePassWrites() {
         let desk = Desk()
         var operations: [String] = []
