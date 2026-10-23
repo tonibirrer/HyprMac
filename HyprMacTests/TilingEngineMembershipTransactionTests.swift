@@ -259,6 +259,100 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(rects[1031]!.minX, rects[1032]!.minX, accuracy: 0.5, "stacked on the portrait screen")
     }
 
+    /// two windows whose minimum widths cannot sit side by side stack on a
+    /// landscape screen. the next pass dropped smart insert's vertical pin
+    /// as one against the screen, put them side by side again, and every
+    /// retile after that was refused
+    func testAFallbackAxisStaysPinnedAcrossPasses() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1061), b = makeWindow(id: 1062)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b] {
+            trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100)
+            trace.minSize[w.windowID] = CGSize(width: 900, height: 0)
+            w.observedMinSize = CGSize(width: 900, height: 0)
+        }
+
+        for pass in 1...3 {
+            XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published,
+                          "pass \(pass)")
+            let rects = engine.intendedTileRects()
+            XCTAssertEqual(rects[a.windowID]?.minX ?? -1, rects[b.windowID]?.minX ?? 1, accuracy: 0.5,
+                           "stacked on pass \(pass)")
+        }
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical)
+        XCTAssertTrue(root.splitOverrideIsAutomatic)
+    }
+
+    /// the same after a turn: the tree accepted for the portrait screen has
+    /// to remember it was laid out there, or the next pass takes the turn
+    /// for a new one and drops the axis chosen on the portrait screen
+    func testAFallbackAxisPinnedAfterATurnStays() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1071), b = makeWindow(id: 1072)
+        trace.frames[a.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        // too tall to stack on the portrait screen
+        trace.frames[b.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100)
+        for w in [a, b] {
+            trace.minSize[w.windowID] = CGSize(width: 0, height: 900)
+            w.observedMinSize = CGSize(width: 0, height: 900)
+        }
+
+        for pass in 1...3 {
+            XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published,
+                          "pass \(pass)")
+            let rects = engine.intendedTileRects()
+            XCTAssertEqual(rects[a.windowID]?.minY ?? -1, rects[b.windowID]?.minY ?? 1, accuracy: 0.5,
+                           "side by side on pass \(pass)")
+        }
+    }
+
+    /// a user pin on the root kept the whole tree from being checked, so
+    /// the automatic pins under it kept the landscape axes after a turn.
+    /// the user's own pin stays through the same pass and every other
+    func testATurnDropsTheAutomaticPinsUnderAUserPin() throws {
+        let screen = RotatableScreen()
+        let trace = MembershipTrace()
+        let display = DisplayManager(screenSource: { [screen] })
+        let engine = TilingEngine(displayManager: display,
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1081), b = makeWindow(id: 1082), c = makeWindow(id: 1083)
+        for w in [a, b, c] { trace.frames[w.windowID] = display.cgRect(for: screen).insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical, "the user stacked a over the rest")
+        XCTAssertFalse(root.splitOverrideIsAutomatic)
+        XCTAssertEqual(root.right?.splitOverride, .vertical, "same screen: the inner pin stays")
+        XCTAssertEqual(root.right?.splitOverrideIsAutomatic, true)
+
+        screen.bounds = NSRect(x: 4000, y: 0, width: 1000, height: 1600)
+        display.refresh()
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+
+        let turned = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(turned.splitOverride, .vertical, "the user's pin stays")
+        XCTAssertFalse(turned.splitOverrideIsAutomatic)
+        XCTAssertNil(turned.right?.splitOverride, "the landscape pin under it is gone")
+        let rects = engine.intendedTileRects()
+        XCTAssertEqual(rects[b.windowID]?.minY ?? -1, rects[c.windowID]?.minY ?? 1, accuracy: 0.5,
+                       "side by side in the wide bottom half")
+    }
+
     /// a pin the user set with togglesplit came back as smart insert's own
     /// after a minimize and a return, and a migration could drop it
     func testAUserPinSurvivesAReturn() throws {

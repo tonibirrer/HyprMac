@@ -560,7 +560,7 @@ class TilingEngine {
             admit(candidate.allWindows.map(\.windowID), toWorkspace: workspace)
         }
 
-        if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+        if let live = trees[key] { live.adopt(candidate) } else { trees[key] = candidate }
         // the poll that reads a held member again gives it its new slot
         if !held.isEmpty { heldByKey[key, default: []].formUnion(held.map(\.windowID)) }
         if !applyFrames {
@@ -1155,7 +1155,7 @@ class TilingEngine {
             guard let tree = trees.removeValue(forKey: oldKey) else { continue }
             let newKey = TilingKey(workspace: oldKey.workspace, screen: newScreen)
             // axes pinned for a landscape screen would stack a portrait one
-            tree.dropAutomaticSplitOverrides(ifPinnedAgainst: layoutRect(for: newKey, screen: newScreen))
+            tree.dropAutomaticSplitOverrides(ifTurnedTo: layoutRect(for: newKey, screen: newScreen))
             // the mark belongs to the tree, not to the coordinates. dropping
             // it on migration would let the same unverified windows start
             // advertising intended rects under the new key without a single
@@ -2098,8 +2098,10 @@ class TilingEngine {
 
         // a screen rotated in place keeps its key, so the migration's drop
         // of the axes pinned for the other orientation never ran: the pins
-        // stacked a landscape layout on the portrait screen
-        t.dropAutomaticSplitOverrides(ifPinnedAgainst: rect)
+        // stacked a landscape layout on the portrait screen. only a turn
+        // drops them: a pin merely against the rect is smart insert's
+        // fallback for a pair that did not fit the other way
+        t.dropAutomaticSplitOverrides(ifTurnedTo: rect)
 
         let tileWindows = windows.filter { !$0.isFloating }
         let treeWindows = t.allWindows
@@ -2237,7 +2239,7 @@ class TilingEngine {
                                              ? maxDepth(for: screen) : nil)
         let keptTimeout = keepsTimedOutAdmission ? Self.timeoutWithoutRollback(outcome) : nil
         if publishes(outcome) || keptTimeout != nil, layoutGeneration == generation {
-            if let live { live.root = candidate.root } else { trees[key] = candidate }
+            if let live { live.adopt(candidate) } else { trees[key] = candidate }
             admit(candidate.allWindows.map(\.windowID), toWorkspace: workspace)
             if let keptTimeout {
                 // applyTrackedLayout already marked the key, and only an
@@ -2518,7 +2520,7 @@ class TilingEngine {
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
                                          restorationUsableFrame: displayManager.cgRect(for: screen))
         if publishes(outcome), layoutGeneration == generation {
-            if let live { live.root = t.root } else { trees[key] = t }
+            if let live { live.adopt(t) } else { trees[key] = t }
             // discard the old monitor's tree only once the destination holds
             // the candidate frames
             for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
@@ -3615,7 +3617,7 @@ class TilingEngine {
             hyprLog(.notice, .tiling, "force insert refused for \(window.windowID): \(reason)")
             return .failed(.layoutRejected(reason))
         }
-        if let live { live.root = candidate.root } else { trees[key] = candidate }
+        if let live { live.adopt(candidate) } else { trees[key] = candidate }
         admit(candidate.allWindows.map(\.windowID), toWorkspace: key.workspace)
         return success
     }

@@ -159,10 +159,10 @@ final class BSPTreeTests: XCTestCase {
         tree.root.right?.splitOverride = .horizontal
         tree.root.right?.splitOverrideIsAutomatic = false
 
-        tree.dropAutomaticSplitOverrides(ifPinnedAgainst: defaultRect)
+        tree.dropAutomaticSplitOverrides(ifTurnedTo: defaultRect)
         XCTAssertEqual(tree.root.splitOverride, .horizontal, "same orientation: nothing to drop")
 
-        tree.dropAutomaticSplitOverrides(ifPinnedAgainst: narrowRect)
+        tree.dropAutomaticSplitOverrides(ifTurnedTo: narrowRect)
         XCTAssertNil(tree.root.splitOverride)
         XCTAssertEqual(tree.root.right?.splitOverride, .horizontal, "togglesplit stays")
     }

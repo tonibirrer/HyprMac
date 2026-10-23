@@ -41,6 +41,11 @@ class BSPTree {
 
     var root: BSPNode = BSPNode()
 
+    /// The rect the tree was last laid out in. The automatic pins were
+    /// chosen for a rect of its orientation, so a pass in one of the other
+    /// orientation drops them. nil until the first pass.
+    var lastLayoutRect: CGRect?
+
     func structuralFingerprint() -> StructuralFingerprint {
         var nodes: [StructuralFingerprint.Node] = []
         func walk(_ node: BSPNode, path: String) {
@@ -82,7 +87,15 @@ class BSPTree {
         }
         let tree = BSPTree()
         tree.root = clone(root, parent: nil)
+        tree.lastLayoutRect = lastLayoutRect
         return tree
+    }
+
+    /// Take `other`'s nodes, and the rect they were laid out in: a
+    /// candidate accepted in place of this tree.
+    func adopt(_ other: BSPTree) {
+        root = other.root
+        lastLayoutRect = other.lastLayoutRect
     }
 
     func candidateTree(draggedID: CGWindowID, targetID: CGWindowID,
@@ -241,13 +254,17 @@ class BSPTree {
         }
     }
 
-    /// Drop the automatic axis pins when the root's disagrees with `rect`.
-    /// The tree was laid out for a screen of the other orientation, and
-    /// the axes chosen there would stack a landscape layout on a portrait
-    /// monitor. Pins from `togglesplit` stay.
-    func dropAutomaticSplitOverrides(ifPinnedAgainst rect: CGRect) {
-        guard root.splitOverrideIsAutomatic, let pinned = root.splitOverride,
-              pinned != (rect.width >= rect.height ? .horizontal : .vertical) else { return }
+    /// Lay the tree out in `rect` from now on, and drop the automatic axis
+    /// pins when the last rect had the other orientation: a screen turned
+    /// in place, or a migration to one of the other orientation. The axes
+    /// chosen there would stack a landscape layout on a portrait monitor.
+    /// A pin against a rect that did not turn stays: smart insert chose
+    /// that axis because the pair did not fit the other way. Pins from
+    /// `togglesplit` stay.
+    func dropAutomaticSplitOverrides(ifTurnedTo rect: CGRect) {
+        defer { lastLayoutRect = rect }
+        guard let last = lastLayoutRect,
+              (last.width >= last.height) != (rect.width >= rect.height) else { return }
         root.clearAutomaticSplitOverrides()
     }
 
