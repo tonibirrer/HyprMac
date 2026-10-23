@@ -56,6 +56,31 @@ class KeyRemapper {
         update(.remove)
     }
 
+    /// Put the remap back if it is gone. Another HyprMac quitting (the
+    /// release build beside a debug build, or the reverse) restores Caps
+    /// Lock for both, a hidutil script or a reset list does the same, and
+    /// the Hypr key is then a plain Caps Lock until the next launch, with
+    /// nothing in the log to say so. Asked after a wake, an unlock and the
+    /// session becoming active again. One IOKit read; hidutil runs only when
+    /// the entry is missing.
+    /// - Returns: whether the mapping was written.
+    @discardableResult
+    static func reassertHyprKey(_ key: HyprKey,
+                                read: () -> Any? = KeyRemapper.readUserKeyMapping,
+                                write: ([HIDKeyMapping]) -> Bool = KeyRemapper.writeUserKeyMapping,
+                                defaults: UserDefaults = .standard) -> Bool {
+        guard key.usesCapsLockRemap else { return false }
+        let raw = read()
+        guard let present = KeyMappingMerge.hasOurs(raw) else {
+            hyprLog(.error, .lifecycle, "UserKeyMapping check: the list has an entry HyprMac can't read, so it was left unchanged")
+            return false
+        }
+        guard !present else { return false }
+        hyprLog(.notice, .lifecycle, "Caps Lock → F18 mapping is gone (another HyprMac quit, or the list was reset) — putting it back")
+        update(.install, read: { raw }, write: write, defaults: defaults)
+        return true
+    }
+
     /// Read the list, merge, write it back when it changed. The closures and
     /// the defaults are the test seam; the live ones touch the real mapping.
     static func update(_ operation: KeyMappingMerge.Operation,
@@ -197,6 +222,12 @@ enum KeyMappingMerge {
     static let capsLock: UInt64 = 0x700000039
     static let f18: UInt64 = 0x70000006D
     static let ours = HIDKeyMapping(src: capsLock, dst: f18)
+
+    /// Whether our entry is in the list. nil when the list can't be read.
+    static func hasOurs(_ raw: Any?) -> Bool? {
+        guard let current = parse(raw) else { return nil }
+        return current.contains(ours)
+    }
 
     /// nil means the read can't be trusted and nothing may be written.
     static func plan(_ operation: Operation, read raw: Any?, held: [HIDKeyMapping]) -> Plan? {

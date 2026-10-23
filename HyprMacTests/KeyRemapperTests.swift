@@ -47,6 +47,41 @@ final class KeyRemapperTests: XCTestCase {
         KeyMappingMerge.remove(current, held: held)
     }
 
+    /// the release build quitting beside the debug build takes the shared
+    /// remap with it; the check after a wake puts it back, and writes
+    /// nothing while it is there
+    func testReassertWritesOnlyWhenOurEntryIsMissing() {
+        let defaults = UserDefaults(suiteName: "KeyRemapperTests.reassert")!
+        defaults.removePersistentDomain(forName: "KeyRemapperTests.reassert")
+        var written: [[HIDKeyMapping]] = []
+        let present: Any = KeyMappingMerge.propertyList([KeyMappingMerge.ours])
+
+        XCTAssertFalse(KeyRemapper.reassertHyprKey(.capsLock, read: { present },
+                                                   write: { written.append($0); return true },
+                                                   defaults: defaults))
+        XCTAssertTrue(written.isEmpty, "present: nothing to write")
+
+        XCTAssertTrue(KeyRemapper.reassertHyprKey(.capsLock, read: { nil },
+                                                  write: { written.append($0); return true },
+                                                  defaults: defaults))
+        XCTAssertEqual(written, [[KeyMappingMerge.ours]], "gone: put back")
+
+        written = []
+        XCTAssertFalse(KeyRemapper.reassertHyprKey(.capsLock, read: { [["bogus": 1]] },
+                                                   write: { written.append($0); return true },
+                                                   defaults: defaults))
+        XCTAssertTrue(written.isEmpty, "unreadable: untouched")
+    }
+
+    func testReassertDoesNothingForAHyprKeyWithoutTheRemap() {
+        var written = 0
+        let other = HyprKey.allCases.first { !$0.usesCapsLockRemap }
+        guard let other else { return }
+        XCTAssertFalse(KeyRemapper.reassertHyprKey(other, read: { nil },
+                                                   write: { _ in written += 1; return true }))
+        XCTAssertEqual(written, 0)
+    }
+
     func testOurEntryIsCapsLockToF18() {
         XCTAssertEqual(ours, HIDKeyMapping(src: 0x700000039, dst: 0x70000006D))
     }
