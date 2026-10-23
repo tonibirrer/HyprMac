@@ -442,9 +442,30 @@ class TilingEngine {
         let candidates = trees.filter { $0.key.workspace == workspace && !$0.value.allWindows.isEmpty }
             .sorted { ($1.value.allWindows.count, $0.key.screenID) < ($0.value.allWindows.count, $1.key.screenID) }
         for (_, t) in candidates {
-            if let root = Self.serialize(t.root, ref: ref) { return root }
+            if let root = Self.serialize(t.root, keeping: fallbackPins(in: t), ref: ref) { return root }
         }
         return nil
+    }
+
+    /// The automatic pins on the other axis from the one dwindle reads off
+    /// their rect: smart insert's fallback for a pair that did not fit the
+    /// usual way. A rebuild from the snapshot would read the rect again and
+    /// lose that axis, so these are saved.
+    private func fallbackPins(in tree: BSPTree) -> Set<ObjectIdentifier> {
+        guard let rect = tree.lastLayoutRect else { return [] }
+        var pins = Set<ObjectIdentifier>()
+        func walk(_ node: BSPNode) {
+            guard let left = node.left, let right = node.right else { return }
+            if node.splitOverrideIsAutomatic, let pinned = node.splitOverride,
+               let nodeRect = tree.rectForNode(node, in: rect, gap: gapSize, padding: outerPadding),
+               pinned != (nodeRect.width >= nodeRect.height ? .horizontal : .vertical) {
+                pins.insert(ObjectIdentifier(node))
+            }
+            walk(left)
+            walk(right)
+        }
+        walk(tree.root)
+        return pins
     }
 
     /// Outcome of `rebuildTree`.
@@ -623,20 +644,23 @@ class TilingEngine {
         }
     }
 
-    private static func serialize(_ node: BSPNode, ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
+    private static func serialize(_ node: BSPNode, keeping fallbacks: Set<ObjectIdentifier>,
+                                  ref: (HyprWindow) -> SavedWindowRef?) -> LayoutNode? {
         if let window = node.window {
             return ref(window).map(LayoutNode.leaf)
         }
         guard let left = node.left, let right = node.right else { return nil }
-        switch (serialize(left, ref: ref), serialize(right, ref: ref)) {
+        switch (serialize(left, keeping: fallbacks, ref: ref), serialize(right, keeping: fallbacks, ref: ref)) {
         case (nil, nil):
             return nil
         case (let only?, nil), (nil, let only?):
             return only
         case (let l?, let r?):
-            // an axis smart insert pinned is this screen's; only togglesplit
-            // goes into the snapshot
-            return .split(override: node.splitOverrideIsAutomatic ? nil : node.splitOverride,
+            // an axis smart insert pinned is this screen's, and the rect
+            // gives it back; only togglesplit goes into the snapshot, and a
+            // fallback axis the rect would not give back
+            let leftOut = node.splitOverrideIsAutomatic && !fallbacks.contains(ObjectIdentifier(node))
+            return .split(override: leftOut ? nil : node.splitOverride,
                           ratio: node.splitRatio,
                           userSet: node.userSetRatio, left: l, right: r)
         }

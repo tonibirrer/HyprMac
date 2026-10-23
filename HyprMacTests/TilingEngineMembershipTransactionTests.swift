@@ -416,8 +416,11 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertFalse(turned.splitOverrideIsAutomatic)
     }
 
-    /// a saved layout comes back in the same shape: automatic pins are not
-    /// saved and are pinned again from the same rect, the user's are saved
+    /// a saved layout comes back in the same shape. an automatic pin on the
+    /// axis the rect gives anyway is not saved, the user's are, and so is
+    /// smart insert's fallback axis: the first two windows cannot sit side
+    /// by side and were stacked on the landscape screen, which the rect
+    /// alone would never give back
     func testASavedLayoutRestoresToTheSameShape() throws {
         let screen = MembershipTestScreen()
         let trace = MembershipTrace()
@@ -426,9 +429,17 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let windows = [makeWindow(id: 1051), makeWindow(id: 1052), makeWindow(id: 1053)]
         let rect = engine.displayManager.cgRect(for: screen)
         for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        for w in windows.prefix(2) {
+            trace.minSize[w.windowID] = CGSize(width: 900, height: 0)
+            w.observedMinSize = CGSize(width: 900, height: 0)
+        }
         XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.splitOverride, .vertical, "stacked against the landscape screen")
+        XCTAssertTrue(root.splitOverrideIsAutomatic)
         engine.toggleSplit(windows[2], onWorkspace: 1, screen: screen)
-        for _ in 0..<2 { engine.resizeInDirection(windows[0], direction: .right, onWorkspace: 1, screen: screen) }
+        engine.resizeInDirection(windows[0], direction: .down, onWorkspace: 1, screen: screen)
+        XCTAssertTrue(root.userSetRatio)
         let before = engine.intendedTileRects()
         let saved = try XCTUnwrap(engine.layoutTree(forWorkspace: 1, ref: {
             SavedWindowRef(bundleID: "app.\($0.windowID)", title: "")
