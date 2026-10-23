@@ -209,8 +209,13 @@ final class ActionDispatcher {
             fullyForgottenIDs: changes.fullyForgottenIDs
         )
 
-        // engine/workspace/focus cleanup for ids the service forgot.
+        // engine/workspace/focus cleanup for ids the service forgot. out of
+        // its tree first: the removal remembers the window's slot and the
+        // cleanup forgets it. the other way round, the scratchpad's sweep
+        // in the cleanup removed it last, and its slot waited for whatever
+        // window got the id next
         for id in changes.fullyForgottenIDs {
+            tilingEngine.removeWindowID(id)
             applyForgottenIDCleanup(id)
         }
 
