@@ -54,6 +54,60 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(engine.releaseHeldWindows(readable: [951, 952, 953]), [])
     }
 
+    /// a send to the scratchpad takes a window out and retiles the rest.
+    /// that pass is given no list, so it asks the source too: a hung app's
+    /// window keeps its leaf and is not read, and the retile is accepted.
+    /// it used to fail on the read and leave the key unverified
+    func testARemovalRetilesAroundAHeldMember() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = [makeWindow(id: 961), makeWindow(id: 962), makeWindow(id: 963)]
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in windows { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
+        trace.written = []
+
+        // 963's app stops answering
+        trace.frames[963] = nil
+        engine.heldWindowIDsSource = { [963] }
+        engine.removeWindow(windows[0], fromWorkspace: 1)
+
+        XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.map(\.windowID).sorted(),
+                       [962, 963])
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty, "the retile is accepted around the held member")
+        XCTAssertTrue(trace.written.contains(962), "the survivor takes the freed room")
+        XCTAssertFalse(trace.written.contains(963))
+        XCTAssertEqual(engine.releaseHeldWindows(readable: [962, 963]), [963])
+    }
+
+    /// a window off on another space still reads, so a pass without the
+    /// hold wrote to it there. a swap, a split toggle and a resize on its
+    /// workspace keep its leaf and write it nothing
+    func testRearrangingATreeWritesNothingToAHeldMember() {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 966), b = makeWindow(id: 967), held = makeWindow(id: 968)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, held] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b, held], onWorkspace: 1, screen: screen).published)
+        trace.written = []
+
+        engine.heldWindowIDsSource = { [held.windowID] }
+        XCTAssertTrue(engine.swapWindows(a, b, onWorkspace: 1, screen: screen))
+        engine.toggleSplit(a, onWorkspace: 1, screen: screen)
+        engine.resizeInDirection(a, direction: .left, onWorkspace: 1, screen: screen)
+
+        XCTAssertEqual(Set(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.map(\.windowID) ?? []),
+                       [966, 967, 968])
+        XCTAssertTrue(engine.unverifiedLayouts.isEmpty)
+        XCTAssertTrue(trace.written.contains(a.windowID))
+        XCTAssertFalse(trace.written.contains(held.windowID), "nothing goes out to a window on another space")
+    }
+
     /// a window that rounds a cell wider than its slot passes its own match
     /// and eats the gap. the pass gets the adjusted layout with room for the
     /// rounding instead of rolling back, and learns no floor from it

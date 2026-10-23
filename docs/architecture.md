@@ -181,7 +181,10 @@ hold: `heldWindowIDsSource` names the windows the walk could not hand
 over, every pass asks it and holds the members its list does not carry,
 so a retile, a move onto the workspace, a scratchpad show, the recovery's
 passes and the drift re-apply all keep the held leaf, and no caller can
-forget it.
+forget it. A pass given no list (a removal such as a send to the
+scratchpad, a resize, a swap, a split toggle, a force insert) holds every
+member of its tree the source names, so it neither reads a hung app's
+window nor writes to one on another Space.
 While the session is locked, the displays sleep, or the user session is
 switched out, `computeChanges` treats a missing window as no evidence and
 skips the cycle, and `pollWindowChanges` stops there;
