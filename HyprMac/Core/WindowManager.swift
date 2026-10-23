@@ -1685,9 +1685,11 @@ class WindowManager {
         // workspace flows park/unpark and then focus+warp. mid-display-
         // transition the tile pass is deferred, so the target workspace
         // would stay parked with the cursor warped to the 1px park sliver.
-        // drop them for the settle window (a few seconds around wake).
+        // drop them for the settle window (a few seconds around wake), with
+        // a beep so the press does not look lost
         if displayTransitionPending, Self.isDroppedMidDisplayTransition(action) {
             hyprLog(.notice, .lifecycle, "workspace action dropped mid-display-transition")
+            NSSound.beep()
             return
         }
         // workspace flows dismiss the scratchpad first (Hyprland-style: the
