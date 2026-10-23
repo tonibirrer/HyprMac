@@ -220,16 +220,21 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let a = makeWindow(id: 1021), b = makeWindow(id: 1022), c = makeWindow(id: 1023)
         let rect = engine.displayManager.cgRect(for: screen)
         for w in [a, b, c] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
-        // b needs most of the width, so the root split leans its way
+        // b needs most of the width, so the root split between a and the
+        // b/c column leans its way
         trace.minSize[b.windowID] = CGSize(width: rect.width * 0.7, height: 0)
-        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
         let root = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertEqual(root.left?.window, a)
         XCTAssertLessThan(root.splitRatio, 0.4, "skewed for b")
 
         engine.removeWindowID(b.windowID)
-        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, c], onWorkspace: 1, screen: screen).published)
 
+        // a and c still share the split b skewed, so the ratio is the one
+        // the reset had to reach, not a fresh leaf's default
         let after = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen)).root
+        XCTAssertFalse(after.isLeaf)
         XCTAssertEqual(after.splitRatio, TilingConfig.defaultRatio, accuracy: 0.0001,
                        "the skew left with the app")
     }
