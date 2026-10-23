@@ -1211,14 +1211,30 @@ class TilingEngine {
         ioFactory: frameSizingIOFactory
     )
 
-    /// The most one verified layout attempt may hold the main thread: the
-    /// candidate, its adjusted pass, the rollback and the timeout
-    /// recovery's retry with its rollback share it, each capped at what is
-    /// left when it starts. Summed, their own deadlines came to more than
-    /// three seconds, plus the per-target and scale-change growth.
+    /// The most the forward passes of one verified layout attempt may hold
+    /// the main thread: the candidate, its adjusted pass, the topology
+    /// recovery and the timeout recovery's retry share it. Summed, their
+    /// own deadlines came to more than three seconds, plus the per-target
+    /// and scale-change growth. Each is capped at what is left when it
+    /// starts; a pass after the candidate with less than `passBudgetFloor`
+    /// left does not start, and the rollback follows instead.
+    ///
+    /// The rollbacks are outside it. A rollback is the safety net that puts
+    /// every window back, and one cut short stops mid-write with some
+    /// windows still on candidate frames under the old tree. Each keeps its
+    /// own deadline: 0.75 s plus 80 ms per target past three, or the
+    /// scale-change budget when it carries a window back across scales.
+    ///
+    /// The clock runs from the attempt's start, so a rollback's time counts
+    /// against the passes after it, but nothing cuts the rollback itself.
+    /// The real worst case for one attempt is the capture before it
+    /// (0.36 s), 2 s of passes, and one last rollback on its own deadline,
+    /// plus one AX call past each pass's last check (100 ms, 250 ms on the
+    /// timeout retry). Eight windows on one scale: 0.36 + 2 + 1.15, about
+    /// 3.5 s.
     static let passBudget: TimeInterval = 2.0
-    /// What a pass is never cut below, so the rollback, the safety net,
-    /// always gets a hearing.
+    /// The least a pass gets: the candidate is never cut below it, and a
+    /// later pass that would be is skipped.
     static let passBudgetFloor: TimeInterval = 0.25
 
     private lazy var timeoutRecoveryPoller: FrameReadbackPoller = {
@@ -1504,13 +1520,26 @@ class TilingEngine {
         // it. that pass, and a rollback carrying it back, get the longer
         // budget; nothing else does.
         let scaleChanges = scaleChanges(originalFrames, destination: rect)
-        // one budget for the whole attempt, see `passBudget`
+        // one budget for the forward passes, see `passBudget`. the
+        // rollbacks are not in it
         let passStarted = Date()
+        func remaining() -> TimeInterval { Self.passBudget - Date().timeIntervalSince(passStarted) }
         func budgeted(_ poller: FrameReadbackPoller) -> FrameReadbackPoller {
-            let remaining = Self.passBudget - Date().timeIntervalSince(passStarted)
-            return poller.withRemainingBudget(max(Self.passBudgetFloor, remaining))
+            poller.withRemainingBudget(max(Self.passBudgetFloor, remaining()))
         }
-        let poller = budgeted(scaleChanges.isEmpty ? readbackPoller : readbackPoller.withScaleChangeBudget())
+        // a pass after the candidate: capped at what is left, or nil when
+        // that is under the floor
+        func laterPass(_ poller: FrameReadbackPoller, _ name: String) -> FrameReadbackPoller? {
+            let left = remaining()
+            guard left >= Self.passBudgetFloor else {
+                hyprLog(.notice, .tiling, "verified layout \(name) skipped: "
+                        + "\(Int((left * 1000).rounded()))ms of the pass budget left")
+                return nil
+            }
+            return poller.withRemainingBudget(left)
+        }
+        let scalePoller = scaleChanges.isEmpty ? readbackPoller : readbackPoller.withScaleChangeBudget()
+        let poller = budgeted(scalePoller)
         if !scaleChanges.isEmpty {
             hyprLog(.notice, .tiling, "verified layout scale change: ids=["
                     + scaleChanges.keys.sorted().map { id in
@@ -1556,10 +1585,10 @@ class TilingEngine {
                 return (!observation.widthConflict || observation.actual.width <= frame.width + tolerance)
                     && (!observation.heightConflict || observation.actual.height <= frame.height + tolerance)
             }
-            if resolves {
+            if resolves, let adjustedPoller = laterPass(poller, "adjusted pass") {
                 terminalLayouts = adjusted
                 terminal = applyLayoutFinal(adjusted, usableFrame: rect, generation: generation,
-                                            poller: budgeted(poller))
+                                            poller: adjustedPoller)
                 adoptTerminal = { self.copyVerifiedRatios(from: candidate.root, to: tree.root) }
                 if case .accepted = terminal.verdict {
                     copyVerifiedRatios(from: candidate.root, to: tree.root)
@@ -1573,13 +1602,13 @@ class TilingEngine {
                 topologyRecoveredTree(windows, in: rect, maxDepth: maxDepth)
             }
             if adjustedStillRefused, layoutGeneration == generation,
-               let recovered {
+               let recovered, let recoveryPoller = laterPass(poller, "topology recovery") {
                 hyprLog(.notice, .tiling, "admission topology recovery: ids="
                         + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
                 let layouts = recovered.layout(in: rect, gap: gapSize, padding: outerPadding)
                 terminalLayouts = layouts
                 terminal = applyLayoutFinal(layouts, usableFrame: rect, generation: generation,
-                                            poller: budgeted(poller))
+                                            poller: recoveryPoller)
                 adoptTerminal = { tree.root = recovered.root }
                 if case .accepted = terminal.verdict {
                     tree.root = recovered.root
@@ -1666,23 +1695,26 @@ class TilingEngine {
         // only a rollback that carries a window back across the scale
         // boundary is slow for the same reason the candidate was
         let restoresAcrossScales = originals.contains { scaleChanges[$0.0.windowID] != nil }
-        let restorationPoller = budgeted(restoresAcrossScales ? poller : readbackPoller)
+        // the safety net keeps its own deadline, whatever the passes before
+        // it spent: see `passBudget`
+        let restorationPoller = restoresAcrossScales ? scalePoller : readbackPoller
         let restored = restorationPoller.applyRestoration(originals, usableFrame: restorationFrame,
                                                           gap: gapSize, generation: generation)
         var progress = candidateProgress
         progress.restoration = restored.progress
         progress.restorationOverlaps = restored.overlaps
         if case .accepted = restored.verdict {
+            let relaxedScalePoller = scaleChanges.isEmpty
+                ? timeoutRecoveryPoller : timeoutRecoveryPoller.withScaleChangeBudget()
             if terminal.progress.phase == .candidate,
                terminal.progress.timeoutShapedCannotComplete,
                reason.isDirectCannotComplete,
-               layoutGeneration == generation {
+               layoutGeneration == generation,
+               let relaxedPoller = laterPass(relaxedScalePoller, "AX timeout recovery") {
                 hyprLog(.notice, .tiling, "verified layout AX timeout recovery: reason=\(reason) ids="
                         + "[" + windows.map { String($0.windowID) }.joined(separator: ", ") + "]")
-                let relaxedPoller = budgeted(scaleChanges.isEmpty
-                    ? timeoutRecoveryPoller : timeoutRecoveryPoller.withScaleChangeBudget())
-                let relaxedRestorationPoller = budgeted(restoresAcrossScales
-                    ? relaxedPoller : timeoutRecoveryPoller)
+                let relaxedRestorationPoller = restoresAcrossScales
+                    ? relaxedScalePoller : timeoutRecoveryPoller
                 // a pass like any other: what it reads back about a floor is
                 // kept, or the admission retry 250 ms later writes the same
                 // refused frames again and learns them a second time
