@@ -3132,10 +3132,26 @@ class WindowManager {
     /// in-flight Hypr keyUp without triggering tap-disabled. Reset hotkey
     /// state so the next regular keystroke isn't packed with a phantom
     /// Hypr modifier (the "sticky Caps Lock" bug from a different angle).
+    /// The interruption notifications after which the Caps Lock remap is
+    /// checked: the ones that bring the user back.
+    static let remapRecheckNotifications: Set<String> = [
+        NSWorkspace.didWakeNotification.rawValue,
+        NSWorkspace.screensDidWakeNotification.rawValue,
+        NSWorkspace.sessionDidBecomeActiveNotification.rawValue,
+        "com.apple.screenIsUnlocked",
+    ]
+
     @objc private func systemInterruption(_ notification: Notification) {
         hyprLog(.notice, .hotkey, "system interruption (\(notification.name.rawValue)) — resetting hotkey state")
         lastSystemInterruptionAt = Date()
         hotkeyManager.resetTrackingAfterTapInterruption()
+        // the Caps Lock remap is shared with every other HyprMac that ran
+        // since; one that quit took it with it, and the Hypr key was a
+        // plain Caps Lock until the next launch. asked when the user comes
+        // back, not when the session goes away
+        if Self.remapRecheckNotifications.contains(notification.name.rawValue) {
+            KeyRemapper.reassertHyprKey(UserConfig.shared.hyprKey)
+        }
         // also clear stuck dock flag and menu-tracking flag — sleep dialogs
         // and screen lock can leave either stale.
         mouseTracker.dockIsActive = false
