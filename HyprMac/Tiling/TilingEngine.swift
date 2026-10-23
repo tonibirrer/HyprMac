@@ -1237,6 +1237,28 @@ class TilingEngine {
     /// later pass that would be is skipped.
     static let passBudgetFloor: TimeInterval = 0.25
 
+    /// When set, every verified attempt draws on the one `passBudget`
+    /// started then instead of starting its own.
+    private var sharedPassBudgetStart: TimeInterval?
+
+    /// Run `body` with every verified attempt in it sharing one
+    /// `passBudget`, started now. The admission recovery runs a key's
+    /// narrowing rounds in one, so four rounds cannot hold the main thread
+    /// for four budgets. The rollbacks keep their own deadlines.
+    func sharingOnePassBudget<T>(_ body: () -> T) -> T {
+        let previous = sharedPassBudgetStart
+        sharedPassBudgetStart = previous ?? readbackPoller.now
+        defer { sharedPassBudgetStart = previous }
+        return body()
+    }
+
+    /// Whether the shared budget still has the floor left for another
+    /// attempt. Always true outside `sharingOnePassBudget`.
+    var passBudgetLeft: Bool {
+        guard let start = sharedPassBudgetStart else { return true }
+        return Self.passBudget - (readbackPoller.now - start) >= Self.passBudgetFloor
+    }
+
     private lazy var timeoutRecoveryPoller: FrameReadbackPoller = {
         FrameReadbackPoller(
             configuration: FrameSizingConfiguration().withTimeoutRecoveryBudget,
@@ -1522,7 +1544,7 @@ class TilingEngine {
         let scaleChanges = scaleChanges(originalFrames, destination: rect)
         // one budget for the forward passes, see `passBudget`. the
         // rollbacks are not in it
-        let passStarted = readbackPoller.now
+        let passStarted = sharedPassBudgetStart ?? readbackPoller.now
         func remaining() -> TimeInterval { Self.passBudget - (readbackPoller.now - passStarted) }
         func budgeted(_ poller: FrameReadbackPoller) -> FrameReadbackPoller {
             poller.withRemainingBudget(max(Self.passBudgetFloor, remaining()))

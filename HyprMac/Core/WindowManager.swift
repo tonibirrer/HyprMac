@@ -3962,6 +3962,11 @@ private extension WindowManager {
                 failure: result.failure,
                 admission: result)
         }
+        admissionRecovery.sharingOneBudget = { [weak self] body in
+            guard let self else { return body() }
+            self.tilingEngine.sharingOnePassBudget(body)
+        }
+        admissionRecovery.budgetLeft = { [weak self] in self?.tilingEngine.passBudgetLeft ?? false }
         admissionRecovery.floatInPlace = { [weak self] window, reason in
             // no cache refresh here: the run follows its floats with the
             // fallback retile, which walks once and refreshes the cache for

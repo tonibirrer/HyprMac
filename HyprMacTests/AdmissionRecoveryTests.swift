@@ -502,6 +502,36 @@ final class AdmissionRecoveryTests: XCTestCase {
         XCTAssertEqual(harness.scheduled.count, 1, "narrowing never arms a timer")
     }
 
+    /// a key's rounds share one main-thread budget. once it is spent no
+    /// round starts, and the rest float as past the bound
+    func testNarrowingStopsOnceTheRoundsBudgetIsSpent() {
+        harness.add(28)
+        var budgets = 0
+        var inside = false
+        let attempt = recovery.attempt
+        recovery.attempt = { workspace, screen, bypass, keep in
+            XCTAssertTrue(inside, "every round runs inside the one budget")
+            return attempt(workspace, screen, bypass, keep)
+        }
+        recovery.sharingOneBudget = { body in
+            budgets += 1
+            inside = true
+            body()
+            inside = false
+        }
+        recovery.budgetLeft = { [harness] in harness!.attempts.count < 2 }
+        recovery.note(failedAdmission([26, 27, 28]))
+        harness.failures = [.geometryMismatch(28), .geometryMismatch(27), nil]
+
+        harness.fire()
+
+        XCTAssertEqual(harness.attempts.map(\.newcomers), [[26, 27, 28], [26, 27]],
+                       "the second round spent the budget; there is no third")
+        XCTAssertEqual(harness.floated.map(\.id), [28, 26, 27])
+        XCTAssertEqual(budgets, 1, "one budget for the key, not one per round")
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
+    }
+
     /// the fallback retile tiled a pending newcomer the round could not
     /// judge; when its evidence arrives it is resolved, not floated off the
     /// slot it just got

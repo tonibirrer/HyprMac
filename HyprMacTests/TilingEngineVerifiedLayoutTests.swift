@@ -900,6 +900,8 @@ private final class TimeoutRecoveryTrace {
     var elapsed: TimeInterval { now }
     var onSecondCandidate: (() -> Void)?
     private var now: TimeInterval = 0
+    /// time spent before the attempt, by earlier rounds sharing its budget
+    func advance(by interval: TimeInterval) { now += interval }
     private let original: CGRect
     private let target: CGRect
     private let mode: Mode
@@ -1394,6 +1396,30 @@ final class TilingEnginePassBudgetTests: XCTestCase {
         XCTAssertEqual(trace.setters, 48, "the candidate's 24 and the rollback's 24, no retry")
         XCTAssertEqual(trace.frames, originals)
         XCTAssertLessThan(trace.now, TilingEngine.passBudget)
+    }
+
+    /// the admission recovery's narrowing rounds share one budget. an
+    /// attempt inside it finds what the earlier rounds spent, so the
+    /// timeout retry it would get on a budget of its own does not start;
+    /// its rollback still runs, on its own deadline
+    func testAnAttemptInASharedBudgetFindsWhatEarlierRoundsSpent() {
+        let fixture = timeoutRecoveryFixture(mode: .readTimeout)
+
+        let outcome = fixture.engine.sharingOnePassBudget { () -> TilingEngine.LayoutApplicationOutcome in
+            fixture.trace.advance(by: TilingEngine.passBudget - 0.1)
+            XCTAssertFalse(fixture.engine.passBudgetLeft)
+            return fixture.engine.applyVerifiedLayout(fixture.tree, in: fixture.usable,
+                                                      generation: fixture.generation,
+                                                      originalFrames: fixture.originals)
+        }
+
+        guard case .rejectedRestored = outcome else {
+            return XCTFail("expected the refusal restored without a retry, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.candidateApplications, 1, "no timeout retry")
+        XCTAssertEqual(fixture.trace.restorationApplications, 1)
+        XCTAssertEqual(fixture.trace.frames, fixture.originals)
+        XCTAssertTrue(fixture.engine.passBudgetLeft, "outside it, every attempt starts its own")
     }
 }
 
