@@ -473,8 +473,10 @@ class TilingEngine {
     /// `windows`, a floater, or a window already placed collapses that
     /// leaf's split exactly as closing it would. Every window in
     /// `windows` the snapshot did not name is smart-inserted around the
-    /// restored shape, incumbents before newcomers. Ratios, user-set flags
-    /// and overrides come through verbatim — nothing is reset.
+    /// restored shape, incumbents before newcomers. A held member of the
+    /// live tree (see `heldWindowIDsSource`) is one of those incumbents
+    /// and gets no frame. Ratios, user-set flags and overrides come through
+    /// verbatim — nothing is reset.
     ///
     /// An incumbent (admitted on the workspace, or in one of its trees)
     /// that finds no slot rejects the rebuild with `.refusedIncumbents`
@@ -490,13 +492,19 @@ class TilingEngine {
     func rebuildTree(forWorkspace workspace: Int, screen: NSScreen, from root: LayoutNode,
                      windows: [HyprWindow], applyFrames: Bool,
                      resolve: (SavedWindowRef) -> HyprWindow?) -> LayoutRebuildOutcome {
+        let previousHold = passHeldIDs
+        passHeldIDs = passHold(for: windows)
+        defer { passHeldIDs = previousHold }
         let generation = beginLayoutGeneration()
         pendingSwapRevert = nil
         let key = TilingKey(workspace: workspace, screen: screen)
         let rect = layoutRect(for: key, screen: screen)
-        let tileable = windows.filter { !$0.isFloating }
+        // a held member of the live tree is not in the list. it stays in
+        // as an incumbent and gets no frame, so the restore does not drop it
+        let held = trees[key]?.allWindows.filter { heldWindowIDs.contains($0.windowID) } ?? []
+        let tileable = windows.filter { !$0.isFloating } + held
         let tileableIDs = Set(tileable.map(\.windowID))
-        primeMinimumSizes(tileable)
+        primeMinimumSizes(windows.filter { !$0.isFloating })
 
         var placed = Set<CGWindowID>()
         let candidate = BSPTree()
@@ -553,6 +561,8 @@ class TilingEngine {
         }
 
         if let live = trees[key] { live.root = candidate.root } else { trees[key] = candidate }
+        // the poll that reads a held member again gives it its new slot
+        if !held.isEmpty { heldByKey[key, default: []].formUnion(held.map(\.windowID)) }
         if !applyFrames {
             // parked windows: the tree speaks for nothing on screen until a show verifies it
             mark(key, windowIDs: Set(candidate.allWindows.map(\.windowID)),

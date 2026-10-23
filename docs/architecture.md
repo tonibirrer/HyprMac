@@ -184,7 +184,8 @@ passes and the drift re-apply all keep the held leaf, and no caller can
 forget it. A pass given no list (a removal such as a send to the
 scratchpad, a resize, a swap, a split toggle, a force insert) holds every
 member of its tree the source names, so it neither reads a hung app's
-window nor writes to one on another Space.
+window nor writes to one on another Space. A layout restore keeps a held
+member of the live tree as an incumbent instead of dropping its leaf.
 While the session is locked, the displays sleep, or the user session is
 switched out, `computeChanges` treats a missing window as no evidence and
 skips the cycle, and `pollWindowChanges` stops there;
