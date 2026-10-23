@@ -71,6 +71,10 @@ struct FrameReadbackPoller {
 
     var deadline: TimeInterval { configuration.deadline }
 
+    /// The clock its passes run on, the io's own, so a budget measured
+    /// across passes spends the same time they do.
+    var now: TimeInterval { ioFactory([:], generation).now() }
+
     /// The same poller with its deadline capped at `remaining`, what is
     /// left of the attempt's whole budget. Every budget this pass may grow
     /// by stays under the cap too.

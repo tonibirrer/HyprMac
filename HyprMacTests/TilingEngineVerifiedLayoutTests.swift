@@ -1333,3 +1333,122 @@ private final class CappedSizingTrace {
         )
     }
 }
+
+/// The attempt's main-thread budget, on the passes' own virtual clock.
+final class TilingEnginePassBudgetTests: XCTestCase {
+    private let usable = CGRect(x: 0, y: 0, width: 1600, height: 1000)
+
+    private func fixture(_ count: Int) -> (engine: TilingEngine, tree: BSPTree, trace: SlowAppTrace,
+                                           originals: [CGWindowID: CGRect]) {
+        let tree = BSPTree()
+        var originals: [CGWindowID: CGRect] = [:]
+        for index in 0..<count {
+            let window = makeWindow(id: CGWindowID(1101 + index))
+            XCTAssertTrue(tree.insert(window, maxDepth: count))
+            originals[window.windowID] = CGRect(x: 40 + 20 * index, y: 40 + 20 * index, width: 400, height: 300)
+        }
+        let trace = SlowAppTrace(frames: originals)
+        let engine = TilingEngine(displayManager: DisplayManager(),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        return (engine, tree, trace, originals)
+    }
+
+    /// a hung app can spend the whole budget inside the candidate. the
+    /// rollback after it still gets its own 0.75 s, not the 0.25 s the
+    /// budget would leave it, so it puts every window back instead of
+    /// stopping mid-write
+    func testARollbackAfterACandidateThatSpentTheBudgetRestoresEveryWindow() {
+        let (engine, tree, trace, originals) = fixture(3)
+        trace.firstWriteCost = TilingEngine.passBudget + 0.1
+        // nine setters at 50 ms: past the floor, inside the rollback's own
+        trace.setterCost = 0.05
+
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: engine.beginLayoutGeneration(),
+                                                 originalFrames: originals)
+
+        guard case .rejectedRestored(reason: .deadlineExceeded, _, _) = outcome else {
+            return XCTFail("expected a complete rollback, got \(outcome)")
+        }
+        XCTAssertEqual(trace.frames, originals, "every window is back")
+        XCTAssertGreaterThan(trace.now, TilingEngine.passBudget, "the candidate spent the budget")
+    }
+
+    /// the candidate and its rollback leave less than the floor of the
+    /// budget, so the timeout recovery's retry does not start: no setter
+    /// past the rollback's, and the refusal stands restored
+    func testOnceTheBudgetIsSpentTheTimeoutRetryDoesNotStart() {
+        let (engine, tree, trace, originals) = fixture(8)
+        // 24 setters at 25 ms and a read that times out at 100 ms: 0.7 s,
+        // inside the candidate's 0.76 s. the rollback's 24 at 45 ms and a
+        // settle take 1.11 s of its 1.15 s, leaving 0.19 s
+        trace.setterCost = 0.025
+        trace.afterTimeoutSetterCost = 0.045
+
+        let outcome = engine.applyVerifiedLayout(tree, in: usable, generation: engine.beginLayoutGeneration(),
+                                                 originalFrames: originals)
+
+        guard case let .rejectedRestored(reason, _, _) = outcome else {
+            return XCTFail("expected the candidate's refusal, restored, got \(outcome)")
+        }
+        XCTAssertTrue(reason.isDirectCannotComplete, "\(reason)")
+        XCTAssertEqual(trace.setters, 48, "the candidate's 24 and the rollback's 24, no retry")
+        XCTAssertEqual(trace.frames, originals)
+        XCTAssertLessThan(trace.now, TilingEngine.passBudget)
+    }
+}
+
+/// An app on a virtual clock that answers each setter in `setterCost`.
+/// `firstWriteCost` is a hung first write that answers late. With
+/// `afterTimeoutSetterCost` set, the first position read times out at its
+/// messaging timeout, and every setter after it costs that instead.
+private final class SlowAppTrace {
+    var frames: [CGWindowID: CGRect]
+    var now: TimeInterval = 0
+    var setterCost: TimeInterval = 0
+    var firstWriteCost: TimeInterval?
+    var afterTimeoutSetterCost: TimeInterval?
+    private(set) var setters = 0
+    private var timedOut = false
+
+    init(frames: [CGWindowID: CGRect]) {
+        self.frames = frames
+    }
+
+    func io(_ generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { [self] id, size, _ in
+                spend()
+                frames[id]?.size = size
+                return .success
+            },
+            writePosition: { [self] id, position, _ in
+                spend()
+                frames[id]?.origin = position
+                return .success
+            },
+            readPosition: { [self] id, timeout in
+                if afterTimeoutSetterCost != nil, !timedOut {
+                    timedOut = true
+                    now += timeout
+                    return (.cannotComplete, nil)
+                }
+                return (.success, frames[id]?.origin)
+            },
+            readSize: { [self] id, _ in (.success, frames[id]?.size) },
+            now: { [self] in now },
+            sleep: { [self] interval in now += interval },
+            currentGeneration: generation
+        )
+    }
+
+    private func spend() {
+        setters += 1
+        if let cost = firstWriteCost {
+            firstWriteCost = nil
+            now += cost
+        } else {
+            now += timedOut ? afterTimeoutSetterCost ?? setterCost : setterCost
+        }
+    }
+}

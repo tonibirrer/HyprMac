@@ -1522,8 +1522,8 @@ class TilingEngine {
         let scaleChanges = scaleChanges(originalFrames, destination: rect)
         // one budget for the forward passes, see `passBudget`. the
         // rollbacks are not in it
-        let passStarted = Date()
-        func remaining() -> TimeInterval { Self.passBudget - Date().timeIntervalSince(passStarted) }
+        let passStarted = readbackPoller.now
+        func remaining() -> TimeInterval { Self.passBudget - (readbackPoller.now - passStarted) }
         func budgeted(_ poller: FrameReadbackPoller) -> FrameReadbackPoller {
             poller.withRemainingBudget(max(Self.passBudgetFloor, remaining()))
         }
