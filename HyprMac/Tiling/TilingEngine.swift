@@ -849,10 +849,13 @@ class TilingEngine {
         return .committed(candidate: candidate, actualFrames: actualFrames, progress: progress)
     }
 
-    /// A drag is a layout attempt too. Anything short of a committed drop
-    /// leaves the dragged tile somewhere the tree did not put it, or the
-    /// originals written back over it, so the key stops speaking for its
-    /// geometry until a layout is accepted again.
+    /// A drag is a layout attempt too. A drop that was refused after its
+    /// writes, or degraded, leaves the dragged tile somewhere the tree did
+    /// not put it, or the originals written back over it, so the key stops
+    /// speaking for its geometry until a layout is accepted again. A
+    /// preflight refusal, whatever its reason, wrote nothing and marks
+    /// nothing. Only the beep is narrower: `TiledDragFeedbackPolicy` keeps
+    /// it for every preflight reason but a release with nowhere to land.
     private func noteDragGeometry(_ outcome: TiledDragDropOutcome, snapshot: TiledDragSnapshot) {
         switch outcome {
         case .ignored, .superseded, .committed, .acrossTrees: return
@@ -861,10 +864,11 @@ class TilingEngine {
         guard let key = trees.first(where: { $0.value === snapshot.sourceTree })?.key else { return }
         var restored = false
         if case let .rejectedRestored(reason, _) = outcome {
-            // nothing was written before a preflight refusal, and the
-            // verified rollback put the dragged window back on its slot: the
-            // tree still speaks for the key. marking it here switched drift
-            // watching off for the workspace on every release in a gap
+            // nothing was written before a preflight refusal, any of them,
+            // and the verified rollback put the dragged window back on its
+            // slot: the tree still speaks for the key. marking it here
+            // switched drift watching off for the workspace on every
+            // release in a gap
             if case .preflight = reason { return }
             restored = true
         }
@@ -1371,9 +1375,11 @@ class TilingEngine {
     ///
     /// Only an accepted layout publishes. Acceptance is the one state that
     /// carries every condition at once: all three setters returned success
-    /// for every target, the final readback was complete and stable, every
-    /// window matched its target within the per-window tolerances, and the
-    /// aggregate geometry passed `validateFrames`. Anything else — a
+    /// for every target, or the in-place pass sent none because every
+    /// window already stood on its target in two matching reads; the final
+    /// readback was complete and stable, every window matched its target
+    /// within the per-window tolerances, and the aggregate geometry passed
+    /// `validateFrames`. Anything else — a
     /// partial write, an unreadable or unsettled readback, a cleanup error
     /// after clean-looking frames, a window that stopped 340 points short —
     /// keeps the prior membership and ratios and leaves the key unverified.
