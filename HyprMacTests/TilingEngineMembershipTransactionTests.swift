@@ -460,6 +460,40 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(restored, before, "the same shape, slot for slot")
     }
 
+    /// a window that comes back to its slot spends the boundary its
+    /// neighbour remembered when it left. the neighbour kept it, so the
+    /// next new window to split that neighbour took the old window's side
+    /// and the user's ratio
+    func testARestoreSpendsTheNeighboursRememberedBoundary() throws {
+        let screen = MembershipTestScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1111), b = makeWindow(id: 1112), c = makeWindow(id: 1113)
+        let rect = engine.displayManager.cgRect(for: screen)
+        for w in [a, b, c] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        for _ in 0..<2 { engine.resizeInDirection(a, direction: .right, onWorkspace: 1, screen: screen) }
+
+        // a leaves from the left, so b remembers a user-set boundary with
+        // the departed window on the left
+        engine.removeWindowID(a.windowID)
+        XCTAssertTrue(engine.tileWindows([b], onWorkspace: 1, screen: screen).published)
+        XCTAssertTrue(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        let tree = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
+        XCTAssertEqual(tree.root.left?.window, a, "back in its slot")
+        let leaf = try XCTUnwrap(tree.root.find(b))
+        XCTAssertNil(leaf.savedSplitRatio, "the restore spent it")
+        XCTAssertNil(leaf.savedChildWasLeft)
+        XCTAssertNil(leaf.savedSplitOverride)
+
+        XCTAssertTrue(engine.tileWindows([a, b, c], onWorkspace: 1, screen: screen).published)
+        let rects = engine.intendedTileRects()
+        XCTAssertEqual(rects[c.windowID]?.minX ?? -1, rects[b.windowID]?.minX ?? 1, accuracy: 0.5,
+                       "c splits b the dwindle way, below it")
+        XCTAssertGreaterThan(rects[c.windowID]?.minY ?? 0, rects[b.windowID]?.minY ?? 0)
+    }
+
     /// the same for a manual resize: a window opening or coming back no
     /// longer wipes every ratio the user set on the workspace
     func testAReturningMemberKeepsTheManualResizes() {

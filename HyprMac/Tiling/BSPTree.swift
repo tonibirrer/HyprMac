@@ -219,10 +219,9 @@ class BSPTree {
         tenant.userSetRatio = target.userSetRatio
         tenant.splitOverride = target.splitOverride
         tenant.splitOverrideIsAutomatic = target.splitOverrideIsAutomatic
-        tenant.savedSplitRatio = target.savedSplitRatio
-        tenant.savedChildWasLeft = target.savedChildWasLeft
-        tenant.savedSplitOverride = target.savedSplitOverride
-        tenant.savedSplitOverrideIsAutomatic = target.savedSplitOverrideIsAutomatic
+        // the boundary the target remembered is the one this restore puts
+        // back. kept on the tenant, the next new window to split it took
+        // the old window's side and ratio
         tenant.pendingSplitRatio = target.pendingSplitRatio
         tenant.pendingSplitOverride = target.pendingSplitOverride
         tenant.pendingSplitOverrideIsAutomatic = target.pendingSplitOverrideIsAutomatic
