@@ -2123,8 +2123,8 @@ class WindowManager {
     /// produces a compact layout instead of piling everything on one screen.
     private func distributeWindowsAcrossWorkspaces(_ allWindows: [HyprWindow]) {
         hyprLog(.notice, .lifecycle, "distributeWindowsAcrossWorkspaces ENTER — full redistribute about to run (this rewrites workspace assignments)")
-        let screens = displayManager.screens.filter { !workspaceManager.isMonitorDisabled($0) }
-            .sorted { $0.frame.origin.x < $1.frame.origin.x }
+        // the homes' order, so a stacked desk fills the primary first here too
+        let screens = workspaceManager.enabledScreensLeftToRight()
         guard !screens.isEmpty else { return }
 
         let allWids = Set(allWindows.map { $0.windowID })
