@@ -728,7 +728,9 @@ What changed:
   stack 50 ms later, and restores focus only when the raise moved the front
   app away from the focused tile. `RaiseBehindThrottle` cools a
   floater/tile pair down after a raise that did not lift it (30 s), a raise
-  within 1 s of our own restore (15 s, the loop), or 4 raises in 5 s (10 s).
+  within 1 s of our own restore (the loop), or 4 raises in 5 s (10 s). The
+  loop cooldown starts at 15 s and doubles with each loop up to 600 s. A
+  pair quiet for 300 s after its cooldown ends starts over at 15 s.
 - `TiledFocusRouter` handles hover, Hypr+Arrow, Hypr keydown, the focus
   invariant, the raise restore and the click re-raise. Workspace switches,
   window moves and the scratchpad still use their own focus calls, which can
@@ -766,8 +768,8 @@ What changed:
   leaves the floater under the tile, or a refocus that misses, cools the
   pair down for 30 s, so an app that refuses stops costing a flicker per
   click. A click re-raise counts toward no burst, since it follows one
-  click. When the floater's app took the front, the refocus counts as a
-  restore, so a raise-behind for the same pair within 1 s is the loop.
+  click. When the floater's app took the front, the click counts as a
+  loop and the pair cools at once, on the same doubling scale.
 - A click is credited to the window the window list puts under the
   pointer when that window is one of ours, so a floater a tile has buried
   no longer takes the focus tracker from the tile that got the click.

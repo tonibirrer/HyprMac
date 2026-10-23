@@ -65,14 +65,7 @@ singleton except `UserConfig.shared` and `MenuBarState.shared`.
 | `CursorManager` | Cursor warp via `CGWarpMouseCursorPosition` + reassociate dance. |
 | `AppLauncherManager` | Launch-or-focus path for the `launchApp` action. |
 | `CommandRunner` | Runs the `runCommand` action's command line directly through `Process` — tokenize, resolve the program, launch. Never a shell. |
-| `KeybindOverlayController` | HUD panel listing every active keybind (`Hypr+K`). | A floater whose app takes the front when raised is cooled down at once
-after that click, and each such loop doubles the cooldown up to ten
-minutes, so it blinks on one click and not on every one; a pair quiet for
-five minutes starts that escalation over. No raise is scheduled off an app
-activation while a press or a click is in flight. The refocus that follows
-a click honours the quiet window after a keyboard action; the refocus a
-keyboard action asks for itself does not, so a send-to-scratchpad does not
-leave focus on the window it just parked.
+| `KeybindOverlayController` | HUD panel listing every active keybind (`Hypr+K`). |
 
 ## Orchestration layer (Core/Orchestration + Core/State + Core/Discovery)
 
@@ -607,8 +600,17 @@ this list is the index.
   do not yet. A click on a tile still lifts it natively; the click re-raise
   puts the floater back about 40 ms after mouse-up and hands focus back to
   the tile without lifting it, so the covered part of the floater blinks
-  once per click. That works only for a floater of the tile's own app. When a raise does nothing, the dim shows the floater only
-  where it is in front. See `docs/debugging.md` "Floaters, open menus and
+  once per click. That works only for a floater of the tile's own app. A
+  floater whose app takes the front when raised is cooled down at once
+  after that click, and each such loop doubles the cooldown up to ten
+  minutes, so it blinks on one click and not on every one. A pair that
+  stays quiet for five minutes after its cooldown ends starts that
+  escalation over. No raise is scheduled off an app activation while a
+  press or a click is in flight. The refocus that follows a click honours
+  the quiet window after a keyboard action; the refocus a keyboard action
+  asks for itself does not, so a send-to-scratchpad does not leave focus
+  on the window it just parked. When a raise does nothing, the dim shows
+  the floater only where it is in front. See `docs/debugging.md` "Floaters, open menus and
   no-raise focus".
 - **Squishy-sibling swap rejection** — when a swap squishes a
   sibling app that has no AX-reported or readback-confirmed minimum
