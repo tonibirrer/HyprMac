@@ -39,6 +39,9 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(engine.tileWindows(windows, onWorkspace: 1, screen: screen).published)
         let shape = engine.existingTree(forWorkspace: 1, screen: screen)?.structuralFingerprint()
         let slots = engine.intendedTileRects()
+        // the two that answered stand off their slots, so the pass writes
+        // them instead of taking the layout as it stands
+        for id in [CGWindowID(951), 952] { trace.frames[id] = rect.insetBy(dx: 100, dy: 100) }
         trace.written = []
 
         engine.heldWindowIDsSource = { [953] }
@@ -46,7 +49,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
 
         XCTAssertTrue(result.published)
         XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.structuralFingerprint(), shape)
-        XCTAssertFalse(trace.written.contains(953), "nothing goes out to the app that did not answer")
+        XCTAssertEqual(trace.written, [951, 952], "nothing goes out to the app that did not answer")
         XCTAssertEqual(engine.intendedTileRects(), slots, "every slot is where it was")
         // the poll that reads 953 again asks for the retile, once
         XCTAssertEqual(engine.releaseHeldWindows(readable: [951, 952]), [])
