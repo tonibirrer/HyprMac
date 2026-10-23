@@ -90,7 +90,9 @@ These types decompose what would otherwise be a monolithic
   (`activation-switch`, `mouse-focus`, `workspace-transition`).
 - **`PollingScheduler`** owns a slow (10s) reconcile timer plus a
   coalescing token that funnels event-driven `schedule(after:)` requests
-  down to a single in-flight call. The timer is a safety net — it catches
+  down to a single in-flight call. A request for an earlier fire moves
+  that call up, so a hold's five-second expiry poll never delays an event
+  poll. The timer is a safety net — it catches
   apps that refuse AX observers, notifications the observer layer missed,
   and external moves nothing else reports; `AXNotificationService` events
   are the primary trigger. WindowManager suppresses polling while the mouse
