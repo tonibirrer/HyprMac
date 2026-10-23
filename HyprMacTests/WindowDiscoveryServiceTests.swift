@@ -898,6 +898,21 @@ final class StallBackoffTests: XCTestCase {
         XCTAssertEqual(backoff.noteFailure(7, now: t0.addingTimeInterval(2)), 0.5)
     }
 
+    /// only a timeout backs off. an app that answers with any other error,
+    /// one still launching, is asked again on the next walk
+    func testOnlyATimeoutStartsTheBackoff() {
+        var backoff = StallBackoff()
+        for error in [AXError.failure, .apiDisabled, .notImplemented, .attributeUnsupported, .invalidUIElement] {
+            XCTAssertNil(backoff.noteListReadFailure(7, error: error, now: t0), "\(error.rawValue)")
+            XCTAssertFalse(backoff.isBackingOff(7, now: t0))
+            XCTAssertFalse(backoff.isDue(7, now: t0))
+        }
+        XCTAssertTrue(backoff.stalledPIDs.isEmpty)
+
+        XCTAssertEqual(backoff.noteListReadFailure(7, error: .cannotComplete, now: t0), 0.5)
+        XCTAssertTrue(backoff.isBackingOff(7, now: t0.addingTimeInterval(0.4)))
+    }
+
     func testAnAppThatQuitIsForgotten() {
         var backoff = StallBackoff()
         _ = backoff.noteFailure(7, now: t0)

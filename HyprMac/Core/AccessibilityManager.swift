@@ -353,12 +353,7 @@ class AccessibilityManager {
                 // reported unreadable and discovery holds them in place.
                 // log the outage edges only, not every cycle.
                 unreadable.formUnion(visible.map(\.windowID))
-                // only a timeout earns the backoff: the app has a window
-                // list and did not answer for it in time. any other error
-                // — an app still launching, one whose accessibility is not
-                // up yet — is asked again on the next walk, so it tiles as
-                // soon as it can and not up to eight seconds later
-                let wait = result == .cannotComplete ? stallBackoff.noteFailure(pid, now: now) : nil
+                let wait = stallBackoff.noteListReadFailure(pid, error: result, now: now)
                 if !visible.isEmpty {
                     let n = (axListFailures[pid] ?? 0) + 1
                     axListFailures[pid] = n
@@ -747,6 +742,16 @@ struct StallBackoff {
         interval[pid] = next
         until[pid] = now.addingTimeInterval(next)
         return next
+    }
+
+    /// A failed window-list read. Only a timeout earns the backoff: the app
+    /// has a window list and did not answer for it in time. Any other error
+    /// (an app still launching, one whose accessibility is not up yet) is
+    /// asked again on the next walk, so it tiles as soon as it can and not
+    /// up to eight seconds later.
+    /// - Returns: how long the app is skipped from now, or nil for no backoff.
+    mutating func noteListReadFailure(_ pid: pid_t, error: AXError, now: Date) -> TimeInterval? {
+        error == .cannotComplete ? noteFailure(pid, now: now) : nil
     }
 
     mutating func noteSuccess(_ pid: pid_t) {
