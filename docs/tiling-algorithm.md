@@ -275,13 +275,18 @@ position settle budget for every position-first target, and the sample
 limit with it. One deadline for every setter and every sample of the
 whole key ran out on eight healthy windows.
 
-All of these budgets sit under one cap per attempt (`TilingEngine.passBudget`,
-two seconds): the candidate, its adjusted pass, the rollback, and the
-timeout recovery's retry with its rollback share it, and each pass's
-deadline is cut to what is left when it starts. Summed, their own
-deadlines came to more than three seconds of a blocked main thread. The
-rollback is the safety net, so it is guaranteed at least 0.75 seconds
-whatever the passes before it spent.
+The forward passes of one attempt share one cap (`TilingEngine.passBudget`,
+two seconds): the candidate, its adjusted pass, the topology recovery and
+the timeout recovery's retry. Each pass's deadline is cut to what is left
+when it starts, and a pass after the candidate with less than a quarter
+second left does not start. Summed, their own deadlines came to more than
+three seconds of a blocked main thread. The rollbacks sit outside the cap.
+A rollback is the safety net, and one cut short stops mid-write with some
+windows still on candidate frames, so each keeps its own deadline of 0.75
+seconds plus 80 ms per target past three. The worst case for one attempt
+of eight windows is about 3.5 seconds: the capture, two seconds of passes,
+and one last rollback. Admission recovery's narrowing rounds for a key
+share one such cap between them, and stop narrowing once it is spent.
 
 A minimum the memory already knows (`observed` provenance) shapes the
 first pass: the candidate is adjusted for it before any frame is written,
@@ -350,7 +355,7 @@ treated as evidence that writes completed.
 A rollback asks every window to go back exactly where it was. It is verified
 per window against the strict one-point size and position bound. It gets
 at least the timeout recovery's 0.75-second deadline, not the candidate's
-0.36, inside the attempt's cap. It is the safety net: a rollback that
+0.36, and the attempt's pass cap never cuts it. It is the safety net: a rollback that
 fails leaves the candidate's frames under the old tree. It returns as soon
 as its frames read back stable, so the longer deadline costs a healthy
 rollback nothing. The
