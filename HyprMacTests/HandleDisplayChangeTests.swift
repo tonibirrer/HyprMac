@@ -307,11 +307,16 @@ final class DisplayReturnTests: XCTestCase {
     /// NSScreen.screens comes back in another order after some wakes, and
     /// the display id changes; neither is a new desk
     func testTheDisplayFingerprintIgnoresScreenOrderAndIDs() {
-        let a = DeskScreen(x: 0, width: 1400)
-        let b = DeskScreen(x: 1400, width: 1920)
+        let a = DeskScreen(x: 0, width: 1400, name: "Built-in")
+        let b = DeskScreen(x: 1400, width: 1920, name: "External")
         let forward = DisplayManager(screenSource: { [a, b] }).refreshedFingerprint()
         let backward = DisplayManager(screenSource: { [b, a] }).refreshedFingerprint()
         XCTAssertEqual(forward, backward)
-        XCTAssertFalse(forward.contains("NSScreenNumber"))
+        // same names and frames, new display ids
+        let a2 = DeskScreen(x: 0, width: 1400, name: "Built-in")
+        let b2 = DeskScreen(x: 1400, width: 1920, name: "External")
+        XCTAssertNotEqual(a.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                          a2.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+        XCTAssertEqual(DisplayManager(screenSource: { [a2, b2] }).refreshedFingerprint(), forward)
     }
 }
