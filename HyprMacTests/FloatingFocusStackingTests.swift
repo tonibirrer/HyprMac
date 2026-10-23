@@ -881,13 +881,14 @@ final class FloatingFramePlacementTests: XCTestCase {
 
 final class RaiseBehindLoopEscalationTests: XCTestCase {
     /// a floater whose app takes the front on every raise used to come back
-    /// every fifteen seconds. each loop doubles the cooldown
+    /// every fifteen seconds. each loop doubles the cooldown up to the cap,
+    /// and a pair that loops again right after each cooldown stays there
     func testEachLoopDoublesTheCooldown() {
         var throttle = RaiseBehindThrottle()
         let pair = RaiseBehindThrottle.Pair(floater: 1, tile: 2)
         var now: TimeInterval = 0
         var durations: [TimeInterval] = []
-        for _ in 0..<4 {
+        for _ in 0..<8 {
             XCTAssertEqual(throttle.decide(pair, now: now), .raise)
             throttle.noteRestore([pair], now: now)
             guard case let .cooldownStarted(reason, duration) = throttle.decide(pair, now: now) else {
@@ -897,11 +898,12 @@ final class RaiseBehindLoopEscalationTests: XCTestCase {
             durations.append(duration)
             now += duration + 1
         }
-        XCTAssertEqual(durations, [15, 30, 60, 120])
+        XCTAssertEqual(durations, [15, 30, 60, 120, 240, 480, 600, 600])
     }
 
     /// a pair quiet for a while starts its escalation over: one loop an
-    /// hour ago is not a reason for a ten-minute cooldown now
+    /// hour ago is not a reason for a ten-minute cooldown now. the quiet
+    /// span starts when the cooldown ends, since the pair cannot loop before
     func testTheLoopCountDecaysAfterAQuietSpell() {
         var throttle = RaiseBehindThrottle()
         let pair = RaiseBehindThrottle.Pair(floater: 1, tile: 2)
@@ -909,8 +911,14 @@ final class RaiseBehindLoopEscalationTests: XCTestCase {
         throttle.noteLoop([pair], now: 16)
         XCTAssertEqual(throttle.cooldown(pair, now: 17)?.remaining ?? 0, 29, accuracy: 0.001, "second loop: 30 s")
 
-        throttle.noteLoop([pair], now: 16 + throttle.loopDecay + 1)
-        XCTAssertEqual(throttle.cooldown(pair, now: 16 + throttle.loopDecay + 2)?.remaining ?? 0, 14,
+        // the cooldown ends at 46. quiet for less than the decay after it
+        throttle.noteLoop([pair], now: 46 + throttle.loopDecay - 1)
+        XCTAssertEqual(throttle.cooldown(pair, now: 46 + throttle.loopDecay)?.remaining ?? 0, 59,
+                       accuracy: 0.001, "not quiet long enough after the cooldown: 60 s")
+
+        let end = 46 + throttle.loopDecay - 1 + 60
+        throttle.noteLoop([pair], now: end + throttle.loopDecay + 1)
+        XCTAssertEqual(throttle.cooldown(pair, now: end + throttle.loopDecay + 2)?.remaining ?? 0, 14,
                        accuracy: 0.001, "quiet for the decay span: back to 15 s")
     }
 
