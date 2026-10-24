@@ -48,6 +48,9 @@ final class WorkspaceOrchestrator {
     /// already took: the walk between the last park write and the first
     /// reveal write left the switched screen empty for its duration.
     var tileAllVisibleSpaces: ([HyprWindow]?) -> Void = { _ in }
+    // linked monitors: Hypr+Ctrl+←/→ moves the window to the neighboring
+    // screen of the same workspace (WindowManager.moveAcrossLinkedScreens)
+    var moveAcrossLinkedScreens: ((HyprWindow, Direction) -> Void)?
     /// Every window AX can see right now. A seam because the explicit
     /// revalidation attempt needs the destination's tenants, a switch picks
     /// the window to focus from it, and a test has no desktop to read them off.
@@ -1424,6 +1427,11 @@ final class WorkspaceOrchestrator {
         guard let focused = currentFocusedWindow(),
               let screen = displayManager.screen(for: focused) ?? displayManager.screens.first else {
             NSSound.beep()
+            return
+        }
+        // linked monitors: every screen shows this workspace
+        if workspaceManager.linkedMonitors, let moveAcrossLinkedScreens {
+            moveAcrossLinkedScreens(focused, direction)
             return
         }
 

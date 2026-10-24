@@ -48,6 +48,12 @@ adjacent monitor's visible workspace — the case was repurposed from
 the old workspace-to-monitor move, which static anchoring made a
 permanent no-op; its wire key is unchanged (see below).
 
+Fork: with linked monitors every screen shows the same workspace, so
+`moveWindowToMonitor` moves the focused tile to the neighboring screen
+of that workspace instead (`TilingEngine.moveAcrossLinkedScreens`), and
+the split it leaves is kept until Retile All. A floater is carried to
+the neighboring screen at the same relative position.
+
 ## Dedicated workspace and workspace 10
 
 `moveToNextEmptyWorkspace` defaults to Hypr+F and encodes as

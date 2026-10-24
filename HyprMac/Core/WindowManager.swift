@@ -326,6 +326,9 @@ class WindowManager {
             self?.tileAllVisibleSpaces(windows: windows)
         }
         self.workspaceOrchestrator.describeUnlistedWindows = { [weak self] ids in self?.describeUnlistedWindows(ids) ?? "" }
+        self.workspaceOrchestrator.moveAcrossLinkedScreens = { [weak self] window, direction in
+            self?.moveAcrossLinkedScreens(window, direction)
+        }
         self.workspaceOrchestrator.presentFullscreenWindows = { [weak self] ws in
             self?.fullscreen.present(workspace: ws, warpCursor: { rect in
                 CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
@@ -957,6 +960,7 @@ class WindowManager {
         dimmingOverlay.fadeDurationSec = config.chromeFadeDurationSec
         workspaceManager.disabledMonitors = config.disabledMonitors
         workspaceManager.linkedMonitors = config.linkedMonitors
+        tilingEngine.linkedMonitors = config.linkedMonitors
         // a game already running at launch reserves its screen before the
         // first snapshot tiles anything onto it
         refreshGameScreen(reconcile: false)
@@ -1098,6 +1102,8 @@ class WindowManager {
             .sink { [weak self] linked in
                 guard let self = self else { return }
                 self.workspaceManager.linkedMonitors = linked
+                self.tilingEngine.linkedMonitors = linked
+                self.tilingEngine.clearLinkedSplits()
                 self.reconcileAfterDisplayChange()
                 hyprLog(.notice, .lifecycle, "linked monitors \(linked ? "enabled" : "disabled") — reconciled")
             }.store(in: &configObservers)
@@ -3763,6 +3769,85 @@ class WindowManager {
         return runAdmission(windows, onWorkspace: workspace, screens: screens)
     }
 
+    /// The screens a linked pass lays `workspace` across: the enabled
+    /// screens, left to right, minus any the workspace's fullscreen windows take.
+    private func linkedScreens(onWorkspace workspace: Int) -> [NSScreen] {
+        let enabled = workspaceManager.enabledScreensLeftToRight()
+        let taken = fullscreen.screensTaken(onWorkspace: workspace, among: enabled)
+        return enabled.filter { !taken.contains($0) }
+    }
+
+    /// Hypr+Ctrl+←/→ with linked monitors. The neighboring screen shows the
+    /// same workspace, so the window moves to that screen instead of to
+    /// another workspace: a tile joins the screen's tiles on the side it
+    /// came from and the split stays as the user left it (see
+    /// `TilingEngine.moveAcrossLinkedScreens`); a floater is carried over at
+    /// the same relative position. Focus stays on the window.
+    private func moveAcrossLinkedScreens(_ window: HyprWindow, _ direction: Direction) {
+        let id = window.windowID
+        let step = direction == .left ? -1 : 1
+        func refuse(_ message: String) {
+            hyprLog(.notice, .workspace, "linked move \(id) \(direction.rawValue) refused: \(message)")
+            NSSound.beep()
+            if let frame = window.frame {
+                focusBorder.flashError(around: frame, windowID: id, window: window, message: message)
+            }
+        }
+        guard let workspace = workspaceManager.workspaceFor(id) else {
+            refuse("Not on a workspace")
+            return
+        }
+        let screens = linkedScreens(onWorkspace: workspace)
+
+        if stateCache.floatingWindowIDs.contains(id) {
+            guard let frame = window.frame,
+                  let source = screens.firstIndex(where: {
+                      displayManager.cgRect(for: $0).contains(CGPoint(x: frame.midX, y: frame.midY))
+                  }),
+                  screens.indices.contains(source + step) else {
+                refuse("No monitor to the \(direction.rawValue)")
+                return
+            }
+            let target = screens[source + step]
+            let carried = WorkspaceOrchestrator.carriedFloaterFrame(
+                frame, from: displayManager.cgRect(for: screens[source]), to: displayManager.cgRect(for: target))
+            let placed = window.placeFloating(carried, reason: "linked move", on: target, from: frame,
+                                              displayManager: displayManager)
+            suppressions.suppress("mouse-focus", for: 0.15)
+            cursorManager.warp(to: CGPoint(x: placed.midX, y: placed.midY))
+            updateFocusBorder(for: window)
+            return
+        }
+
+        guard let source = screens.firstIndex(where: {
+            tilingEngine.windowIDs(inTreeForWorkspace: workspace, screen: $0).contains(id)
+        }) else {
+            refuse("Not a tile")
+            return
+        }
+        switch tilingEngine.moveAcrossLinkedScreens(id, onWorkspace: workspace, to: source + step,
+                                                    screens: screens) {
+        case .moved:
+            let allWindows = accessibility.getAllWindows()
+            tileAllVisibleSpaces(windows: allWindows)
+            updatePositionCache(windows: allWindows)
+            focusController.recordFocus(id, reason: "linked-move")
+            suppressions.suppress("mouse-focus", for: 0.15)
+            if let slot = stateCache.tiledPositions[id] {
+                cursorManager.warp(to: CGPoint(x: slot.midX, y: slot.midY))
+            } else {
+                cursorManager.warpToCenter(of: window)
+            }
+            updateFocusBorder(for: window)
+        case .noScreen:
+            refuse("No monitor to the \(direction.rawValue)")
+        case .notTiled:
+            refuse("Not a tile")
+        case .full(let capacity):
+            refuse("That screen is full (\(capacity) tiles)")
+        }
+    }
+
     /// A linked pass over exactly `screens` — the enabled screens minus any
     /// the workspace's fullscreen windows take. One screen is a plain pass.
     private func runAdmission(_ windows: [HyprWindow], onWorkspace workspace: Int,
@@ -4445,6 +4530,8 @@ class WindowManager {
     @objc private func retileAllRequested() {
         hyprLog(.debug, .lifecycle, "retile all spaces requested")
         scratchpad.hide(reason: .workspaceAction)
+        // linked monitors go back to the split by screen area
+        tilingEngine.clearLinkedSplits()
         snapshotAndTile()
     }
 }
@@ -4490,6 +4577,14 @@ private extension WindowManager {
                     for (id, workspace) in cross.moves.sorted(by: { $0.key < $1.key }) {
                         self.workspaceManager.moveWindow(id, toWorkspace: workspace)
                         self.minimaRevalidation.cancel(id, reason: "tiled drag across monitors")
+                    }
+                    // linked monitors: the drop crossed the border inside one
+                    // workspace, and the split it left is the user's now
+                    let workspace = snapshot.context.workspace
+                    if self.workspaceManager.linkedMonitors,
+                       cross.moves.values.allSatisfy({ $0 == workspace }) {
+                        self.tilingEngine.pinLinkedSplit(onWorkspace: workspace,
+                                                         screens: self.linkedScreens(onWorkspace: workspace))
                     }
                 }
                 return outcome

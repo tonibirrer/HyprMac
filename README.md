@@ -253,9 +253,10 @@ Hyprland (like HyprMac's default) binds each workspace to one monitor and [decli
 - A tile always lives wholly on one screen — nothing ever straddles the border. The workspace's tiles form one left-to-right strip cut into per-screen chunks: with two equal screens, 1 window → screen 1; 2 → one each; 3 → 2+1; 4 → 2+2. Unequal screens (say an ultrawide next to a 4:3) balance proportionally to usable area, capped by each screen's max-splits depth.
 - App sort priorities span the whole strip: highest priority = leftmost tile of the leftmost screen, lowest = rightmost tile of the rightmost screen.
 - Each screen keeps its own BSP tree, so gaps, padding, per-monitor max splits, resizes, and toggled splits all behave exactly as unlinked.
+- **Moving tiles between screens**: drag a tile onto the other screen, or press `Hypr+Ctrl+←/→`. The tile joins that screen (at the drop point, or on the side facing the screen it came from) and the other screen gives it up, so 2+2 becomes 3+1. That split is kept for the workspace: later retiles don't rebalance it, and a new window joins the screen of the tile before it in the strip. A screen at its max-splits depth refuses the move with the red shake. `Hypr+R` (Retile All) and toggling linked mode go back to the area split; the split also isn't kept across a restart. A floater moved with `Hypr+Ctrl+←/→` is carried to the other screen at the same relative position.
 - Toggling runs the same reconcile as a monitor connect/disconnect: workspaces remap, trees migrate, hidden windows re-park. Unlinking restores static anchoring.
 
-Known v1 limits: cross-screen **drag**-swap works, but keyboard swap stays within one screen; "move window to monitor" is a no-op while linked (the balancer owns which screen a tile lands on); capacity checks for workspace pins consider only the leftmost screen.
+Known limits: keyboard swap (`Hypr+Shift+arrow`) stays within one screen; capacity checks for workspace pins consider only the leftmost screen.
 
 ---
 

@@ -1015,3 +1015,71 @@ private final class DragSizingTrace {
         )
     }
 }
+
+// MARK: - linked monitors (fork)
+
+// With linked monitors every screen shows the same workspace in a tree of
+// its own, so a drop onto the other screen is a drop across trees inside
+// one workspace.
+extension TilingEngineTiledDragTests {
+    private func makeLinkedFixture() -> CrossFixture {
+        let wide = CrossDragScreen(frame: NSRect(x: 0, y: 0, width: 2000, height: 1000),
+                                   name: "Linked drag wide", number: 91)
+        let tall = CrossDragScreen(frame: NSRect(x: -1000, y: 0, width: 1000, height: 1600),
+                                   name: "Linked drag tall", number: 92)
+        let trace = DragSizingTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [wide, tall] }),
+                                  frameSizingIOFactory: trace.factory)
+        var frames: [CGWindowID: CGRect] = [:]
+        for (window, frame) in engine.prepareTileLayout([1, 2, 3].map { makeWindow(id: $0) },
+                                                        onWorkspace: 1, screen: tall) {
+            frames[window.windowID] = frame
+        }
+        for (window, frame) in engine.prepareTileLayout([10, 11].map { makeWindow(id: $0) },
+                                                        onWorkspace: 1, screen: wide) {
+            frames[window.windowID] = frame
+        }
+        trace.frames = frames
+        return CrossFixture(engine: engine, wide: wide, tall: tall, trace: trace)
+    }
+
+    private func dropLinked(_ fixture: CrossFixture, _ snapshot: TiledDragSnapshot,
+                            at pointer: CGPoint) -> TiledDragDropOutcome {
+        fixture.engine.dropTiledDrag(
+            snapshot, mode: .crossMonitor(pointer: pointer, swapRequested: false),
+            currentLocation: { (1, fixture.tall, []) },
+            releaseLocation: { (1, fixture.wide, []) })
+    }
+
+    func testLinkedDropOntoTheOtherScreenMovesTheTileThereInTheSameWorkspace() throws {
+        let fixture = makeLinkedFixture()
+        fixture.engine.linkedMonitors = true
+        let snapshot = try captureCross(fixture)
+        let slot = try XCTUnwrap(fixture.trace.frames[10])
+        fixture.trace.frames[1]?.origin = CGPoint(x: 300, y: 200)
+
+        let outcome = dropLinked(fixture, snapshot, at: CGPoint(x: slot.minX + 5, y: slot.midY))
+
+        guard case let .acrossTrees(.committed, cross) = outcome else {
+            return XCTFail("expected a committed drop across the linked screens, got \(outcome)")
+        }
+        XCTAssertEqual(cross.moves, [1: 1], "the workspace stays the same")
+        XCTAssertEqual(fixture.engine.windowIDs(inTreeForWorkspace: 1, screen: fixture.tall), [2, 3])
+        XCTAssertEqual(fixture.engine.windowIDs(inTreeForWorkspace: 1, screen: fixture.wide), [1, 10, 11])
+    }
+
+    func testWithoutLinkedMonitorsADropOntoTheSameWorkspaceElsewhereRestores() throws {
+        let fixture = makeLinkedFixture()
+        let snapshot = try captureCross(fixture)
+        let slot = try XCTUnwrap(fixture.trace.frames[10])
+        fixture.trace.frames[1]?.origin = CGPoint(x: 300, y: 200)
+
+        let outcome = dropLinked(fixture, snapshot, at: CGPoint(x: slot.minX + 5, y: slot.midY))
+
+        if case .acrossTrees(.committed, _) = outcome {
+            XCTFail("a workspace on two screens exists only in linked mode")
+        }
+        XCTAssertEqual(fixture.engine.windowIDs(inTreeForWorkspace: 1, screen: fixture.tall), [1, 2, 3])
+        XCTAssertEqual(fixture.engine.windowIDs(inTreeForWorkspace: 1, screen: fixture.wide), [10, 11])
+    }
+}
