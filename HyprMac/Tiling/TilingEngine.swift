@@ -220,6 +220,12 @@ class TilingEngine {
     /// order is the trees', so a swap or drag sticks.
     private var linkedOrder: [Int: [CGWindowID]] = [:]
     private static let linkedOrderLimit = 64
+    /// The user's split of each linked workspace across its screens, once
+    /// a tile was moved across the border (see TilingEngine+LinkedSplit).
+    var linkedSplits: [Int: LinkedSplit] = [:]
+    /// Linked monitors are on: every screen shows the same workspace, so a
+    /// tiled drop onto another screen stays in the source's workspace.
+    var linkedMonitors = false
     private var pendingInsertedWindowIDs: [TilingKey: [CGWindowID]] = [:]
     /// Keys whose last layout attempt did not produce verified geometry.
     /// Set by any non-accepted attempt, cleared by an accepted one or by
@@ -1180,7 +1186,8 @@ class TilingEngine {
         guard release.workspace != Self.scratchpadWorkspace else {
             return decline("the release workspace is the scratchpad")
         }
-        guard release.workspace != snapshot.context.workspace else {
+        // linked monitors: the other screen shows the same workspace, in a tree of its own
+        guard release.workspace != snapshot.context.workspace || linkedMonitors else {
             return decline("the release workspace ws\(release.workspace) is the source's")
         }
         let live = trees[TilingKey(workspace: release.workspace, screen: release.screen)]
@@ -2792,6 +2799,11 @@ class TilingEngine {
     /// each chunk tiles into its own `(workspace, screen)` tree with the
     /// strip order pinned.
     ///
+    /// Once the user moved a tile across the border (a drag, Hypr+Ctrl+←/→)
+    /// the cut is theirs instead: each screen keeps the tiles it was given,
+    /// sort priorities order tiles within a screen, and a window new to the
+    /// strip joins the screen of the tile before it (TilingEngine+LinkedSplit).
+    ///
     /// `screens` must be the enabled screens left-to-right. A single
     /// screen degenerates to plain `tileWindows`.
     @discardableResult
@@ -2848,9 +2860,32 @@ class TilingEngine {
         }
         strip.append(contentsOf: incoming)
 
+        let capacities = screens.map { 1 << maxDepth(for: $0) }
+        // the user's own split (a tile moved across the border) keeps each
+        // screen's tiles; priorities then order tiles within their screen
+        var userSizes: [Int]?
+        if let split = linkedSplit(onWorkspace: workspace, screens: screens) {
+            let ids = strip.map(\.windowID)
+            let assignment = Self.linkedAssignment(strip: ids, screenOf: split.screenOf,
+                                                   screenCount: screens.count)
+            let cut = Self.linkedCut(strip: ids, assignment: assignment,
+                                     priorities: sortPriority.map { strip.map($0) },
+                                     screenCount: screens.count)
+            if zip(cut.sizes, capacities).allSatisfy({ $0 <= $1 }) {
+                let byID = Dictionary(strip.map { ($0.windowID, $0) }, uniquingKeysWith: { first, _ in first })
+                strip = cut.strip.compactMap { byID[$0] }
+                userSizes = cut.sizes
+                linkedSplits[workspace]?.screenOf = cut.screenOf
+            } else {
+                hyprLog(.notice, .tiling, "tileLinked: ws\(workspace) user split \(cut.sizes) passes the "
+                        + "screens' capacity \(capacities) — back to the area split")
+                linkedSplits[workspace] = nil
+            }
+        }
+
         // sort priorities apply to the whole strip, so "higher = further
         // top-left" spans the border: the leftmost screen is the top-left end
-        if let sortPriority, strip.count > 1 {
+        if userSizes == nil, let sortPriority, strip.count > 1 {
             let priorities = strip.map(sortPriority)
             if priorities.contains(where: { $0 != 0 }) {
                 strip = zip(strip, priorities).enumerated()
@@ -2868,8 +2903,8 @@ class TilingEngine {
             .prefix(Self.linkedOrderLimit))
 
         let weights = screens.map { max(1, displayManager.cgRect(for: $0).width * displayManager.cgRect(for: $0).height) }
-        let capacities = screens.map { 1 << maxDepth(for: $0) }
-        let sizes = Self.linkedChunkSizes(count: strip.count, weights: weights, capacities: capacities)
+        let sizes = userSizes
+            ?? Self.linkedChunkSizes(count: strip.count, weights: weights, capacities: capacities)
         hyprLog(.debug, .tiling, "tileLinked: ws\(workspace) \(strip.count) windows → chunks \(sizes) across \(screens.count) screens")
 
         // re-cutting the strip moves windows between screens, so a window's
