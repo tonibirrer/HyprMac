@@ -189,6 +189,8 @@ class WindowManager {
     // the last click landed on a tile or floater on a visible workspace —
     // intent for that window, never a Dock click (see ActivationGate)
     private var lastLeftMouseDownHitManagedWindow = false
+    // where that click landed; mouseDownPointCG is gone by the mouse-up
+    private var lastLeftMouseDownPointCG: CGPoint?
     // rate limit for repairFocusOffParkedWindow
     private var lastParkedFocusRepair: CFAbsoluteTime = 0
     // fork-only config observers (see start()); the shared settings
@@ -1197,6 +1199,7 @@ class WindowManager {
             let downNS = CGPoint(x: downCG.x,
                                  y: self.displayManager.primaryScreenHeight - downCG.y)
             self.mouseDownPointCG = downCG
+            self.lastLeftMouseDownPointCG = downCG
             self.lastLeftMouseDownHitManagedWindow = self.clickHitsManagedWindow(atCG: downCG)
             self.tiledDragHandler.handleMouseDown(at: downCG)
             self.armDimDragIfFloating(downPointNS: downNS)
@@ -1538,6 +1541,14 @@ class WindowManager {
         lastParkedFocusRepair = now
         hyprLog(.notice, .focus, "focus repair: system focus landed on parked \(focused.windowID) '\(focused.title ?? "?")' (\(reason)) — re-asserting the visible workspace")
         ensureFocus()
+    }
+
+    /// The owner of the frontmost window under `point`, HyprMac's own
+    /// overlays aside.
+    private func windowOwnerPID(atCG point: CGPoint) -> pid_t? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return nil }
+        return ActivationGate.ownerPID(at: point, windowList: list, selfPID: getpid())
     }
 
     /// `true` when a click at `point` (CG coordinates) landed on a tile or
@@ -3318,6 +3329,13 @@ class WindowManager {
                   let screen = workspaceManager.homeScreenForWorkspace(workspace),
                   let actual = window.cachedFrame ?? window.frame
             else { continue }
+            // a tile behind the workspace's own fullscreen window keeps its
+            // slot and stays parked, as every retile leaves it. a re-apply
+            // there emptied the tree, and the next switch floated every tile
+            if let tileScreen = displayManager.screen(at: CGPoint(x: rect.midX, y: rect.midY)),
+               !fullscreen.screensTaken(onWorkspace: workspace, among: [tileScreen]).isEmpty {
+                continue
+            }
             readings.append(TiledDriftReading(windowID: window.windowID, workspace: workspace,
                                               screen: screen, actual: actual, intended: rect))
         }
@@ -3419,8 +3437,12 @@ class WindowManager {
     // MARK: - native fullscreen
 
     private func wireFullscreen() {
+        // a game is no workspace member on any setup. accessibility ignores
+        // games only while the game screen is reserved; on a single screen
+        // nothing is, and the game's Space would take over whichever
+        // workspace was up when it launched
         fullscreen.ignoredPIDs = { [weak self] in
-            (self?.accessibility.ignoredPIDs ?? []).union([ProcessInfo.processInfo.processIdentifier])
+            (self?.gameScreen.gamePIDs ?? []).union([ProcessInfo.processInfo.processIdentifier])
         }
         fullscreen.workspaceForNewMember = { [weak self] in self?.workspaceForFullscreenWindow($0) ?? 1 }
         fullscreen.memberJoined = { [weak self] in self?.fullscreenMemberJoined($0) }
@@ -3655,6 +3677,12 @@ class WindowManager {
             let hasVisibleWindow = appWorkspaces.contains {
                 visibleWorkspaces.contains($0) || ($0 == ScratchpadController.workspace && scratchpad.isVisible)
             }
+            // a click outside the managed windows may still have landed on
+            // one of this app's: a dialog or prompt HyprMac does not track.
+            // asked only when it could decide a switch
+            let clickHitAppWindow = !hasVisibleWindow && !lastLeftMouseDownHitManagedWindow
+                && CFAbsoluteTimeGetCurrent() - lastLeftMouseDownTime < ActivationGate.gestureWindow
+                && lastLeftMouseDownPointCG.map { windowOwnerPID(atCG: $0) == pid } == true
 
             let decision = ActivationGate.decide(ActivationGate.Input(
                 now: CFAbsoluteTimeGetCurrent(),
@@ -3665,11 +3693,14 @@ class WindowManager {
                 ownChurnSuppressed: suppressions.isSuppressed("activation-switch"),
                 explicitSwitchRecent: suppressions.isSuppressed("activation-switch-hard"),
                 hasVisibleWindow: hasVisibleWindow,
+                clickHitAppWindow: clickHitAppWindow,
                 ruleActivate: config.windowRules.focusOnActivate(bundleID: app.bundleIdentifier)))
 
             switch decision {
             case .passThrough:
                 break
+            case .clickedAppWindow(let why):
+                hyprLog(.notice, .lifecycle, "dock-affordance: \(bid) activated by a click on its own unmanaged window — staying on ws\(visibleWorkspaces.sorted()), not switching to \(appWorkspaces.sorted()) (\(why))")
             case .suppressed(let why):
                 hyprLog(.notice, .lifecycle, "dock-affordance: activation of \(bid) suppressed (activation-switch window; \(why))")
             case .ignoredProgrammatic(let why):

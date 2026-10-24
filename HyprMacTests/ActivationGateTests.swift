@@ -100,6 +100,47 @@ final class ActivationGateTests: XCTestCase {
         XCTAssertTrue(why.contains("explicit switch"), why)
     }
 
+    func testClickOnTheAppsOwnUnmanagedWindowStays() {
+        // the reproduction: a 1Password approval prompt over Factorio on
+        // ws2. 1Password's only tracked window lived on ws8, and every
+        // click on the prompt switched there
+        let d = ActivationGate.decide(input { $0.lastClickTime = now - 0.1; $0.clickHitAppWindow = true })
+        guard case .clickedAppWindow = d else { return XCTFail("expected clickedAppWindow, got \(d)") }
+    }
+
+    func testCmdTabSwitchesEvenRightAfterAClickOnTheAppsWindow() {
+        let d = ActivationGate.decide(input {
+            $0.lastCmdTabTime = now - 0.1; $0.lastClickTime = now - 0.3; $0.clickHitAppWindow = true
+        })
+        guard case .allowed = d else { return XCTFail("expected allowed, got \(d)") }
+    }
+
+    // MARK: window under a click
+
+    private func win(pid: pid_t, alpha: CGFloat = 1,
+                     x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat) -> [String: Any] {
+        [
+            kCGWindowOwnerPID as String: pid,
+            kCGWindowAlpha as String: alpha,
+            kCGWindowBounds as String: ["X": x, "Y": y, "Width": w, "Height": h] as [String: CGFloat],
+        ]
+    }
+
+    func testTheFrontmostWindowUnderThePointOwnsTheClick() {
+        let list = [win(pid: 931, x: 500, y: 300, w: 400, h: 300),
+                    win(pid: 68366, x: 0, y: 0, w: 1512, h: 982)]
+        XCTAssertEqual(ActivationGate.ownerPID(at: CGPoint(x: 600, y: 400), windowList: list, selfPID: 1), 931)
+        XCTAssertEqual(ActivationGate.ownerPID(at: CGPoint(x: 100, y: 100), windowList: list, selfPID: 1), 68366)
+    }
+
+    func testOwnOverlaysAndTransparentWindowsAreLookedThrough() {
+        let list = [win(pid: 1, x: 0, y: 0, w: 1512, h: 982),
+                    win(pid: 77, alpha: 0, x: 0, y: 0, w: 1512, h: 982),
+                    win(pid: 931, x: 500, y: 300, w: 400, h: 300)]
+        XCTAssertEqual(ActivationGate.ownerPID(at: CGPoint(x: 600, y: 400), windowList: list, selfPID: 1), 931)
+        XCTAssertNil(ActivationGate.ownerPID(at: CGPoint(x: 100, y: 100), windowList: list, selfPID: 1))
+    }
+
     func testFocusOnActivateRuleSwitchesWithoutGesture() {
         let d = ActivationGate.decide(input { $0.ruleActivate = true })
         guard case .allowed = d else { return XCTFail("expected allowed, got \(d)") }
