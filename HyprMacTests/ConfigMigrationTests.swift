@@ -62,9 +62,7 @@ final class ConfigMigrationTests: XCTestCase {
             focusBracketThickness: nil,
             dimInactiveWindows: true, dimIntensity: 0.135, mouseHoverPollHz: nil,
             chromeFadeDurationSec: 0.13, windowCornerRadius: nil,
-            scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
-            windowRules: nil, outerPaddingSides: nil,
-            workspaceWallpapers: nil, workspaceColors: nil, stickyWorkspaces: nil)
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
 
         XCTAssertEqual(ConfigMigration.resolveFocusBracketColor(saved: saved), "000000")
     }
@@ -80,9 +78,7 @@ final class ConfigMigrationTests: XCTestCase {
             focusBracketThickness: nil,
             dimInactiveWindows: nil, dimIntensity: nil, mouseHoverPollHz: nil,
             chromeFadeDurationSec: nil, windowCornerRadius: nil,
-            scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
-            windowRules: nil, outerPaddingSides: nil,
-            workspaceWallpapers: nil, workspaceColors: nil, stickyWorkspaces: nil)
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
         var neutralJSON = try JSONEncoder().encode(SavedConfig.empty)
         var neutralObject = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: neutralJSON) as? [String: Any])
@@ -146,7 +142,8 @@ final class ConfigMigrationTests: XCTestCase {
         mouseHoverPollHz: 60, chromeFadeDurationSec: 0.2,
         windowCornerRadius: 13,
         scratchpadTileByDefault: false, scratchpadRegionInset: 0.03,
-        restoreLayoutOnLaunch: true)
+        restoreLayoutOnLaunch: true,
+        windowRules: [WindowRule(bundleID: "com.apple.Terminal", workspace: 2)])
 
     private let tolerantFields = [
         "focusFollowsMouse", "hyprKey", "excludedBundleIDs", "showMenuBarIndicator",
@@ -155,7 +152,7 @@ final class ConfigMigrationTests: XCTestCase {
         "focusBracketRadius", "focusBracketThickness", "focusBracketLength",
         "dimInactiveWindows", "dimIntensity", "mouseHoverPollHz", "chromeFadeDurationSec",
         "windowCornerRadius", "scratchpadTileByDefault", "scratchpadRegionInset",
-        "restoreLayoutOnLaunch",
+        "restoreLayoutOnLaunch", "windowRules",
     ]
 
     private func jsonObject(_ saved: SavedConfig) throws -> [String: Any] {
@@ -474,12 +471,7 @@ final class ConfigMigrationTests: XCTestCase {
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: 13,
-            scratchpadTileByDefault: true, scratchpadRegionInset: 0.03,
-            windowRules: nil,
-            outerPaddingSides: nil,
-            workspaceWallpapers: nil,
-            workspaceColors: nil,
-            stickyWorkspaces: nil)
+            scratchpadTileByDefault: true, scratchpadRegionInset: 0.03)
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(SavedConfig.self, from: data)
         XCTAssertEqual(decoded.keybinds.first?.action, .switchWorkspace(1))
@@ -502,8 +494,7 @@ final class ConfigMigrationTests: XCTestCase {
     func testResolveMonitorConfigPrefersLocalFile() {
         let local = SavedMonitorConfig(
             maxSplitsPerMonitor: ["Display A": 4],
-            disabledMonitors: ["Display B"],
-            linkedMonitors: nil)
+            disabledMonitors: ["Display B"])
         let embedded = SavedConfig(
             version: nil, keybinds: [], gapSize: 8, outerPadding: 8, enabled: true,
             focusFollowsMouse: nil, hyprKey: nil, excludedBundleIDs: nil,
@@ -516,12 +507,7 @@ final class ConfigMigrationTests: XCTestCase {
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
-            scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
-            windowRules: nil,
-            outerPaddingSides: nil,
-            workspaceWallpapers: nil,
-            workspaceColors: nil,
-            stickyWorkspaces: nil)
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
         let r = ConfigMigration.resolveMonitorConfig(local: local, embedded: embedded)
         XCTAssertEqual(r.maxSplits, ["Display A": 4])
         XCTAssertEqual(r.disabled, ["Display B"])
@@ -543,12 +529,7 @@ final class ConfigMigrationTests: XCTestCase {
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
-            scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
-            windowRules: nil,
-            outerPaddingSides: nil,
-            workspaceWallpapers: nil,
-            workspaceColors: nil,
-            stickyWorkspaces: nil)
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
         let r = ConfigMigration.resolveMonitorConfig(local: nil, embedded: embedded)
         XCTAssertEqual(r.maxSplits, ["DELL U2723QE": 2])
         XCTAssertEqual(r.disabled, ["External"])
@@ -576,12 +557,7 @@ final class ConfigMigrationTests: XCTestCase {
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
-            scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
-            windowRules: nil,
-            outerPaddingSides: nil,
-            workspaceWallpapers: nil,
-            workspaceColors: nil,
-            stickyWorkspaces: nil)
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
         let r = ConfigMigration.resolveMonitorConfig(local: nil, embedded: embedded)
         XCTAssertFalse(r.needsLocalWrite,
                        "no monitor data anywhere — nothing to write")

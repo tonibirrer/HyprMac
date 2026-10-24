@@ -68,25 +68,6 @@ final class FullHeightTests: XCTestCase {
         }
     }
 
-    // MARK: - model
-
-    func testFullHeightDecodesFalseWhenAbsentAndRoundTrips() throws {
-        let json = #"{"bundleID": "app.zen-browser.zen", "workspace": 0}"#.data(using: .utf8)!
-        XCTAssertFalse(try JSONDecoder().decode(WindowRule.self, from: json).fullHeight)
-
-        let original = [WindowRule(bundleID: "Mattermost.Desktop", workspace: 0, fullHeight: true)]
-        let decoded = try JSONDecoder().decode([WindowRule].self, from: JSONEncoder().encode(original))
-        XCTAssertEqual(decoded, original)
-        XCTAssertTrue(decoded[0].fullHeight)
-    }
-
-    func testIsFullHeightHelper() {
-        let rules = [WindowRule(bundleID: "app.zen-browser.zen", workspace: 0, fullHeight: true)]
-        XCTAssertTrue(rules.isFullHeight(bundleID: "app.zen-browser.zen"))
-        XCTAssertFalse(rules.isFullHeight(bundleID: "com.apple.finder"))
-        XCTAssertFalse(rules.isFullHeight(bundleID: nil))
-    }
-
     // MARK: - baseline: dwindle stacks the right half
 
     func testDwindleStacksWithoutRule() {

@@ -26,31 +26,15 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "rectangle.split.2x2",
-            title: "Steadier Tiling",
-            description: "Windows land in their tiles far more reliably. A move between monitors sizes the window first, a window that doesn't fit goes back where it was, and nothing gets shuffled while your Mac is locked or asleep."
+            icon: "square.grid.2x2",
+            title: "Fewer Floating Windows at Launch",
+            description: "When a workspace can't fit every window, HyprMac tiles the ones that fit and floats only the rest, instead of floating them all.",
+            tint: .magenta
         ),
         WhatsNewFeature(
             icon: "keyboard",
-            title: "A Searchable Keybind List",
-            description: "Hypr+K opens one scrolling list with a search bar. Start typing to find a shortcut, or use the arrow keys to scroll."
-        ),
-        WhatsNewFeature(
-            icon: "arrow.up.right.square.fill",
-            title: "Move and Follow",
-            description: "Hypr+Ctrl+Shift+N moves the focused window to workspace N and takes you there with it."
-        ),
-        WhatsNewFeature(
-            icon: "square.stack",
-            title: "A Scratchpad That Tiles",
-            description: "The scratchpad works like its own workspace. Focus, swaps, resizes and drags stay inside it, and the windows behind it can't take focus.",
-            tint: .magenta
-        ),
-        WhatsNewFeature(
-            icon: "macwindow.on.rectangle",
-            title: "Floaters Stay on Top",
-            description: "Floating windows stay above the tile you click, and Quick Look previews float instead of tiling.",
-            tint: .magenta
+            title: "No Duplicate Shortcuts",
+            description: "The Keys tab won't save a shortcut another keybind already uses, and tells you which one has it."
         ),
     ]
 }

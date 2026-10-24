@@ -559,6 +559,109 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertTrue(windows.allSatisfy { trace.requested[$0.windowID]?.width == 1064 })
     }
 
+    /// First launch on one screen: every window is a newcomer, and two of
+    /// them each need more than half the usable width beside anything else.
+    /// The retry tiles the most windows that fit and refuses only the rest,
+    /// so recovery floats one window instead of the whole workspace.
+    private func startupRetry(bypassingAdmissionMinima: Bool)
+        -> (retry: TilingEngine.AdmissionResult, engine: TilingEngine, screen: NSScreen, ids: [CGWindowID]) {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = (1...4).map { makeWindow(id: CGWindowID(88_000 + $0)) }
+        let rect = engine.displayManager.cgRect(for: screen)
+        for window in windows { trace.frames[window.windowID] = rect }
+        // the usable frame is 1904x1064: these two cannot share it side by
+        // side or stacked, but either one fits beside the other two windows
+        trace.minSize[windows[0].windowID] = CGSize(width: 1000, height: 700)
+        trace.minSize[windows[1].windowID] = CGSize(width: 1000, height: 700)
+
+        let admission = engine.tileWindows(windows, onWorkspace: 1, screen: screen)
+        XCTAssertFalse(admission.published)
+        XCTAssertTrue(admission.publishedIDs.isEmpty)
+
+        let since = bypassingAdmissionMinima ? admission.generation &+ 1 : admission.generation
+        let bypass = Dictionary(uniqueKeysWithValues: windows.map { ($0.windowID, since) })
+        let retry = engine.retryAdmission(windows, onWorkspace: 1, screen: screen,
+                                          bypassingMinimaBefore: bypass,
+                                          refusingImpossibleArrangements: true)
+        return (retry, engine, screen, windows.map(\.windowID))
+    }
+
+    func testAStartupRetryTilesEveryWindowThatFitsAndRefusesOnlyTheRest() {
+        let (retry, engine, screen, ids) = startupRetry(bypassingAdmissionMinima: false)
+
+        XCTAssertEqual(retry.refusedIDs.count, 1, "refused=\(retry.refusedIDs) failure=\(String(describing: retry.failure))")
+        XCTAssertTrue(retry.refusedIDs.isSubset(of: [ids[0], ids[1]]), "one of the two wide windows")
+        XCTAssertEqual(retry.publishedIDs, Set(ids).subtracting(retry.refusedIDs))
+        XCTAssertEqual(Set(engine.windowIDs(inTreeForWorkspace: 1, screen: screen)), retry.publishedIDs)
+    }
+
+    func testAStartupRetryThatLearnsTheFloorsItselfStillTilesWhatFits() {
+        // the retry ignores what the admission learned, so it has to find
+        // the floors out again before it can choose
+        let (retry, engine, screen, ids) = startupRetry(bypassingAdmissionMinima: true)
+
+        XCTAssertEqual(retry.refusedIDs.count, 1, "refused=\(retry.refusedIDs) failure=\(String(describing: retry.failure))")
+        XCTAssertTrue(retry.refusedIDs.isSubset(of: [ids[0], ids[1]]))
+        XCTAssertEqual(retry.publishedIDs, Set(ids).subtracting(retry.refusedIDs))
+        XCTAssertEqual(Set(engine.windowIDs(inTreeForWorkspace: 1, screen: screen)), retry.publishedIDs)
+    }
+
+    func testStartupRecoveryFloatsOnlyTheWindowThatDoesNotFit() {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let windows = (1...4).map { makeWindow(id: CGWindowID(88_100 + $0)) }
+        let rect = engine.displayManager.cgRect(for: screen)
+        for window in windows { trace.frames[window.windowID] = rect }
+        trace.minSize[windows[0].windowID] = CGSize(width: 1000, height: 700)
+        trace.minSize[windows[1].windowID] = CGSize(width: 1000, height: 700)
+
+        let recovery = AdmissionRecovery()
+        var scheduled: [() -> Void] = []
+        var floated: [CGWindowID] = []
+        recovery.schedule = { _, body in scheduled.append(body) }
+        recovery.workspaceFor = { _ in 1 }
+        recovery.homeScreenForWorkspace = { _ in screen }
+        recovery.isWorkspaceVisible = { _ in true }
+        recovery.isFloating = { floated.contains($0) }
+        recovery.liveWindow = { id in windows.first { $0.windowID == id } }
+        recovery.isReadable = { _ in true }
+        func tileable() -> [HyprWindow] {
+            windows.map { $0.isFloating = floated.contains($0.windowID); return $0 }
+        }
+        recovery.attempt = { workspace, screen, bypass, keepOnTimeout in
+            let result = engine.retryAdmission(tileable(), onWorkspace: workspace, screen: screen,
+                                               bypassingMinimaBefore: bypass,
+                                               refusingImpossibleArrangements: true,
+                                               keepingUnverifiedOnTimeout: keepOnTimeout)
+            return AdmissionRecovery.AttemptResult(placed: result.publishedIDs.intersection(bypass.keys),
+                                                   failure: result.failure, admission: result)
+        }
+        recovery.floatInPlace = { window, _ in floated.append(window.windowID) }
+        recovery.retileAfterFallback = { workspace, screen in
+            let result = engine.tileWindows(tileable(), onWorkspace: workspace, screen: screen)
+            return Set(tileable().filter { !$0.isFloating && !result.publishedIDs.contains($0.windowID) }
+                .map(\.windowID))
+        }
+
+        recovery.note(engine.tileWindows(windows, onWorkspace: 1, screen: screen))
+        XCTAssertEqual(recovery.pendingWindowIDs, Set(windows.map(\.windowID)))
+        while !scheduled.isEmpty {
+            let pending = scheduled
+            scheduled = []
+            pending.forEach { $0() }
+        }
+
+        XCTAssertEqual(floated.count, 1, "floated \(floated)")
+        XCTAssertEqual(Set(engine.windowIDs(inTreeForWorkspace: 1, screen: screen)),
+                       Set(windows.map(\.windowID)).subtracting(floated))
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty)
+    }
+
     /// The Outlook thrash: two tenants whose learned floors cannot both sit
     /// on one screen. The admission probes and learns; the retry has nothing
     /// left to find out, so it must not probe again.

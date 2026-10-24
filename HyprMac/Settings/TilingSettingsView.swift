@@ -13,7 +13,7 @@ struct TilingSettingsView: View {
         VStack(spacing: HyprSpacing.lg) {
             gapsPanel
             focusPanel
-            WindowRulesPanel()
+            AppRulesPanel()
             WallpapersPanel()
             scratchpadPanel
             accordionPanel

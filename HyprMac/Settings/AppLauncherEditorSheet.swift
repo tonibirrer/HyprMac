@@ -5,6 +5,8 @@ import SwiftUI
 import Carbon
 
 struct AppLauncherEditorSheet: View {
+    /// the saved list, to refuse a chord another bind already holds
+    var otherBinds: [Keybind] = []
     let onSave: (Keybind) -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -87,6 +89,11 @@ struct AppLauncherEditorSheet: View {
                     useControl: $useControl, useOption: $useOption,
                     useCommand: $useCommand
                 )
+                if let taken = conflict {
+                    Text("Already bound to \(taken.actionDescription)")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
             }
 
             HStack {
@@ -95,7 +102,7 @@ struct AppLauncherEditorSheet: View {
                 Spacer()
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(recordedKeyCode == 0 || selectedBundleID.isEmpty)
+                    .disabled(recordedKeyCode == 0 || selectedBundleID.isEmpty || conflict != nil)
                     .buttonStyle(.borderedProminent)
             }
         }
@@ -119,10 +126,18 @@ struct AppLauncherEditorSheet: View {
         }
     }
 
-    private func save() {
+    private var built: Keybind {
         let mods = ModifierFlags.from(hypr: useHypr, shift: useShift, control: useControl, option: useOption, command: useCommand)
-        onSave(Keybind(keyCode: recordedKeyCode, modifiers: mods,
-                       action: .launchApp(bundleID: selectedBundleID)))
+        return Keybind(keyCode: recordedKeyCode, modifiers: mods,
+                       action: .launchApp(bundleID: selectedBundleID))
+    }
+
+    private var conflict: Keybind? {
+        recordedKeyCode == 0 ? nil : otherBinds.conflict(with: built, editing: nil)
+    }
+
+    private func save() {
+        onSave(built)
         dismiss()
     }
 }

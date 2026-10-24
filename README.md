@@ -1,7 +1,7 @@
 # HyprMac
 
 > [!WARNING]
-> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style window rules. It builds as **HyprMacExperiments** with its own bundle ID, its own config directory (`~/Library/Application Support/HyprMacExperiments/`, iCloud folder and IPC sockets included) so it can be installed and switched with a regular HyprMac install without the two ever sharing state — the first launch copies an existing HyprMac config over once. Auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
+> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style per-app rules. It builds as **HyprMacExperiments** with its own bundle ID, its own config directory (`~/Library/Application Support/HyprMacExperiments/`, iCloud folder and IPC sockets included) so it can be installed and switched with a regular HyprMac install without the two ever sharing state — the first launch copies an existing HyprMac config over once. Auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
 
 **A keyboard-driven tiling window manager for macOS, inspired by [Hyprland](https://hyprland.org).**
 Free, open source, and the first real job your Caps Lock key has ever had.
@@ -74,8 +74,10 @@ permissions, and the recommended macOS settings.
 You'll feel at home. The differences are mostly macOS being macOS:
 
 - **Tiling:** BSP dwindle, like Hyprland's default layout. New windows split the focused one,
-  and **Hypr + J** flips the split direction. Drag a tiled window onto another tile's edge to
-  insert it there, or hold Hypr while dragging to swap the two.
+  and **Hypr + J** flips the split direction. Drag a tiled window by its title bar onto another
+  tile's edge to insert it there, or hold Hypr while dragging to swap the two. The tile can be on
+  another monitor, and an empty workspace there takes the window whole. A highlight shows where
+  the window will land before you let go.
 - **Workspaces:** ten of them (keys 1–9 and 0), plus a scratchpad and an overview on
   **Hypr + O**. macOS has no public API for this, so HyprMac keeps its own virtual workspaces and
   hides the other workspaces' windows when you switch.
@@ -120,10 +122,22 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 | `Hypr + K` | Show the keybind overlay |
 | `Hypr + O` | Show workspace overview |
 | `Hypr + Ctrl + S` / `Hypr + Ctrl + R` | Save / restore the layout for this display setup |
+| `Hypr + R` | Retile all spaces (also applies workspace pins) |
 | `Hypr + M` | Collapse onto a single screen for screen sharing, and back *(fork)* |
 | `Hypr + A` | Toggle accordion mode *(fork)* |
 | `Hypr + Return` | Launch or focus Terminal |
 | ``Hypr + ` `` | Warp the cursor to the menu bar |
+
+## Pinning apps to workspaces
+
+Settings → General → "Pin apps to workspaces" sends an app to a workspace of your choice. Every
+new window of a pinned app opens there, and HyprMac switches to that workspace with it. If the
+workspace is full, the window goes to the next one with room. **Hypr + R** (Retile all
+spaces) also moves a pinned app's open windows back to its workspace. An app in "Never tile"
+can be pinned too: it goes to its workspace and stays floating.
+
+Apps in "Never tile" can't be tiled by hand either. Hypr+T on one shakes red and says so; remove
+the app from the list to tile it again.
 
 ## Saved layouts
 
@@ -146,7 +160,7 @@ models at the same resolutions share one saved layout, however they are arranged
 
 What this fork adds on top of upstream HyprMac:
 
-- 📌 **Window Rules** — Pin apps to workspaces and fix their tile sort order by bundle ID, Hyprland-style
+- 📌 **App Rules** — Per-app tile sort order, full-height columns, focus-on-activate and sticky windows by bundle ID, Hyprland-style, on top of upstream's workspace pins
 - 🧷 **Sticky Apps** — Hyprland's `pin`, extended to tiles: chosen apps follow you across the workspaces that opt in
 - 🏛 **Full-Height Apps** — Per-app guarantee of a full-height column in the dwindle layout, master-layout style
 - 🔗 **Linked Monitors** — Toggle: all monitors show one workspace, tiles load-balanced across screens by size
@@ -158,26 +172,27 @@ What this fork adds on top of upstream HyprMac:
 
 ---
 
-### Window Rules *(fork feature)*
+### App Rules *(fork feature)*
 
-Hyprland-style per-app rules, modeled on `windowrule = <effect>, class:...`. Each rule is keyed by bundle ID and can apply two effects, independently or together:
+Workspace pins are upstream's: **Settings → General → Pin apps to workspaces** (`"windowRules"` in config.json) sends an app's new windows to its workspace and takes you there, and `Hypr+R` (Retile All) moves pinned apps back. The fork adds per-app effects on top, in their own list keyed by bundle ID and modeled on Hyprland's `windowrule = <effect>, class:...`:
 
-- **Workspace pin** — when the app opens a new window, it is placed on its pinned workspace instead of the active one, and by default the workspace is switched to, so e.g. opening your terminal takes you straight to its workspace. Set `silent` to move the window without switching (Hyprland's `workspace N silent`).
 - **Sort priority** — keeps the app's tiles at a fixed end of the dwindle order: higher priority tiles further **top-left**, lower further **bottom-right**, 0 (default) leaves the window in plain insertion order. So `"sortPriority": -1` on Mattermost means it always ends up in the rightmost tile, no matter which order your apps opened in. (Hyprland has no native equivalent — the request was [declined upstream](https://github.com/hyprwm/Hyprland/issues/5388) — but per-class window rules are the idiomatic place for it.)
 - **Focus on activate** (`"focusOnActivate": true`, the UI's "Activate") — Hyprland's `focus_on_activate` / `windowrule = activate`, per app: always honor the app's activation requests and switch to its workspace even without a click or keystroke. By default, activations of apps with no visible window are honored only when a user gesture (recent click, recent ⌘ keystroke, or a launcher as the previous app) proves intent — a terminal self-raising when a background job prints must not yank the workspace. Set this on your browser so a URL opened from another app (an SSO login from the terminal, e.g.) still takes you there.
-
 - **Sticky** (`"sticky": true`) — Hyprland's `windowrule = pin` ("show it on all workspaces"), per app. The app's windows follow you across every workspace that opts in; see [Sticky Apps](#sticky-apps-fork-feature) below.
 - **Full height** (`"fullHeight": true`) — the app's tiles always span the full tiled height. Hyprland's dwindle has no per-window equivalent (its `split_width_multiplier` and `preserve_split` are global); the semantics come from Hyprland's **master layout**, where a master window is a full-height column and slaves stack beside it. See [Full-Height Apps](#full-height-apps-fork-feature).
+- **No fake click** (`"noSyntheticClick": true`) — never post a synthesized click into the app to force activation under focus-follows-mouse. Remote desktops, VMs and games forward mouse input; common clients (Citrix, Microsoft Remote Desktop, VMware, Parallels, VNC…) are blocked by default.
 
-Configure in **Settings → Layout → Window Rules** (app picker, workspace 1–9 or "—" for no pin, per-rule "Follow" / "Activate" / "Sticky" checkboxes, sort stepper), or directly in `~/Library/Application Support/HyprMacExperiments/config.json`:
+Configure in **Settings → Layout → App Rules** (app picker, per-rule checkboxes, sort stepper), or directly in `~/Library/Application Support/HyprMacExperiments/config.json`:
 
 ```json
 "windowRules": [
-  { "bundleID": "com.mitchellh.ghostty",    "workspace": 2 },
-  { "bundleID": "dev.zed.Zed",              "workspace": 2, "sortPriority": 1 },
-  { "bundleID": "md.obsidian",              "workspace": 3, "silent": true },
-  { "bundleID": "Mattermost.Desktop",       "workspace": 0, "sortPriority": -1, "sticky": true, "fullHeight": true },
-  { "bundleID": "app.zen-browser.zen",      "workspace": 0, "sticky": true, "fullHeight": true }
+  { "bundleID": "com.mitchellh.ghostty", "workspace": 2 },
+  { "bundleID": "dev.zed.Zed",           "workspace": 2 }
+],
+"experimentsAppRules": [
+  { "bundleID": "dev.zed.Zed",           "sortPriority": 1 },
+  { "bundleID": "Mattermost.Desktop",    "sortPriority": -1, "sticky": true, "fullHeight": true },
+  { "bundleID": "app.zen-browser.zen",   "sticky": true, "fullHeight": true, "focusOnActivate": true }
 ],
 "stickyWorkspaces": [1, 2, 3]
 ```
@@ -186,13 +201,10 @@ Find an app's bundle ID with `mdls -name kMDItemCFBundleIdentifier -r /Applicati
 
 Semantics:
 
-- Workspace pins are evaluated **once per window**, when it is first discovered; first match wins. Un-minimizing or switching workspaces never re-triggers a rule, but apps that recycle their window on reopen (Teams-style) are re-pinned correctly.
-- On HyprMac startup and **Retile All**, existing windows of ruled apps are sorted onto their pinned workspaces *silently* — no workspace-switch storm at launch.
-- A full target workspace falls back to normal placement instead of rejecting the window.
-- "Never tile" (excluded) apps always float and are ignored by rules.
-- Since workspaces are statically anchored to monitors, a rule also decides which monitor the app lands on — e.g. with two monitors, odd workspaces pin to the left screen and even to the right.
-- Sort priority, by contrast, is enforced on **every membership change** (a window opens or is discovered) and immediately when you edit a rule. It reorders only which window sits in which tile — tree shape and split ratios stay put. Equal-priority windows keep their relative order, so manual swaps between unruled windows survive; a swap that violates a priority is undone the next time a window opens.
-- `"workspace": 0` (the UI's "—") means no pin — the rule only carries a sort priority.
+- Sort priority is enforced on **every membership change** (a window opens or is discovered) and immediately when you edit a rule. It reorders only which window sits in which tile — tree shape and split ratios stay put. Equal-priority windows keep their relative order, so manual swaps between unruled windows survive; a swap that violates a priority is undone the next time a window opens.
+- "Never tile" (excluded) apps always float.
+- A pinned app that closes and reopens its window under a recycled window id (Teams-style) stays on its pinned workspace.
+- Before the v0.17 sync the fork kept these effects inside `windowRules` entries. The first launch of a newer build moves them to `experimentsAppRules` and keeps the pins in `windowRules`; the `silent` flag is gone (upstream's pins always take you along).
 
 ---
 
@@ -200,7 +212,7 @@ Semantics:
 
 Hyprland's `pin` (`windowrule = pin` / the `pin` dispatcher) shows a window "on all workspaces" — but only floating windows, and always on every workspace of the monitor. HyprMac adapts the idea in two ways: sticky works for **tiled** windows too, and **workspaces opt in** individually, so a chat client and a browser can ride along on your working workspaces while a presentation or focus workspace stays clean.
 
-- Mark the app **Sticky** in Settings → Layout → Window Rules (`"sticky": true`; no workspace pin needed).
+- Mark the app **Sticky** in Settings → Layout → App Rules (`"sticky": true`; no workspace pin needed).
 - Tick **Sticky** on each workspace that should show sticky apps in Settings → Layout → Workspaces (`"stickyWorkspaces": [1, 2, 3]`). Nothing happens until at least one workspace opts in.
 
 Semantics:
@@ -219,7 +231,7 @@ Semantics:
 
 ### Full-Height Apps *(fork feature)*
 
-Dwindle's spiral alternates split axes, so the second window on a wide screen gets cut in half the moment a third one opens. For a browser or a chat client you usually want a column that keeps its full height no matter what opens next. Hyprland's dwindle has nothing per window for this; its master layout does (the master area is a full-height column, `orientation = left`, slaves stacked beside it), and so does its scrolling layout (every window is a column). HyprMac takes the master semantics and makes them a per-app window rule: **Full height** in Settings → Layout → Window Rules, or `"fullHeight": true`.
+Dwindle's spiral alternates split axes, so the second window on a wide screen gets cut in half the moment a third one opens. For a browser or a chat client you usually want a column that keeps its full height no matter what opens next. Hyprland's dwindle has nothing per window for this; its master layout does (the master area is a full-height column, `orientation = left`, slaves stacked beside it), and so does its scrolling layout (every window is a column). HyprMac takes the master semantics and makes them a per-app window rule: **Full height** in Settings → Layout → App Rules, or `"fullHeight": true`.
 
 How it works inside the BSP tree:
 

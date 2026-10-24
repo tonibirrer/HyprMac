@@ -255,7 +255,6 @@ struct SavedConfig: Codable {
     // fork additions (HyprMacExperiments). `var` with a default, like
     // upstream's later fields, so upstream's `SavedConfig(...)` call sites
     // compile without naming them.
-    var windowRules: [WindowRule]? = nil
     var outerPaddingSides: PaddingSides? = nil
     var workspaceWallpapers: [String: String]? = nil
     var workspaceColors: [String: String]? = nil
@@ -264,6 +263,9 @@ struct SavedConfig: Codable {
     // `var` with a default so the synthesized memberwise init takes it as a
     // trailing optional — existing `SavedConfig(...)` call sites keep compiling.
     var restoreLayoutOnLaunch: Bool? = nil
+    var windowRules: [WindowRule]? = nil
+    // fork: per-app effects beside upstream's pins (see AppRule)
+    var appRules: [AppRule]? = nil
 }
 
 /// Optional per-side overrides for the uniform `outerPadding`. A nil side
@@ -303,9 +305,11 @@ extension SavedConfig {
         case chromeFadeDurationSec, windowCornerRadius
         case scratchpadTileByDefault, scratchpadRegionInset
         // fork additions (HyprMacExperiments)
-        case windowRules, outerPaddingSides, workspaceWallpapers, workspaceColors
+        case outerPaddingSides, workspaceWallpapers, workspaceColors
         case stickyWorkspaces
+        case appRules = "experimentsAppRules"
         case restoreLayoutOnLaunch
+        case windowRules
     }
 
     init(from decoder: Decoder) throws {
@@ -373,12 +377,59 @@ extension SavedConfig {
         self.scratchpadTileByDefault = Self.tolerant(c, .scratchpadTileByDefault)
         self.scratchpadRegionInset = Self.tolerant(c, .scratchpadRegionInset)
         // fork additions (HyprMacExperiments)
-        self.windowRules = Self.tolerant(c, .windowRules)
         self.outerPaddingSides = Self.tolerant(c, .outerPaddingSides)
         self.workspaceWallpapers = Self.tolerant(c, .workspaceWallpapers)
         self.workspaceColors = Self.tolerant(c, .workspaceColors)
         self.stickyWorkspaces = Self.tolerant(c, .stickyWorkspaces)
         self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
+        let windowRules = Self.tolerantWindowRules(c)
+        if c.contains(.appRules) {
+            self.windowRules = windowRules
+            self.appRules = Self.tolerant(c, .appRules)
+        } else {
+            // a config from before the fork took upstream's pins: its
+            // windowRules entries carry the fork's effects, which upstream's
+            // WindowRule drops on the next save. move them out first
+            let legacy = Self.legacyForkRuleEffects(c)
+            self.appRules = legacy
+            self.windowRules = legacy == nil
+                ? windowRules
+                : windowRules?.filter { Constants.workspaceRange.contains($0.workspace) }
+        }
+    }
+
+    // the fork's effects inside legacy windowRules entries, one AppRule per
+    // entry that sets any. nil when no entry does: nothing to move. entries
+    // that only carried a priority (workspace 0) leave the pins
+    private static func legacyForkRuleEffects(_ c: KeyedDecodingContainer<CodingKeys>) -> [AppRule]? {
+        guard c.contains(.windowRules), (try? c.decodeNil(forKey: .windowRules)) == false,
+              var arr = try? c.nestedUnkeyedContainer(forKey: .windowRules) else { return nil }
+        var effects: [AppRule] = []
+        while !arr.isAtEnd {
+            if (try? arr.decodeNil()) == true { continue }
+            guard let element = try? arr.decode(FailableAppRule.self) else { break }
+            if let rule = element.rule, rule.hasEffect { effects.append(rule) }
+        }
+        guard !effects.isEmpty else { return nil }
+        hyprLog(.notice, .config, "config.json: moved \(effects.count) app rule effect(s) out of windowRules into experimentsAppRules")
+        return effects
+    }
+
+    // same per-element tolerance as keybinds: the rules are hand-editable
+    // and travel between builds over iCloud, so a bad rule costs only itself
+    private static func tolerantWindowRules(_ c: KeyedDecodingContainer<CodingKeys>) -> [WindowRule]? {
+        guard c.contains(.windowRules), (try? c.decodeNil(forKey: .windowRules)) == false else { return nil }
+        guard var arr = try? c.nestedUnkeyedContainer(forKey: .windowRules) else {
+            hyprLog(.notice, .config, "config.json has a windowRules value this build can't read; using no rules")
+            return nil
+        }
+        var kept: [WindowRule] = []
+        while !arr.isAtEnd {
+            if (try? arr.decodeNil()) == true { continue }
+            guard let element = try? arr.decode(FailableWindowRule.self) else { break }
+            if let rule = element.rule { kept.append(rule) }
+        }
+        return kept
     }
 
     // one optional field. a value this build can't read (a case a newer
@@ -414,11 +465,35 @@ private struct FailableKeybind: Decodable {
     }
 }
 
+// one legacy fork rule's effects, or nil when they don't decode.
+private struct FailableAppRule: Decodable {
+    let rule: AppRule?
+
+    init(from decoder: Decoder) throws {
+        rule = try? AppRule(from: decoder)
+    }
+}
+
+// one window rule, or nil when it doesn't decode. same trick as FailableKeybind.
+private struct FailableWindowRule: Decodable {
+    let rule: WindowRule?
+
+    init(from decoder: Decoder) throws {
+        do {
+            rule = try WindowRule(from: decoder)
+        } catch {
+            rule = nil
+            hyprLog(.warning, .config, "skipping malformed window rule")
+        }
+    }
+}
+
 // monitor-specific settings — stored locally, never synced via iCloud
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
-    let linkedMonitors: Bool?
+    // fork fields default to nil so upstream's call sites compile unchanged
+    var linkedMonitors: Bool? = nil
     // accordion mode (single-screen stacked layout). accordionMonitor nil
     // resolves to the built-in display at runtime.
     var accordionMode: Bool? = nil

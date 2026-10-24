@@ -146,3 +146,13 @@ struct OuterPadding: Equatable, ExpressibleByIntegerLiteral, ExpressibleByFloatL
                height: max(0, rect.height - top - bottom))
     }
 }
+
+extension CGRect {
+    /// Upstream's uniform spelling, `insetBy(dx: padding, dy: padding)`,
+    /// over the fork's per-side padding: each side shrinks by its own value.
+    @_disfavoredOverload
+    func insetBy(dx: OuterPadding, dy: OuterPadding) -> CGRect {
+        precondition(dx == dy, "insetBy(dx:dy:) takes the same padding twice")
+        return dx.inset(self)
+    }
+}

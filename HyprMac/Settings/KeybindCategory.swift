@@ -25,8 +25,8 @@ enum KeybindCategory: String, CaseIterable {
             return .workspaces
         case .launchApp, .runCommand:
             return .apps
-        case .showKeybinds, .showWorkspaceOverview, .toggleTiling,
-             .toggleSingleScreen, .toggleAccordion, .saveLayout, .restoreLayout:
+        case .showKeybinds, .showWorkspaceOverview, .toggleTiling, .saveLayout, .restoreLayout,
+             .retileAll, .toggleSingleScreen, .toggleAccordion:
             return .system
         }
     }

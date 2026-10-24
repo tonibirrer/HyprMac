@@ -36,35 +36,6 @@ final class SortPriorityTests: XCTestCase {
         engine.sortPriority = { map[$0.windowID] ?? 0 }
     }
 
-    // MARK: - model
-
-    func testSortPriorityDecodesToZeroWhenAbsent() throws {
-        let json = #"{"bundleID": "md.obsidian", "workspace": 5}"#.data(using: .utf8)!
-        let rule = try JSONDecoder().decode(WindowRule.self, from: json)
-        XCTAssertEqual(rule.sortPriority, 0)
-    }
-
-    func testSortPriorityRoundTrips() throws {
-        let original = [WindowRule(bundleID: "com.mattermost.desktop", workspace: 0, sortPriority: -3)]
-        let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode([WindowRule].self, from: data)
-        XCTAssertEqual(decoded, original)
-    }
-
-    func testPriorityOnlyRuleDoesNotPinButContributesPriority() {
-        let rules = [WindowRule(bundleID: "com.mattermost.desktop", workspace: 0, sortPriority: -3)]
-        XCTAssertNil(rules.firstMatch(bundleID: "com.mattermost.desktop"))
-        XCTAssertEqual(rules.sortPriority(bundleID: "com.mattermost.desktop"), -3)
-        XCTAssertEqual(rules.sortPriority(bundleID: "app.zen-browser.zen"), 0)
-        XCTAssertEqual(rules.sortPriority(bundleID: nil), 0)
-    }
-
-    func testPinnedRuleContributesPriorityToo() {
-        let rules = [WindowRule(bundleID: "a.b.c", workspace: 3, sortPriority: 5)]
-        XCTAssertEqual(rules.firstMatch(bundleID: "a.b.c")?.workspace, 3)
-        XCTAssertEqual(rules.sortPriority(bundleID: "a.b.c"), 5)
-    }
-
     // MARK: - batch insert ordering
 
     func testBatchInsertOrdersByPriorityDescending() {

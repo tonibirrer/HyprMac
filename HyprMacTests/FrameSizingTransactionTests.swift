@@ -763,6 +763,44 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(verdict(gap: 0, firstWidth: 102), .rejected(.overlap(76, 77)))
     }
 
+    // issue #19, claim 1: a keyboard resize on the DELL (gap 8, padding 8)
+    // was refused as gapViolation(115, 74) when each window was within a
+    // point of its own target. a pair the per-window check accepts at that
+    // precision must not fail the gap check.
+    func testAPointOffPerWindowNeverFailsTheGapCheckAtTheShippingGap() {
+        let attempt = FrameSizingAttempt(io: Fake().io())
+        let usable = CGRect(x: 0, y: 30, width: 3440, height: 1410)
+        let splits: [(left: CGRect, right: CGRect)] = [
+            (CGRect(x: 8, y: 38, width: 2050, height: 1394), CGRect(x: 2066, y: 38, width: 1366, height: 1394)),
+            (CGRect(x: 8, y: 38, width: 1708, height: 1394), CGRect(x: 1724, y: 38, width: 1708, height: 1394))
+        ]
+        func verdict(_ left: CGRect, _ right: CGRect, _ actualLeft: CGRect, _ actualRight: CGRect)
+            -> FrameSizingAttempt.Verdict {
+            attempt.validateFrames(
+                targets: [FrameSizingAttempt.Target(windowID: 115, frame: left),
+                          FrameSizingAttempt.Target(windowID: 74, frame: right)],
+                actualFrames: [115: actualLeft, 74: actualRight],
+                usableFrame: usable, gap: 8).verdict
+        }
+
+        // the two frames quoted in the issue
+        let (left, right) = splits[0]
+        XCTAssertEqual(verdict(left, right, CGRect(x: 8, y: 38, width: 2051, height: 1394), right), .accepted)
+        XCTAssertEqual(verdict(left, right, CGRect(x: 8, y: 38, width: 2051, height: 1394),
+                               CGRect(x: 2065, y: 38, width: 1366, height: 1394)), .accepted)
+
+        // every combination of a point off in x and width on both windows
+        let offsets: [CGFloat] = [-1, 0, 1]
+        for (left, right) in splits {
+            for lx in offsets { for lw in offsets { for rx in offsets { for rw in offsets {
+                let actualLeft = CGRect(x: left.minX + lx, y: left.minY, width: left.width + lw, height: left.height)
+                let actualRight = CGRect(x: right.minX + rx, y: right.minY, width: right.width + rw, height: right.height)
+                XCTAssertEqual(verdict(left, right, actualLeft, actualRight), .accepted,
+                               "left \(actualLeft) right \(actualRight)")
+            } } } }
+        }
+    }
+
     func testHalfPointTargetsPassAggregateSafetyOnIntegerReadback() {
         let attempt = FrameSizingAttempt(io: Fake().io())
         // a dwindle split lands on the half point and both windows answer on

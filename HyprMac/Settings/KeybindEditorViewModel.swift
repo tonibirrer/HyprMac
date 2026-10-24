@@ -49,6 +49,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case runCommand             = "Run a command"
         case saveLayout             = "Save Layout"
         case restoreLayout          = "Restore Layout"
+        case retileAll              = "Retile All Spaces"
     }
 
     /// nil unless the command action is selected and its line is unusable
@@ -59,6 +60,13 @@ final class KeybindEditorViewModel: ObservableObject {
     var commandValidationMessage: String? { commandValidationError?.message }
 
     var canSave: Bool { recordedKeyCode != 0 && commandValidationError == nil }
+
+    /// another bind already on the recorded chord. saving would put two binds
+    /// on one chord, which the keys list cannot tell apart.
+    func conflict(in binds: [Keybind], editing original: Keybind?) -> Keybind? {
+        guard recordedKeyCode != 0 else { return nil }
+        return binds.conflict(with: buildKeybind(), editing: original)
+    }
 
     func load(_ bind: Keybind?) {
         guard let bind else { return }
@@ -97,6 +105,7 @@ final class KeybindEditorViewModel: ObservableObject {
             commandParam = cmd
         case .saveLayout:                    selectedAction = .saveLayout
         case .restoreLayout:                 selectedAction = .restoreLayout
+        case .retileAll:                     selectedAction = .retileAll
         }
     }
 
@@ -135,6 +144,7 @@ final class KeybindEditorViewModel: ObservableObject {
                 command: commandParam.trimmingCharacters(in: .whitespaces))
         case .saveLayout:             action = .saveLayout
         case .restoreLayout:          action = .restoreLayout
+        case .retileAll:              action = .retileAll
         }
         return Keybind(keyCode: recordedKeyCode, modifiers: mods, action: action)
     }

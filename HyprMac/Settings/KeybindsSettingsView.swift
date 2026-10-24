@@ -82,28 +82,28 @@ struct KeybindsSettingsView: View {
             .padding(.horizontal, HyprSpacing.xs)
         }
         .sheet(isPresented: $showingAddKeybind) {
-            KeybindEditorSheet(existingBind: nil) { config.keybinds.append($0) }
+            KeybindEditorSheet(existingBind: nil, otherBinds: config.keybinds) { config.keybinds.append($0) }
         }
         .sheet(isPresented: $showingAddLauncher) {
-            AppLauncherEditorSheet { config.keybinds.append($0) }
+            AppLauncherEditorSheet(otherBinds: config.keybinds) { config.keybinds.append($0) }
         }
         .sheet(isPresented: $showingAddCommand) {
-            KeybindEditorSheet(existingBind: nil, initialAction: .runCommand) {
+            KeybindEditorSheet(existingBind: nil, initialAction: .runCommand,
+                               otherBinds: config.keybinds) {
                 config.keybinds.append($0)
             }
         }
         .sheet(item: $editingBind) { bind in
-            KeybindEditorSheet(existingBind: bind) { updated in
-                if let idx = config.keybinds.firstIndex(where: { $0.id == bind.id }) {
-                    config.keybinds[idx] = updated
-                }
+            KeybindEditorSheet(existingBind: bind, otherBinds: config.keybinds) { updated in
+                config.keybinds = config.keybinds.replacingBind(bind, with: updated)
             }
         }
     }
 
     @ViewBuilder
     private func bindRows(_ binds: [Keybind]) -> some View {
-        ForEach(Array(binds.enumerated()), id: \.element.id) { idx, bind in
+        // position, not chord: a saved config can hold two binds on one chord
+        ForEach(Array(binds.enumerated()), id: \.offset) { idx, bind in
             KeybindRow(
                 bind: bind,
                 isSelected: selectedBindID == bind.id,
@@ -111,7 +111,7 @@ struct KeybindsSettingsView: View {
                 onTap: { selectedBindID = bind.id },
                 onDoubleTap: { editingBind = bind },
                 onDelete: {
-                    config.keybinds.removeAll { $0.id == bind.id }
+                    config.keybinds = config.keybinds.removingBind(bind)
                     if selectedBindID == bind.id { selectedBindID = nil }
                 }
             )
@@ -496,13 +496,17 @@ struct KeybindEditorSheet: View {
     let existingBind: Keybind?
     /// preselects the action when adding a new bind from a dedicated menu item
     let initialAction: KeybindEditorViewModel.ActionChoice?
+    /// the saved list, to refuse a chord another bind already holds
+    let otherBinds: [Keybind]
     let onSave: (Keybind) -> Void
 
     init(existingBind: Keybind?,
          initialAction: KeybindEditorViewModel.ActionChoice? = nil,
+         otherBinds: [Keybind] = [],
          onSave: @escaping (Keybind) -> Void) {
         self.existingBind = existingBind
         self.initialAction = initialAction
+        self.otherBinds = otherBinds
         self.onSave = onSave
     }
 
@@ -527,6 +531,11 @@ struct KeybindEditorSheet: View {
                     useControl: $vm.useControl, useOption: $vm.useOption,
                     useCommand: $vm.useCommand
                 )
+                if let taken = vm.conflict(in: otherBinds, editing: existingBind) {
+                    Text("Already bound to \(taken.actionDescription)")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
             }
 
             // action picker
@@ -575,7 +584,7 @@ struct KeybindEditorSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!vm.canSave)
+                .disabled(!vm.canSave || vm.conflict(in: otherBinds, editing: existingBind) != nil)
                 .buttonStyle(.borderedProminent)
             }
         }

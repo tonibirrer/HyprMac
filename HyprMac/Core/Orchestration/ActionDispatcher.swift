@@ -47,6 +47,33 @@ final class ActionDispatcher {
         windowIDs.filter { workspaceFor($0) != ScratchpadController.workspace }
     }
 
+    /// Workspace a window rule pins this window's app to, nil when none
+    /// does. A Quick Look preview is never pinned: it belongs to whichever
+    /// app opened it, so a pinned Finder would otherwise drag every preview.
+    static func pinnedWorkspace(bundleID: String?, isQuickLookPanel: Bool,
+                                rules: [WindowRule]) -> Int? {
+        guard !isQuickLookPanel else { return nil }
+        return WindowRule.pinnedWorkspace(forBundleID: bundleID, in: rules)
+    }
+
+    /// A pinned new window and where it went.
+    struct PinnedLanding: Equatable {
+        let windowID: CGWindowID
+        /// where admission put it (its pin, or where a full pin spilled)
+        let workspace: Int
+        /// the workspace visible where it opened, where it would have gone
+        let openedOnWorkspace: Int
+    }
+
+    /// The pinned window a discovery pass follows onto its workspace, the
+    /// Hyprland way: only one the pin actually moved, the focused one when
+    /// several were, else the first.
+    static func pinFollowTarget(_ landings: [PinnedLanding],
+                                focusedWindowID: CGWindowID?) -> PinnedLanding? {
+        let moved = landings.filter { $0.workspace != $0.openedOnWorkspace }
+        return moved.first { $0.windowID == focusedWindowID } ?? moved.first
+    }
+
     static func existingAssignmentsForAdmission(
         _ assignments: [Int: Set<CGWindowID>],
         fullyForgottenIDs: Set<CGWindowID>
@@ -116,6 +143,9 @@ final class ActionDispatcher {
     var enforceScratchpadFocus: () -> Void = {}
     var saveLayout: () -> Void = {}
     var restoreLayout: () -> Void = {}
+    var retileAll: () -> Void = {}
+    // switch to a pinned new window's workspace and focus it
+    var followPinnedWindow: (CGWindowID, Int) -> Void = { _, _ in }
 
     /// `false` until the first `applyChanges` completes. The initial
     /// discovery pass sees every pre-existing window as new; window rules
@@ -177,11 +207,6 @@ final class ActionDispatcher {
         for w in changes.newWindows {
             tilingEngine.forgetAdmittedIdentity(windowID: w.windowID)
         }
-        // set when a non-silent window rule matched this cycle: switch to
-        // the rule's workspace once every other reaction has run. last
-        // match wins when several ruled windows appear in one cycle.
-        var pendingActivation: (workspace: Int, window: HyprWindow)?
-
         // a member app's new window joins the scratchpad while it's up. the
         // admission below skips ws-0 windows
         for w in changes.newWindows where !changes.newOnDisabledMonitor.contains(w.windowID) {
@@ -191,18 +216,10 @@ final class ActionDispatcher {
         // workspace assignment for new windows that didn't auto-float onto a
         // disabled monitor. assigning by physical screen — cursor-based was
         // unreliable under multi-monitor + display-reconfig churn.
-        // window rules (Hyprland-style app → workspace pins) win over
-        // physical placement; every other newcomer goes through the
-        // capacity-aware admission planner.
-        var unruled: [HyprWindow] = []
-        for w in changes.newWindows where !changes.newOnDisabledMonitor.contains(w.windowID) {
-            if let ruled = assignRuledWindow(w) {
-                if ruled.activate { pendingActivation = (ruled.workspace, w) }
-            } else {
-                unruled.append(w)
-            }
-        }
-        assignNewWindows(unruled, fullyForgottenIDs: changes.fullyForgottenIDs)
+        let pinFollow = assignNewWindows(
+            changes.newWindows.filter { !changes.newOnDisabledMonitor.contains($0.windowID) },
+            fullyForgottenIDs: changes.fullyForgottenIDs
+        )
 
         // engine/workspace/focus cleanup for ids the service forgot.
         for id in changes.fullyForgottenIDs {
@@ -227,21 +244,18 @@ final class ActionDispatcher {
         // re-lays its own members here
         scratchpadDiscovery(changes.goneIDs, changes.returned)
 
-        // apply cross-screen drift reassignments. a ruled app that closed and
+        // apply cross-screen drift reassignments. a pinned app that closed and
         // reopened (recycled CGWindowID) comes back through the drift path
-        // with its rule workspace as the stale "from" — honor the rule like a
-        // fresh open instead of drifting it to the visible workspace.
+        // with its pinned workspace as the stale "from" — honor the pin like
+        // a fresh open instead of drifting it to the visible workspace.
+        var reopenedPinFollow: (windowID: CGWindowID, workspace: Int)?
         for drift in changes.screenDrift {
             if drift.reopened,
                let w = allWindows.first(where: { $0.windowID == drift.windowID }),
-               let rule = windowRule(for: w), rule.workspace == drift.fromWorkspace {
-                hyprLog(.notice, .orchestration, "window rule: reopened '\(w.title ?? "?")' (\(w.windowID)) stays on ws\(rule.workspace) silent=\(rule.silent)")
-                if rule.silent {
-                    if let home = workspaceManager.homeScreenForWorkspace(rule.workspace) {
-                        workspaceManager.hideInCorner(w, on: home)
-                    }
-                } else {
-                    pendingActivation = (rule.workspace, w)
+               let pinned = pinnedWorkspace(for: w), pinned == drift.fromWorkspace {
+                hyprLog(.notice, .orchestration, "window rule: reopened \(w.bundleID ?? "?") (\(w.windowID)) stays on ws\(pinned)")
+                if !workspaceManager.isWorkspaceVisible(pinned) {
+                    reopenedPinFollow = (w.windowID, pinned)
                 }
                 continue
             }
@@ -277,6 +291,18 @@ final class ActionDispatcher {
         // early while the border still shows on the member
         enforceScratchpadFocus()
 
+        // a pin that sent a new window elsewhere takes the user with it. last,
+        // so the retile and the focus fallbacks above can't undo the switch
+        if let pinFollow {
+            hyprLog(.notice, .orchestration,
+                    "window rule: following \(pinFollow.windowID) to ws\(pinFollow.workspace)")
+            followPinnedWindow(pinFollow.windowID, pinFollow.workspace)
+        } else if let reopenedPinFollow {
+            hyprLog(.notice, .orchestration,
+                    "window rule: following reopened \(reopenedPinFollow.windowID) to ws\(reopenedPinFollow.workspace)")
+            followPinnedWindow(reopenedPinFollow.windowID, reopenedPinFollow.workspace)
+        }
+
         // periodically re-raise floating windows so they don't get stuck behind
         // full-screen tiled windows (no activation event to trigger raise).
         if !stateCache.floatingWindowIDs.isEmpty {
@@ -286,20 +312,6 @@ final class ActionDispatcher {
         // let IPC subscribers (status bars) refresh their window lists.
         if changes.needsRetile {
             NotificationCenter.default.post(name: .hyprMacWindowsChanged, object: nil)
-        }
-
-        // window-rule activation goes last so its focus decision is final.
-        // an already-visible target needs no hide/show — just focus the
-        // ruled window where the retile placed it.
-        if let (ws, w) = pendingActivation {
-            if workspaceManager.isWorkspaceVisible(ws) {
-                w.focus()
-                cursorManager.warpToCenter(of: w)
-                focusController.recordFocus(w.windowID, reason: "window-rule-activate")
-                updateFocusBorder(w)
-            } else {
-                workspaceOrchestrator.switchWorkspace(ws)
-            }
         }
 
         hasCompletedInitialDiscovery = true
@@ -356,6 +368,8 @@ final class ActionDispatcher {
             saveLayout()
         case .restoreLayout:
             restoreLayout()
+        case .retileAll:
+            retileAll()
         }
 
         // let the Tour try-it hint (and any future observers) react. cheap —
@@ -395,95 +409,90 @@ final class ActionDispatcher {
         case .runCommand:          return "runCommand"
         case .saveLayout:          return "saveLayout"
         case .restoreLayout:       return "restoreLayout"
+        case .retileAll:           return "retileAll"
         }
     }
 
     // MARK: - apply-loop helpers
 
-    /// Assign a newly-discovered window to a workspace.
+    /// Workspace the window rules pin this window's app to, nil when none do.
+    func pinnedWorkspace(for window: HyprWindow) -> Int? {
+        let bundleID = window.bundleID
+            ?? NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+        return Self.pinnedWorkspace(bundleID: bundleID, isQuickLookPanel: window.isQuickLookPanel,
+                                    rules: config.windowRules)
+    }
+
+    /// Assign a newly-discovered window to a workspace: its app's window
+    /// rule when one pins it, otherwise where it physically opened.
     ///
-    /// Window-rule half of new-window assignment. A matching rule wins:
-    /// the window goes to the rule's pinned workspace regardless of which
-    /// screen it opened on.
+    /// Without a rule, prefers the window's own screen — that is where
+    /// macOS placed it — and falls back to the cursor's screen only when
+    /// the window has no usable frame yet. Always overwrites any prior
+    /// assignment: a recycled `CGWindowID` could carry a leftover entry
+    /// pointing at a workspace the user has not touched in days.
     ///
-    /// - Returns: the rule's workspace and whether the caller should
-    ///   activate it after the apply loop; nil when no rule applies (no
-    ///   match, auto-floated window, or a full target) — the window then
-    ///   takes the default placement path.
-    private func assignRuledWindow(_ window: HyprWindow) -> (workspace: Int, activate: Bool)? {
-        // window rules (Hyprland-style app → workspace pins). auto-floated
-        // windows (never-tile apps) keep default placement, and a full
-        // target workspace falls through to default placement too.
-        if !stateCache.floatingWindowIDs.contains(window.windowID),
-           let rule = windowRule(for: window),
-           ruleTargetHasCapacity(rule, for: window) {
-            workspaceManager.assignWindow(window.windowID, toWorkspace: rule.workspace)
-            let activate = !rule.silent && hasCompletedInitialDiscovery
-            hyprLog(.notice, .orchestration, "window rule: '\(window.title ?? "?")' (\(window.windowID)) \(rule.bundleID) → ws\(rule.workspace) silent=\(rule.silent) activate=\(activate)")
-            // silent move to a hidden workspace: park now — nothing else
-            // hides a window assigned off-screen outside a switch.
-            if !activate, !workspaceManager.isWorkspaceVisible(rule.workspace),
-               let home = workspaceManager.homeScreenForWorkspace(rule.workspace) {
-                workspaceManager.hideInCorner(window, on: home)
-            }
-            return (rule.workspace, activate)
-        }
-        return nil
-    }
-
-    /// First window rule matching `window`'s owning app, or nil.
-    private func windowRule(for window: HyprWindow) -> WindowRule? {
-        guard !config.windowRules.isEmpty else { return nil }
-        let bundleID = NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
-        return config.windowRules.firstMatch(bundleID: bundleID)
-    }
-
-    /// `true` when the rule's target workspace can take `window`. Mirrors
-    /// the `moveToWorkspace` capacity checks; unlike there, a full target
-    /// is not an error — the caller falls back to default placement.
-    private func ruleTargetHasCapacity(_ rule: WindowRule, for window: HyprWindow) -> Bool {
-        let ws = rule.workspace
-        if let screen = workspaceManager.screenForWorkspace(ws) {
-            if tilingEngine.canFitWindow(window, onWorkspace: ws, screen: screen) { return true }
-        } else if let home = workspaceManager.homeScreenForWorkspace(ws),
-                  !workspaceManager.isMonitorDisabled(home) {
-            let wids = workspaceManager.windowIDs(onWorkspace: ws).subtracting(stateCache.hiddenWindowIDs)
-            let tiledCount = wids.filter { !stateCache.floatingWindowIDs.contains($0) }.count
-            if tiledCount < (1 << tilingEngine.maxDepth(for: home)) { return true }
-        }
-        hyprLog(.notice, .orchestration, "window rule: ws\(ws) can't take '\(window.title ?? "?")' (\(window.windowID)) — falling back to default placement")
-        return false
-    }
-
-    /// Prefers the window's own screen — that is where macOS placed it —
-    /// and falls back to the cursor's screen only when the window has no
-    /// usable frame yet. Always overwrites any prior assignment: a
-    /// recycled `CGWindowID` could carry a leftover entry pointing at a
-    /// workspace the user has not touched in days.
-    private func assignNewWindows(_ windows: [HyprWindow], fullyForgottenIDs: Set<CGWindowID>) {
+    /// - Returns: the pinned window to follow onto its workspace, if any.
+    private func assignNewWindows(_ windows: [HyprWindow], fullyForgottenIDs: Set<CGWindowID>) -> PinnedLanding? {
         let admittedIDs = Set(Self.newWindowIDsForAdmission(
             windows.map(\.windowID), workspaceFor: workspaceManager.workspaceFor
         ))
-        var groups: [(screen: NSScreen, windows: [HyprWindow])] = []
+        // grouped by destination rather than by screen: a pinned window is
+        // bound for its rule's workspace whichever display it opened on
+        var groups: [(workspace: Int, windows: [HyprWindow])] = []
+        var openedOn: [CGWindowID: Int] = [:]
         for window in windows where admittedIDs.contains(window.windowID) {
             // a window opening on a game-reserved screen joins the nearest
             // enabled screen's workspace
             let screen = workspaceManager.admissionScreen(for: displayManager.screen(for: window) ?? screenUnderCursor())
-            if let index = groups.firstIndex(where: { $0.screen == screen }) {
+            guard !workspaceManager.isMonitorDisabled(screen) else { continue }
+            let screenWorkspace = workspaceManager.workspaceForScreen(screen)
+            var workspace = screenWorkspace
+            if let pinned = pinnedWorkspace(for: window) {
+                hyprLog(.notice, .orchestration,
+                        "window rule: \(window.bundleID ?? "?") (\(window.windowID)) pinned to ws\(pinned)")
+                workspace = pinned
+                openedOn[window.windowID] = screenWorkspace
+            }
+            if let index = groups.firstIndex(where: { $0.workspace == workspace }) {
                 groups[index].windows.append(window)
             } else {
-                groups.append((screen, [window]))
+                groups.append((workspace, [window]))
             }
         }
+        var landedOn: [CGWindowID: Int] = [:]
         for group in groups {
-            assignNewWindows(group.windows, on: group.screen, fullyForgottenIDs: fullyForgottenIDs)
+            let plan = assignNewWindows(group.windows, preferredWorkspace: group.workspace,
+                                        fullyForgottenIDs: fullyForgottenIDs)
+            let overflow = Set(plan.overflow)
+            for (workspace, ids) in plan.assignments {
+                for id in ids where openedOn[id] != nil && !overflow.contains(id) { landedOn[id] = workspace }
+            }
+            // every workspace full: overflow stays where it opened, as it
+            // would without a pin, so the tile refusal floats it in view
+            for id in plan.overflow {
+                if let opened = openedOn[id] { workspaceManager.assignWindow(id, toWorkspace: opened) }
+            }
         }
+        var landings: [PinnedLanding] = []
+        for window in windows {
+            guard let workspace = landedOn[window.windowID],
+                  let opened = openedOn[window.windowID] else { continue }
+            landings.append(PinnedLanding(windowID: window.windowID, workspace: workspace,
+                                          openedOnWorkspace: opened))
+            // a floater has no tree to take its frame from: put it on its
+            // workspace's display, or park it with that frame when hidden
+            if stateCache.floatingWindowIDs.contains(window.windowID), workspace != opened {
+                workspaceOrchestrator.placePinnedFloater(window, onWorkspace: workspace, fromWorkspace: nil)
+            }
+        }
+        guard !landings.isEmpty else { return nil }
+        return Self.pinFollowTarget(landings, focusedWindowID: currentFocusedWindow()?.windowID)
     }
 
-    private func assignNewWindows(_ windows: [HyprWindow], on screen: NSScreen,
-                                  fullyForgottenIDs: Set<CGWindowID>) {
-        guard !workspaceManager.isMonitorDisabled(screen) else { return }
-        let preferredWorkspace = workspaceManager.workspaceForScreen(screen)
+    @discardableResult
+    private func assignNewWindows(_ windows: [HyprWindow], preferredWorkspace: Int,
+                                  fullyForgottenIDs: Set<CGWindowID>) -> RetileAllPlan {
         let byID = Dictionary(windows.map { ($0.windowID, $0) },
                               uniquingKeysWith: { first, _ in first })
         let plan = RetileAllPlanner.admit(
@@ -536,9 +545,15 @@ final class ActionDispatcher {
             park: { [self] windowID, workspace in
                 guard let window = byID[windowID],
                       let home = workspaceManager.homeScreenForWorkspace(workspace) else { return }
+                // only a pin sends a floater to a hidden workspace; the caller
+                // parks it with its frame saved, so the reveal can restore it.
+                // overflow is re-homed by the caller, never parked
+                guard !stateCache.floatingWindowIDs.contains(windowID),
+                      !plan.overflow.contains(windowID) else { return }
                 workspaceManager.hideInCorner(window, on: home)
             }
         )
+        return plan
     }
 
     /// Re-establish keyboard focus when the border has gone dark but the

@@ -162,9 +162,10 @@ class UserConfig: ObservableObject {
     @Published var scratchpadRegionInset: CGFloat {
         didSet { persistRuntimeChange() }
     }
-    // Hyprland-style app → workspace pins, matched by bundle ID on window
-    // discovery. First match wins.
-    @Published var windowRules: [WindowRule] {
+    // fork: per-app effects (sort priority, full height, focus on activate,
+    // sticky, no synthetic click), matched by bundle ID. First match wins.
+    // the workspace pins are upstream's windowRules
+    @Published var appRules: [AppRule] {
         didSet { if !isReloading { save() } }
     }
     // per-side overrides of `outerPadding` (nil side = uniform value);
@@ -184,7 +185,7 @@ class UserConfig: ObservableObject {
     @Published var workspaceColors: [String: String] {
         didSet { if !isReloading { save() } }
     }
-    // workspaces that opt into showing sticky-ruled apps (WindowRule.sticky).
+    // workspaces that opt into showing sticky-ruled apps (AppRule.sticky).
     // a sticky window follows the user between these workspaces on its
     // monitor and hides like any other window on workspaces not listed.
     // empty = sticky rules have no effect.
@@ -212,6 +213,12 @@ class UserConfig: ObservableObject {
     // restore the saved layout for this display setup at launch. saved to
     // config.json; read once at startup, so nothing live needs re-applying
     @Published var restoreLayoutOnLaunch: Bool {
+        didSet { guard !isReloading else { return }; save() }
+    }
+
+    // per-app workspace pins. read when a window is placed, so nothing
+    // live needs re-applying on change
+    @Published var windowRules: [WindowRule] {
         didSet { guard !isReloading else { return }; save() }
     }
 
@@ -278,12 +285,13 @@ class UserConfig: ObservableObject {
             self.windowCornerRadiusOverride = saved.windowCornerRadius
             self.scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
-            self.windowRules = saved.windowRules ?? []
+            self.appRules = saved.appRules ?? []
             self.outerPaddingSides = saved.outerPaddingSides ?? .none
             self.workspaceWallpapers = saved.workspaceWallpapers ?? [:]
             self.workspaceColors = saved.workspaceColors ?? [:]
             self.stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
             self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
+            self.windowRules = saved.windowRules ?? []
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -309,12 +317,13 @@ class UserConfig: ObservableObject {
             self.windowCornerRadiusOverride = nil
             self.scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
-            self.windowRules = []
+            self.appRules = []
             self.outerPaddingSides = .none
             self.workspaceWallpapers = [:]
             self.workspaceColors = [:]
             self.stickyWorkspaces = []
             self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
+            self.windowRules = []
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -458,12 +467,13 @@ class UserConfig: ObservableObject {
             windowCornerRadius: windowCornerRadiusOverride,
             scratchpadTileByDefault: scratchpadTileByDefault,
             scratchpadRegionInset: scratchpadRegionInset,
-            windowRules: windowRules,
             outerPaddingSides: outerPaddingSides == .none ? nil : outerPaddingSides,
             workspaceWallpapers: workspaceWallpapers.isEmpty ? nil : workspaceWallpapers,
             workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors,
             stickyWorkspaces: stickyWorkspaces.isEmpty ? nil : stickyWorkspaces.sorted(),
-            restoreLayoutOnLaunch: restoreLayoutOnLaunch)
+            restoreLayoutOnLaunch: restoreLayoutOnLaunch,
+            windowRules: windowRules.isEmpty ? nil : windowRules,
+            appRules: appRules.isEmpty ? nil : appRules)
     }
 
     func resetToDefaults() {
@@ -500,12 +510,13 @@ class UserConfig: ObservableObject {
         windowCornerRadiusOverride = nil
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
-        windowRules = []
+        appRules = []
         outerPaddingSides = .none
         workspaceWallpapers = [:]
         workspaceColors = [:]
         stickyWorkspaces = []
         restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
+        windowRules = []
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -536,6 +547,22 @@ class UserConfig: ObservableObject {
         isReloading = false
         save()
         didApplyRuntimeChange.send()
+    }
+
+    // the drop preview wears the focus color the user picked: the bracket's
+    // when brackets are on, else the border's when it is on. dim-only or
+    // default colors keep brand cyan
+    var resolvedDropPreviewColor: NSColor {
+        Self.dropPreviewColorHex(bracketStyle: focusBracketStyle, bracketHex: focusBracketColorHex,
+                                 showBorder: showFocusBorder, borderHex: focusBorderColorHex)
+            .flatMap(NSColor.fromHex) ?? NSColor.hyprCyan
+    }
+
+    static func dropPreviewColorHex(bracketStyle: FocusBracketStyle, bracketHex: String?,
+                                    showBorder: Bool, borderHex: String?) -> String? {
+        if bracketStyle != .off, let bracketHex, NSColor.fromHex(bracketHex) != nil { return bracketHex }
+        if showBorder, let borderHex, NSColor.fromHex(borderHex) != nil { return borderHex }
+        return nil
     }
 
     // resolve the border color — custom hex or brand cyan
@@ -583,12 +610,13 @@ class UserConfig: ObservableObject {
         windowCornerRadiusOverride = saved.windowCornerRadius
         scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
-        windowRules = saved.windowRules ?? []
+        appRules = saved.appRules ?? []
         outerPaddingSides = saved.outerPaddingSides ?? .none
         workspaceWallpapers = saved.workspaceWallpapers ?? [:]
         workspaceColors = saved.workspaceColors ?? [:]
         stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
         restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
+        windowRules = saved.windowRules ?? []
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -642,11 +670,6 @@ extension SavedConfig {
             windowCornerRadius: nil,
             scratchpadTileByDefault: UserConfigDefaults.scratchpadTileByDefault,
             scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset,
-            windowRules: nil,
-            outerPaddingSides: nil,
-            workspaceWallpapers: nil,
-            workspaceColors: nil,
-            stickyWorkspaces: nil,
             restoreLayoutOnLaunch: UserConfigDefaults.restoreLayoutOnLaunch)
     }
 }
