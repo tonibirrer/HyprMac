@@ -68,6 +68,27 @@ extension FrameSizingFailure {
         }
     }
 
+    /// The windows the failure names: the one that refused or lost its
+    /// frame, both of an overlapping or gapless pair, the primary failure's
+    /// windows behind a cleanup failure. Empty for the failures nobody
+    /// caused — a deadline, an exhausted attempt budget, a superseded pass.
+    /// The admission recovery reads it as the newcomers to give up on while
+    /// the rest of a refused arrangement gets its pass again.
+    var namedWindowIDs: Set<CGWindowID> {
+        switch self {
+        case let .cleanupFailed(id, primary, _):
+            return primary?.namedWindowIDs ?? [id]
+        case let .writeFailed(id, _), let .readFailed(id, _),
+             let .noFittingSlot(id), let .geometryMismatch(id), let .outsideUsableFrame(id),
+             let .windowUnavailable(id), let .duplicateWindowID(id), let .invalidFrame(id):
+            return [id]
+        case let .overlap(first, second), let .gapViolation(first, second):
+            return [first, second]
+        case .deadlineExceeded, .attemptsExhausted, .superseded:
+            return []
+        }
+    }
+
     /// The failure with raw AX codes. The synthesized description prints
     /// `__C.AXError`, which does not say which error it was.
     var trace: String {
@@ -171,14 +192,25 @@ struct FrameSizingConfiguration {
     /// A move that never reads back on target used to poll out the whole
     /// deadline with no size written, so the attempt could only time out.
     /// Past this the size goes out anyway and the readback judges. A third
-    /// of the deadline, so it grows with the scale-change budget.
-    var positionSettleBudget: TimeInterval { deadline / 3 }
+    /// of the deadline, so it grows with the scale-change budget; a
+    /// deadline grown for the targets pins it instead, so each settle may
+    /// spend exactly what was added for it and no more.
+    var positionSettleBudget: TimeInterval { positionSettleBudgetOverride ?? deadline / 3 }
+    var positionSettleBudgetOverride: TimeInterval?
+    /// The most the deadline may grow to, by any budget: what is left of
+    /// the attempt's whole budget when this pass starts. nil is no cap.
+    var deadlineCap: TimeInterval?
+
+    /// `deadline`, within the cap.
+    func capped(_ deadline: TimeInterval) -> TimeInterval {
+        deadlineCap.map { min(deadline, $0) } ?? deadline
+    }
 
     /// This configuration with the scale-change budget. The sample limit
     /// grows with the deadline so the settle loop can use the extra time.
     var withScaleChangeBudget: FrameSizingConfiguration {
         var extended = self
-        extended.deadline = max(deadline, scaleChangeDeadline)
+        extended.deadline = capped(max(deadline, scaleChangeDeadline))
         extended.maximumAttempts = max(maximumAttempts,
                                        Int((extended.deadline / pollInterval).rounded(.up)))
         return extended
@@ -189,7 +221,7 @@ struct FrameSizingConfiguration {
     /// The verified layout's timeout recovery and the tiled drag both use it.
     var withTimeoutRecoveryBudget: FrameSizingConfiguration {
         var relaxed = self
-        relaxed.deadline = max(deadline, 0.75)
+        relaxed.deadline = capped(max(deadline, 0.75))
         relaxed.perCallTimeout = max(perCallTimeout, 0.25)
         return relaxed
     }
@@ -245,6 +277,10 @@ struct FrameSizingAttempt {
         var readbackComplete = false
         /// every target reached the configured stable sample count
         var readbackStable = false
+        /// the layout already stood: every target was where its window was
+        /// at the capture, so nothing was written and the capture was the
+        /// readback. Counts as written for publication.
+        var verifiedInPlace = false
     }
 
     /// Phase durations for the attempt trace. Not part of the typed
@@ -271,6 +307,43 @@ struct FrameSizingAttempt {
 
     let io: FrameSizingIO
     var configuration = FrameSizingConfiguration()
+
+    /// The layout as it already stands. Every target is where its window
+    /// is, within a point, and the frames pass the aggregate checks as they
+    /// are, so there is nothing to write: the capture that produced
+    /// `originalFrames` is the first readback, and the caller takes a
+    /// second one before it accepts. Nil when any window is off its target,
+    /// or the frames do not pass together, and the ordinary pass runs.
+    ///
+    /// Most retiles are this. A workspace switch retiles the other screen,
+    /// a move retiles its source twice, a poll re-applies a tree nothing
+    /// changed; every one of them sent three setters per window and then
+    /// waited for a settle and a stable readback of frames that never moved.
+    /// `FrameReadbackPoller` asks before a candidate pass whose caller
+    /// captured the originals it hands over. A tiled drop never asks: it
+    /// always changes the layout, and its originals are the press-time
+    /// capture, not where the windows stand at the release.
+    func alreadyApplied(targets: [Target], originalFrames: [CGWindowID: CGRect],
+                        usableFrame: CGRect, gap: CGFloat, generation: UInt64) -> Result? {
+        guard !targets.isEmpty, io.currentGeneration() == generation else { return nil }
+        var actual: [CGWindowID: CGRect] = [:]
+        for target in targets {
+            guard actual[target.windowID] == nil, valid(target.frame),
+                  let original = originalFrames[target.windowID], valid(original),
+                  standsOn(original, target.frame) else { return nil }
+            actual[target.windowID] = original
+        }
+        let validated = validateFrames(targets: targets, actualFrames: actual,
+                                       usableFrame: usableFrame, gap: gap)
+        guard case .accepted = validated.verdict else { return nil }
+        var progress = Progress(phase: .candidate, generation: generation,
+                                targetIDs: targets.map(\.windowID))
+        progress.readbackComplete = true
+        progress.readbackStable = true
+        progress.verifiedInPlace = true
+        return Result(verdict: .accepted, actualFrames: actual, progress: progress,
+                      overlaps: validated.overlaps)
+    }
 
     func captureFrames(windowIDs: [CGWindowID], generation: UInt64) -> Result {
         let started = io.now()
@@ -843,6 +916,18 @@ struct FrameSizingAttempt {
             && frame.width > 0 && frame.height > 0
     }
 
+    /// Whether a window already stands on `target`: a point of position and
+    /// a point of size, not the cell of rounding the verdict allows after a
+    /// write. That allowance is for an app that rounds what it was asked
+    /// for; a window a cell short of its slot has not been asked yet, and
+    /// taking it as standing there would never correct it.
+    private func standsOn(_ actual: CGRect, _ target: CGRect) -> Bool {
+        abs(actual.minX - target.minX) <= configuration.positionTolerance
+            && abs(actual.minY - target.minY) <= configuration.positionTolerance
+            && abs(actual.width - target.width) <= configuration.sizeTolerance
+            && abs(actual.height - target.height) <= configuration.sizeTolerance
+    }
+
     private func matches(_ actual: CGRect, _ target: CGRect) -> Bool {
         abs(actual.minX - target.minX) <= configuration.positionTolerance
             && abs(actual.minY - target.minY) <= configuration.positionTolerance
@@ -957,12 +1042,14 @@ struct FrameSizingProgressReport: Equatable {
     }
 
     /// Every target had all three setters return success and the final
-    /// readback was complete and stable. An empty target set satisfies the
+    /// readback was complete and stable, or the layout already stood and
+    /// its capture was the readback. An empty target set satisfies the
     /// write and readback conditions vacuously and is not evidence of
     /// anything, so it does not count as verified.
     var candidateFullyWritten: Bool {
         !candidate.targetIDs.isEmpty
-            && candidate.targetIDs.allSatisfy(candidate.writesCompleted.contains)
+            && (candidate.verifiedInPlace
+                || candidate.targetIDs.allSatisfy(candidate.writesCompleted.contains))
             && candidate.readbackComplete && candidate.readbackStable
     }
 

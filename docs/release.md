@@ -14,8 +14,10 @@ Update `WhatsNewFeatures.current` in `HyprMac/Welcome/WelcomeContent.swift`
 from `git log v<previous>..HEAD --oneline`. List user-facing changes only.
 Each entry needs an SF Symbol, a short title, a one-line description, and a
 tint (`.cyan` by default, `.magenta` for floating or scratchpad). Add
-`credit:` with the GitHub handle of an outside contributor. Commit and push
-this before starting the script, which refuses a dirty checkout.
+`credit:` with the GitHub handle of an outside contributor. Update
+`WelcomeContentTests.testWhatsNewDescribesOnlyThe<version>Changes` to match;
+the release gate fails otherwise. Commit and push this before starting the
+script, which refuses a dirty checkout.
 
 ## Usage
 

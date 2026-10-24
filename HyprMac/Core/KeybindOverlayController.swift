@@ -646,6 +646,7 @@ private struct OverlayList: View {
     let scrollSteps: PassthroughSubject<Int, Never>
 
     @StateObject private var scroller = OverlayScroller()
+    @ObservedObject private var config = UserConfig.shared
 
     var body: some View {
         ScrollView(.vertical) {
@@ -701,7 +702,7 @@ private struct OverlayList: View {
                 if row.isFloating {
                     Text("◇")
                         .font(.system(size: 11))
-                        .foregroundStyle(Color.hyprMagenta)
+                        .foregroundStyle(config.resolvedFloatingColor)
                 }
             }
             .lineLimit(1)

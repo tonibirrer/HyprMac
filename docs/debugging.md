@@ -205,7 +205,14 @@ logs no trace line; it appears only in typed results. Four line names:
   success. `write` covers the write pass, `read` the settle loop,
   `settle` just the sleeps inside it, and `headroom` is what was left
   of the attempt's deadline: 0.36 s, or 1 s for a pass that moves a window
-  across a backing scale change.
+  across a backing scale change, grown for the targets and cut to what is
+  left of the two-second pass budget (`docs/tiling-algorithm.md`
+  "Two-pass layout").
+- `frame attempt: phase=candidate gen=<n> wids=[…] verdict=accepted in
+  place — every window is already on its target in two reads, nothing
+  written` — at debug, instead of the line above, for a first pass whose
+  targets the capture already found in place and a second read
+  confirmed. No setter went out and nothing was waited for.
 
 `FrameReadbackPoller` logs one `min evidence:` line per window it treats
 as a min-size conflict, under the same category and tier:
@@ -281,6 +288,19 @@ within a third of the deadline is sized anyway, and says so:
 ```
 position settle cut short: wid=<id> phase=candidate after=<n>ms samples=<n> last=(x,y) target=(x,y) — writing size anyway
 ```
+
+The admission recovery's narrowing lines, all `[notice] [tiling]`:
+
+- `admission retry tiles what fits: refused=[…] ws<N> — the known minima
+  do not fit them beside the rest` — the retry dropped the fewest
+  newcomers the known floors rule out and ran the pass for the rest,
+  before writing or after an attempt that learned the floors. The dropped
+  ones come back refused and float without another attempt, as
+  `noFittingSlot`.
+- `admission recovery narrowed: floating […] ws<N> cause=<failure> —
+  retrying […] without them (round <n> of 3)` — the retry was refused on
+  some of its newcomers: those float, the rest get the pass again inside
+  the same retry. After three rounds the rest float as before.
 
 The admission recovery's timeout lines, all `[notice] [tiling]`:
 
@@ -728,7 +748,9 @@ What changed:
   stack 50 ms later, and restores focus only when the raise moved the front
   app away from the focused tile. `RaiseBehindThrottle` cools a
   floater/tile pair down after a raise that did not lift it (30 s), a raise
-  within 1 s of our own restore (15 s, the loop), or 4 raises in 5 s (10 s).
+  within 1 s of our own restore (the loop), or 4 raises in 5 s (10 s). The
+  loop cooldown starts at 15 s and doubles with each loop up to 600 s. A
+  pair quiet for 300 s after its cooldown ends starts over at 15 s.
 - `TiledFocusRouter` handles hover, Hypr+Arrow, Hypr keydown, the focus
   invariant, the raise restore and the click re-raise. Workspace switches,
   window moves and the scratchpad still use their own focus calls, which can
@@ -766,8 +788,8 @@ What changed:
   leaves the floater under the tile, or a refocus that misses, cools the
   pair down for 30 s, so an app that refuses stops costing a flicker per
   click. A click re-raise counts toward no burst, since it follows one
-  click. When the floater's app took the front, the refocus counts as a
-  restore, so a raise-behind for the same pair within 1 s is the loop.
+  click. When the floater's app took the front, the click counts as a
+  loop and the pair cools at once, on the same doubling scale.
 - A click is credited to the window the window list puts under the
   pointer when that window is one of ours, so a floater a tile has buried
   no longer takes the focus tracker from the tile that got the click.
@@ -1148,6 +1170,34 @@ sleep on its own now does all of that as well. Before the span existed, a
 lock that outlasted the 4-second hold and the three mass-gone skips marked
 every window hidden, and the unlock rebuilt each tree in reading order with
 default ratios.
+
+### A window vanished for a poll and came back somewhere else
+
+Two kinds of missing window are held rather than judged: kept known, on
+their workspace and in their tree, with no frame written to them, so the
+neighbours keep their slots and the return is usually a pass whose frames
+already stand, accepted in place. All `[notice] [discovery]`:
+
+```
+holding 1 unreadable window(s) in place: [21915] — on screen, but their app did not answer AX
+unreadable window(s) readable again: [21915]
+holding 2 window(s) off the screen in place: [15173, 21915] — their app still lists them (another Space, full screen, or a stale snapshot); hidden if not back within 5s
+off-screen hold ended: [15173, 21915]
+```
+
+The first is an app that failed the walk's window-list or frame read
+while the window server still shows the window (`AX window-list read
+FAILED for <bundle>` precedes it). The second is a window the window
+server no longer shows on screen while its app still lists it, neither
+minimized nor hidden with the app: a native full-screen app on the
+display, a Space switched away, or a stale snapshot. That hold lasts five
+seconds, and a poll is scheduled for when it runs out; a window still
+missing then is `window hidden` as before, with its slot reserved.
+`FLAP: … returned <n>ms after vanishing` on the return is the diagnostic
+for a window that was not held and came back within five seconds; with
+both holds in place it should be rare. Every tile pass logs
+`retile: ws<N> holds […] — leaves kept, no frame written` for the members
+it kept out of the pass.
 
 ### "Why isn't this window managed?" (filtered windows, Quick Look)
 

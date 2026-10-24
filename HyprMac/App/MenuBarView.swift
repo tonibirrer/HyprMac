@@ -104,7 +104,7 @@ struct MenuBarView: View {
                             .frame(width: 25, height: 23)
                             .background(RoundedRectangle(cornerRadius: 4).fill(workspace.isActive ? Color.hyprCyan : (workspace.isOccupied ? Color.hyprMagenta.opacity(0.24) : Color.white.opacity(0.06))))
                             .foregroundStyle(workspace.isActive ? Color.hyprBackground : Color.hyprTextPrimary)
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? Color.hyprMagenta : Color.clear, lineWidth: 1.5))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? config.resolvedFloatingColor : Color.clear, lineWidth: 1.5))
                     }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to workspace \(workspace.id)")
                 }
             }

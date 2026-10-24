@@ -28,6 +28,11 @@ extension Color {
     static let hyprMagenta = Color(nsColor: .hyprMagenta)
 }
 
+extension UserConfig {
+    // the configured floating color for swiftui markers; brand magenta when unset
+    var resolvedFloatingColor: Color { Color(nsColor: resolvedFloatingBorderColor) }
+}
+
 extension NSColor {
     // dark: bright cyan that reads as neon on near-black.
     // light: deeper cyan that holds contrast against white.

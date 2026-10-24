@@ -181,7 +181,7 @@ final class AccordionSwitchFrontTests: XCTestCase {
         orchestrator.warpToWindow = { _ in }
 
         var frontDuringRetile: CGWindowID?
-        orchestrator.tileAllVisibleSpaces = { frontDuringRetile = engine.accordionFrontOverride }
+        orchestrator.tileAllVisibleSpaces = { _ in frontDuringRetile = engine.accordionFrontOverride }
 
         orchestrator.switchWorkspace(hidden)
 
@@ -227,7 +227,7 @@ private final class AccordionTestWindow: HyprWindow {
         storedFrame = rect
         record("frame:\(windowID)")
     }
-    override func setPositionOnly(_ point: CGPoint) { storedFrame.origin = point }
+    override func setPositionOnly(_ point: CGPoint) -> AXError { storedFrame.origin = point; return .success }
     override func focus() { }
     override func focusWithoutRaise() { }
 }

@@ -275,6 +275,25 @@ final class RatioMemoryTests: XCTestCase {
 
         XCTAssertEqual(tree.root.splitOverride, .vertical,
                        "a togglesplit'd split comes back on the same axis")
+        XCTAssertFalse(tree.root.splitOverrideIsAutomatic, "and as the user's, not smart insert's")
         XCTAssertEqual(tree.root.splitRatio, 0.7, accuracy: 0.001)
+    }
+
+    func testAnAutomaticOverrideComesBackAutomatic() {
+        let tree = BSPTree()
+        tree.insert(makeWindow(id: 1))
+        let b = makeWindow(id: 2)
+        tree.insert(b)
+
+        tree.root.splitRatio = 0.7
+        tree.root.userSetRatio = true
+        tree.root.splitOverride = .vertical
+        tree.root.splitOverrideIsAutomatic = true
+
+        tree.remove(b)
+        insertAndApply(makeWindow(id: 3), into: tree)
+
+        XCTAssertEqual(tree.root.splitOverride, .vertical)
+        XCTAssertTrue(tree.root.splitOverrideIsAutomatic, "a turn may still drop it")
     }
 }

@@ -105,6 +105,24 @@ enum WorkspaceOverviewPresentation {
     }
 }
 
+/// What the open overview shows. Discovery pushes fresh snapshots in while
+/// it is open; the view keeps its search text and focus across updates.
+final class WorkspaceOverviewModel: ObservableObject {
+    @Published private(set) var snapshots: [WorkspaceSnapshot]
+    @Published private(set) var scratchpad: [WorkspaceWindowSnapshot]
+
+    init(snapshots: [WorkspaceSnapshot], scratchpad: [WorkspaceWindowSnapshot] = []) {
+        self.snapshots = snapshots
+        self.scratchpad = scratchpad
+    }
+
+    // equal snapshots don't publish, so a quiet poll doesn't redraw the grid
+    func update(snapshots: [WorkspaceSnapshot], scratchpad: [WorkspaceWindowSnapshot]) {
+        if snapshots != self.snapshots { self.snapshots = snapshots }
+        if scratchpad != self.scratchpad { self.scratchpad = scratchpad }
+    }
+}
+
 struct WorkspaceHUDGeneration {
     private(set) var value = 0
     mutating func next() -> Int { value += 1; return value }
@@ -116,6 +134,7 @@ final class WorkspaceOverviewController {
     var onSelectWindow: (Int, CGWindowID) -> Void = { _, _ in }
 
     private var overviewPanel: NSPanel?
+    private var overviewModel: WorkspaceOverviewModel?
     private var hudPanel: NSPanel?
     private var keyMonitor: Any?
     private var hudGeneration = WorkspaceHUDGeneration()
@@ -125,11 +144,23 @@ final class WorkspaceOverviewController {
         showOverview(snapshots, scratchpad: scratchpad)
     }
 
+    var isOpen: Bool { overviewPanel != nil }
+
+    /// Push fresh snapshots into the open overview. `snapshots` is only
+    /// called while it is open, so a closed overview costs no AX walk.
+    /// The panel keeps its frame; the grid scrolls.
+    func refreshIfOpen(_ snapshots: () -> (workspaces: [WorkspaceSnapshot], scratchpad: [WorkspaceWindowSnapshot])) {
+        guard isOpen, let overviewModel else { return }
+        let fresh = snapshots()
+        overviewModel.update(snapshots: fresh.workspaces, scratchpad: fresh.scratchpad)
+    }
+
     func close() {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         guard let panel = overviewPanel else { return }
         overviewPanel = nil
+        overviewModel = nil
         guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
             panel.close()
             return
@@ -190,9 +221,9 @@ final class WorkspaceOverviewController {
         guard let screen = NSScreen.main else { return }
         let maxWidth = min(1400, screen.visibleFrame.width - 48)
         let maxHeight = screen.visibleFrame.height - 48
+        let model = WorkspaceOverviewModel(snapshots: snapshots, scratchpad: scratchpad)
         let view = WorkspaceOverviewView(
-            snapshots: snapshots,
-            scratchpad: scratchpad,
+            model: model,
             selectWorkspace: { [weak self] workspace in
                 self?.close(); self?.onSelectWorkspace(workspace)
             },
@@ -213,6 +244,7 @@ final class WorkspaceOverviewController {
         panel.alphaValue = animate ? 0 : 1
         panel.makeKeyAndOrderFront(nil)
         overviewPanel = panel
+        overviewModel = model
         if animate {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
@@ -316,8 +348,7 @@ struct WorkspaceOverviewView: View {
     @ObservedObject private var config = UserConfig.shared
     @Environment(\.colorScheme) private var colorScheme
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
-    let snapshots: [WorkspaceSnapshot]
-    let scratchpad: [WorkspaceWindowSnapshot]
+    @ObservedObject var model: WorkspaceOverviewModel
     let selectWorkspace: (Int) -> Void
     let selectWindow: (Int, CGWindowID) -> Void
     var onCardFramesChange: (([Int: CGRect]) -> Void)? = nil
@@ -339,7 +370,7 @@ struct WorkspaceOverviewView: View {
             }
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top), count: WorkspaceOverviewPresentation.columnCount), spacing: 12) {
-                    ForEach(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: query)) { workspace in
+                    ForEach(WorkspaceOverviewPresentation.visibleWorkspaces(model.snapshots, query: query)) { workspace in
                         WorkspaceCard(workspace: workspace,
                                       selectWorkspace: selectWorkspace,
                                       selectWindow: selectWindow)
@@ -403,7 +434,7 @@ struct WorkspaceOverviewView: View {
     }
 
     private var filteredScratchpad: [WorkspaceWindowSnapshot] {
-        scratchpad.filter { WorkspaceOverviewPresentation.windowMatches($0, query: query) }
+        model.scratchpad.filter { WorkspaceOverviewPresentation.windowMatches($0, query: query) }
     }
 }
 
@@ -416,6 +447,7 @@ private struct WorkspaceOverviewCardFramesKey: PreferenceKey {
 }
 
 private struct WorkspaceCard: View {
+    @ObservedObject private var config = UserConfig.shared
     @Environment(\.colorScheme) private var colorScheme
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
     let workspace: WorkspaceSnapshot
@@ -439,7 +471,7 @@ private struct WorkspaceCard: View {
                         let frame = window.normalizedFrame
                         Button { selectWindow(workspace.id, window.id) } label: {
                             ZStack {
-                                RoundedRectangle(cornerRadius: 4).fill(window.isFloating ? Color.hyprMagenta.opacity(0.45) : Color.hyprCyan.opacity(0.22))
+                                RoundedRectangle(cornerRadius: 4).fill(window.isFloating ? config.resolvedFloatingColor.opacity(0.45) : Color.hyprCyan.opacity(0.22))
                                 WorkspaceAppIcon(bundleID: window.bundleID).frame(width: 20, height: 20)
                             }
                         }

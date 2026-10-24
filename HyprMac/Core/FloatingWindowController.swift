@@ -148,6 +148,30 @@ struct RaiseBehindThrottle {
     private var attempts: [Pair: [TimeInterval]] = [:]
     private var cooldowns: [Pair: (until: TimeInterval, reason: String)] = [:]
     private var restores: [Pair: TimeInterval] = [:]
+    /// how many loops a pair has been cooled for. each one doubles the
+    /// cooldown, capped at `loopCooldownCap`, so a floater whose app takes
+    /// the front on every raise stops blinking every fifteen seconds
+    private var loops: [Pair: Int] = [:]
+    var loopCooldownCap: TimeInterval = 600
+    /// when a pair's last loop cooldown ends. a pair quiet for `loopDecay`
+    /// after that starts its escalation over, so a floater that looped once
+    /// an hour ago is not cooled for ten minutes on its next click. counted
+    /// from the end, not the loop: a pair cannot loop while it cools, so a
+    /// long cooldown would otherwise always look like a quiet spell
+    private var loopQuietFrom: [Pair: TimeInterval] = [:]
+    var loopDecay: TimeInterval = 300
+
+    /// The cooldown for this loop: doubled per loop, capped at
+    /// `loopCooldownCap`, and back to `loopCooldown` once the pair has been
+    /// quiet for `loopDecay` after its last loop cooldown.
+    private mutating func nextLoopCooldown(_ pair: Pair, now: TimeInterval) -> TimeInterval {
+        let recent = loopQuietFrom[pair].map { now - $0 <= loopDecay } ?? false
+        let count = (recent ? loops[pair, default: 0] : 0) + 1
+        let duration = min(loopCooldown * pow(2, Double(count - 1)), loopCooldownCap)
+        loops[pair] = count
+        loopQuietFrom[pair] = now + duration
+        return duration
+    }
 
     /// Decide one pair. A `.raise` counts as an attempt.
     mutating func decide(_ pair: Pair, now: TimeInterval) -> Decision {
@@ -156,7 +180,7 @@ struct RaiseBehindThrottle {
             return .coolingDown(reason: cooldown.reason, remaining: cooldown.until - now)
         }
         if restores[pair] != nil {
-            return startCooldown(pair, reason: "loop", for: loopCooldown, now: now)
+            return startCooldown(pair, reason: "loop", for: nextLoopCooldown(pair, now: now), now: now)
         }
         let recent = attempts[pair, default: []]
         if recent.count >= burstLimit {
@@ -174,6 +198,19 @@ struct RaiseBehindThrottle {
 
     mutating func noteRestore(_ pairs: [Pair], now: TimeInterval) {
         for pair in pairs { restores[pair] = now }
+    }
+
+    /// The loop as the click re-raise sees it: the raise took the front
+    /// away from the tile and the hand-back is putting it back. The pair
+    /// cools at once, and longer each time, so a floater whose app
+    /// activates itself on a raise blinks on one click and not on every
+    /// one. The click path asks `cooldown`, which never saw a restore.
+    mutating func noteLoop(_ pairs: [Pair], now: TimeInterval) {
+        for pair in pairs {
+            cooldowns[pair] = (now + nextLoopCooldown(pair, now: now), "loop")
+            attempts[pair] = nil
+            restores[pair] = nil
+        }
     }
 
     /// The pair's running cooldown, if any. Asking counts as no attempt:
@@ -195,6 +232,10 @@ struct RaiseBehindThrottle {
     private mutating func prune(_ now: TimeInterval) {
         cooldowns = cooldowns.filter { $0.value.until > now }
         restores = restores.filter { now - $0.value < echoWindow }
+        // a pair past its decay starts over anyway. dropping it here also
+        // drops the pairs whose windows are gone
+        loopQuietFrom = loopQuietFrom.filter { now - $0.value <= loopDecay }
+        loops = loops.filter { loopQuietFrom[$0.key] != nil }
         attempts = attempts.compactMapValues { times in
             let kept = times.filter { now - $0 < burstWindow }
             return kept.isEmpty ? nil : kept
@@ -590,6 +631,8 @@ final class FloatingWindowController {
                 + "focus=\(previousFocusID) front=\(frontBefore.map(String.init) ?? "nil")")
         for pair in pairs {
             guard let w = stateCache.cachedWindows[pair.floater] else { continue }
+            // an app that activates itself on a raise is HyprMac's doing
+            suppressions.expectActivation(of: w.ownerPID)
             let rc = performRaise(w)
             if rc != .success {
                 hyprLog(.notice, .floating, "raise behind failed: wid=\(pair.floater) rc=\(rc.rawValue)")
@@ -730,6 +773,7 @@ final class FloatingWindowController {
         let generation = focusController.generation
         // back to front, so the floaters keep their order among themselves
         for item in raising.reversed() {
+            suppressions.expectActivation(of: item.window.ownerPID)
             let rc = performRaise(item.window)
             if rc != .success {
                 hyprLog(.notice, .floating, "click re-raise failed: wid=\(item.pair.floater) rc=\(rc.rawValue)")
@@ -797,8 +841,12 @@ final class FloatingWindowController {
             return
         }
         // the floater's app took the front, so this is a restore. a
-        // raise-behind for the same pair right after it is the loop.
-        if front != tile.ownerPID { throttle.noteRestore(lifted, now: now) }
+        // raise-behind for the same pair right after it is the loop, and so
+        // is the next click: the pair cools now, longer each time
+        if front != tile.ownerPID {
+            throttle.noteLoop(lifted, now: now)
+            hyprLog(.notice, .floating, "click re-raise moved the front app — cooling \(lifted)")
+        }
         refocusClickedTile(tile) { [weak self] kept in
             guard let self else { return }
             if !kept {

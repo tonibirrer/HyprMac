@@ -66,7 +66,7 @@ final class SwitchDroppedTileTests: XCTestCase {
         orchestrator.runAfter = { [unowned self] _, work in self.pending.append(work) }
         // the real retile: each visible workspace keeps exactly the windows
         // the list has for it, so a missing one drops out of its tree
-        orchestrator.tileAllVisibleSpaces = { [unowned self] in
+        orchestrator.tileAllVisibleSpaces = { [unowned self] _ in
             self.retiles += 1
             let ws = self.manager.workspaceForScreen(self.screen)
             let members = self.manager.windowIDs(onWorkspace: ws)

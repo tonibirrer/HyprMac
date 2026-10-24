@@ -201,7 +201,7 @@ struct LayoutRestorer {
 
         if linkedMonitors {
             // the balancer spreads each visible workspace across the screens
-            orchestrator.tileAllVisibleSpaces()
+            orchestrator.tileAllVisibleSpaces(nil)
             return outcome
         }
 

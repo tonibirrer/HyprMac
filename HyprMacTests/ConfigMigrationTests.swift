@@ -1,6 +1,7 @@
 import XCTest
 @testable import HyprMac
 import AppKit
+import SwiftUI
 
 // ConfigMigrationTests pin Phase 6's persistence-layer contracts:
 //
@@ -35,6 +36,21 @@ final class ConfigMigrationTests: XCTestCase {
         XCTAssertNil(SavedConfig.empty.focusBracketColorHex)
         XCTAssertNil(SavedConfig.empty.focusBracketRadius)
         XCTAssertNil(SavedConfig.empty.focusBracketThickness)
+    }
+
+    func testOverlayFloatingColorFollowsConfiguredHex() {
+        let config = UserConfig.shared
+        let saved = config.floatingBorderColorHex
+        defer { config.floatingBorderColorHex = saved }
+
+        config.floatingBorderColorHex = nil
+        XCTAssertEqual(config.resolvedFloatingColor, Color.hyprMagenta)
+
+        config.floatingBorderColorHex = "FF8800"
+        XCTAssertEqual(config.resolvedFloatingColor, Color(nsColor: NSColor.fromHex("FF8800")!))
+
+        config.floatingBorderColorHex = "not-a-color"
+        XCTAssertEqual(config.resolvedFloatingColor, Color.hyprMagenta)
     }
 
     func testCornerLengthIsOptionalAndRoundTripsIndependently() throws {

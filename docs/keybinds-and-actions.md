@@ -133,8 +133,9 @@ and encode as `{"saveLayout":{}}` and `{"restoreLayout":{}}`. Neither
 chord is used by another default (`testEveryDefaultUsesUniqueChord`).
 `mergeNewDefaults` injects each one only onto a free chord, so a user
 who already bound Hypr+Ctrl+S or Hypr+Ctrl+R keeps that bind and can
-bind the layout action by hand. Both actions are dropped while a
-display transition is settling (`WindowManager.isDroppedMidDisplayTransition`).
+bind the layout action by hand. Both actions are dropped, with a beep,
+while a display transition is settling (`WindowManager.isDroppedMidDisplayTransition`).
+The workspace actions are dropped the same way.
 The launch toggle is `restoreLayoutOnLaunch` in `config.json`, off by
 default. What save and restore do is in `docs/architecture.md`
 ("Layout persistence").
@@ -151,8 +152,8 @@ Keep every machine sharing a config on a tolerant build.
 It runs the same pass as the menu bar's "Retile all spaces": it hides the
 scratchpad, redistributes every window, and applies window rules (below).
 It ignores key autorepeat, is unavailable while tiling is paused, and is
-dropped while a display transition is settling. `mergeNewDefaults` injects
-it only onto a free chord. No `ConfigMigration` step is involved.
+dropped, with a beep, while a display transition is settling.
+`mergeNewDefaults` injects it only onto a free chord. No `ConfigMigration` step is involved.
 
 ```json
 {"retileAll":{}}
