@@ -26,15 +26,33 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "square.and.arrow.down.on.square",
-            title: "Saved Layouts",
-            description: "Hypr+Ctrl+S saves which workspace every window is on and how each one is split, across all your monitors. Hypr+Ctrl+R puts it back, and plugging a saved display setup back in restores it on its own.",
-            credit: "@joops"
+            icon: "rectangle.split.2x2",
+            title: "Steadier Tiling",
+            description: "Windows keep their tile when an app is slow to answer, splits survive a minimize, and saved layouts restore to the same shape.",
+            credit: "@Amin-El-Sayed"
         ),
         WhatsNewFeature(
-            icon: "keyboard",
-            title: "A Balanced Keybind List",
-            description: "Hypr+K now spreads its shortcuts evenly: window management on the left, apps and system in the middle, workspaces and focus on the right."
+            icon: "display.2",
+            title: "Displays After Sleep",
+            description: "Workspaces come back on the right monitor after sleep or a reconnect, and Caps Lock stays your Hypr key.",
+            credit: "@Amin-El-Sayed"
+        ),
+        WhatsNewFeature(
+            icon: "hourglass",
+            title: "Frozen Apps Don't Stall Tiling",
+            description: "An app that stops answering no longer holds up switches, moves and layouts for everything else.",
+            credit: "@Amin-El-Sayed"
+        ),
+        WhatsNewFeature(
+            icon: "square.grid.3x3",
+            title: "Live Overview",
+            description: "The Hypr+O overview updates while it's open."
+        ),
+        WhatsNewFeature(
+            icon: "paintpalette",
+            title: "Your Floating Color Everywhere",
+            description: "Overlays mark floating windows in the floating color you picked in Settings.",
+            tint: .magenta
         ),
     ]
 }

@@ -82,28 +82,28 @@ struct KeybindsSettingsView: View {
             .padding(.horizontal, HyprSpacing.xs)
         }
         .sheet(isPresented: $showingAddKeybind) {
-            KeybindEditorSheet(existingBind: nil) { config.keybinds.append($0) }
+            KeybindEditorSheet(existingBind: nil, otherBinds: config.keybinds) { config.keybinds.append($0) }
         }
         .sheet(isPresented: $showingAddLauncher) {
-            AppLauncherEditorSheet { config.keybinds.append($0) }
+            AppLauncherEditorSheet(otherBinds: config.keybinds) { config.keybinds.append($0) }
         }
         .sheet(isPresented: $showingAddCommand) {
-            KeybindEditorSheet(existingBind: nil, initialAction: .runCommand) {
+            KeybindEditorSheet(existingBind: nil, initialAction: .runCommand,
+                               otherBinds: config.keybinds) {
                 config.keybinds.append($0)
             }
         }
         .sheet(item: $editingBind) { bind in
-            KeybindEditorSheet(existingBind: bind) { updated in
-                if let idx = config.keybinds.firstIndex(where: { $0.id == bind.id }) {
-                    config.keybinds[idx] = updated
-                }
+            KeybindEditorSheet(existingBind: bind, otherBinds: config.keybinds) { updated in
+                config.keybinds = config.keybinds.replacingBind(bind, with: updated)
             }
         }
     }
 
     @ViewBuilder
     private func bindRows(_ binds: [Keybind]) -> some View {
-        ForEach(Array(binds.enumerated()), id: \.element.id) { idx, bind in
+        // position, not chord: a saved config can hold two binds on one chord
+        ForEach(Array(binds.enumerated()), id: \.offset) { idx, bind in
             KeybindRow(
                 bind: bind,
                 isSelected: selectedBindID == bind.id,
@@ -111,7 +111,7 @@ struct KeybindsSettingsView: View {
                 onTap: { selectedBindID = bind.id },
                 onDoubleTap: { editingBind = bind },
                 onDelete: {
-                    config.keybinds.removeAll { $0.id == bind.id }
+                    config.keybinds = config.keybinds.removingBind(bind)
                     if selectedBindID == bind.id { selectedBindID = nil }
                 }
             )
@@ -119,19 +119,18 @@ struct KeybindsSettingsView: View {
     }
 
     private func workspacePanel(_ binds: [Keybind]) -> some View {
-        let switchFamily = canonicalWorkspaceFamily(in: binds, switching: true)
-        let moveFamily = canonicalWorkspaceFamily(in: binds, switching: false)
-        let collapsedIDs = Set((switchFamily ?? []).map(\.id) + (moveFamily ?? []).map(\.id))
+        let families = KeybindOverlayGrouping.WorkspaceFamily.allCases
+        let runs = Dictionary(uniqueKeysWithValues: families.compactMap { family in
+            canonicalWorkspaceFamily(in: binds, family: family).map { (family, $0) }
+        })
+        let collapsedIDs = Set(runs.values.flatMap { $0.map(\.id) })
         let exceptions = binds.filter { !collapsedIDs.contains($0.id) }
 
         return HyprPanel("Workspaces", footer: "Keys 1–9 select workspaces 1–9; 0 selects workspace 10. Expand a group to edit individual bindings.") {
-            if let switchFamily {
-                workspaceDisclosure(
-                    id: "switch", title: "Switch to workspace N", binds: switchFamily)
-            }
-            if let moveFamily {
-                workspaceDisclosure(
-                    id: "move", title: "Move window to workspace N", binds: moveFamily)
+            ForEach(families, id: \.self) { family in
+                if let run = runs[family] {
+                    workspaceDisclosure(id: family.rawValue, title: family.title, binds: run)
+                }
             }
             bindRows(exceptions)
         }
@@ -179,18 +178,15 @@ struct KeybindsSettingsView: View {
         }
     }
 
-    private func canonicalWorkspaceFamily(in binds: [Keybind], switching: Bool) -> [Keybind]? {
+    private func canonicalWorkspaceFamily(in binds: [Keybind],
+                                          family wanted: KeybindOverlayGrouping.WorkspaceFamily) -> [Keybind]? {
         let family = binds.compactMap { bind -> (Int, Keybind)? in
-            let number: Int
-            switch bind.action {
-            case .switchWorkspace(let n) where switching: number = n
-            case .moveToWorkspace(let n) where !switching: number = n
-            default: return nil
-            }
-            guard KeybindOverlayGrouping.usesCanonicalWorkspaceKey(bind, number: number) else {
+            guard let member = KeybindOverlayGrouping.workspaceFamily(of: bind.action),
+                  member.family == wanted,
+                  KeybindOverlayGrouping.usesCanonicalWorkspaceKey(bind, number: member.number) else {
                 return nil
             }
-            return (number, bind)
+            return (member.number, bind)
         }.sorted { $0.0 < $1.0 }
 
         guard KeybindOverlayGrouping.isCompleteWorkspaceRange(family.map { $0.0 }),
@@ -282,8 +278,10 @@ struct KeybindsSettingsView: View {
 
                 Spacer(minLength: HyprSpacing.sm)
 
+                // a saved key that is no longer offered keeps its row until
+                // the user picks another one
                 Picker("", selection: $config.hyprKey) {
-                    ForEach(HyprKey.allCases) { key in
+                    ForEach(HyprKey.pickerRows(for: config.hyprKey)) { key in
                         Text(key.displayName).tag(key)
                     }
                 }
@@ -292,6 +290,24 @@ struct KeybindsSettingsView: View {
             }
             .padding(.horizontal, HyprSpacing.lg)
             .padding(.vertical, HyprSpacing.md)
+
+            if let note = config.hyprKey.notRecommendedNote {
+                Rectangle()
+                    .fill(Color.hyprCyan.opacity(0.18))
+                    .frame(height: 0.5)
+                keyNoteRow(note, icon: "exclamationmark.circle")
+                    .padding(.horizontal, HyprSpacing.lg)
+                    .padding(.vertical, HyprSpacing.sm)
+            }
+
+            if let note = config.hyprKey.leftModifierNote {
+                Rectangle()
+                    .fill(Color.hyprCyan.opacity(0.18))
+                    .frame(height: 0.5)
+                keyNoteRow(note, icon: "info.circle")
+                    .padding(.horizontal, HyprSpacing.lg)
+                    .padding(.vertical, HyprSpacing.sm)
+            }
 
             if let guidance = HyprKeySystemGuidance.forKey(config.hyprKey) {
                 Rectangle()
@@ -316,6 +332,21 @@ struct KeybindsSettingsView: View {
             RoundedRectangle(cornerRadius: HyprRadius.lg, style: .continuous)
                 .strokeBorder(Color.hyprCyan.opacity(0.22), lineWidth: 1)
         )
+    }
+
+    private func keyNoteRow(_ note: String, icon: String) -> some View {
+        HStack(spacing: HyprSpacing.sm) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.hyprTextSecondary)
+                .frame(width: 40)
+                .accessibilityHidden(true)
+            Text(note)
+                .font(.hyprCaption)
+                .foregroundStyle(Color.hyprTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
     }
 
     // one line + button; the full explanation sits behind the info button
@@ -465,13 +496,17 @@ struct KeybindEditorSheet: View {
     let existingBind: Keybind?
     /// preselects the action when adding a new bind from a dedicated menu item
     let initialAction: KeybindEditorViewModel.ActionChoice?
+    /// the saved list, to refuse a chord another bind already holds
+    let otherBinds: [Keybind]
     let onSave: (Keybind) -> Void
 
     init(existingBind: Keybind?,
          initialAction: KeybindEditorViewModel.ActionChoice? = nil,
+         otherBinds: [Keybind] = [],
          onSave: @escaping (Keybind) -> Void) {
         self.existingBind = existingBind
         self.initialAction = initialAction
+        self.otherBinds = otherBinds
         self.onSave = onSave
     }
 
@@ -496,6 +531,11 @@ struct KeybindEditorSheet: View {
                     useControl: $vm.useControl, useOption: $vm.useOption,
                     useCommand: $vm.useCommand
                 )
+                if let taken = vm.conflict(in: otherBinds, editing: existingBind) {
+                    Text("Already bound to \(taken.actionDescription)")
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
             }
 
             // action picker
@@ -516,7 +556,7 @@ struct KeybindEditorSheet: View {
                 switch vm.selectedAction {
                 case .focusDirection, .swapDirection, .moveWindowToMonitor, .resizeDirection:
                     DirectionPicker(direction: $vm.directionParam)
-                case .switchWorkspace, .moveToWorkspace:
+                case .switchWorkspace, .moveToWorkspace, .moveToWorkspaceAndFollow:
                     WorkspacePicker(workspace: $vm.workspaceParam)
                 case .cycleWorkspace:
                     Picker("Direction", selection: $vm.workspaceParam) {
@@ -544,7 +584,7 @@ struct KeybindEditorSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!vm.canSave)
+                .disabled(!vm.canSave || vm.conflict(in: otherBinds, editing: existingBind) != nil)
                 .buttonStyle(.borderedProminent)
             }
         }

@@ -252,15 +252,20 @@ struct SavedConfig: Codable {
     let windowCornerRadius: CGFloat?
     let scratchpadTileByDefault: Bool?
     let scratchpadRegionInset: CGFloat?
-    let windowRules: [WindowRule]?
-    let outerPaddingSides: PaddingSides?
-    let workspaceWallpapers: [String: String]?
-    let workspaceColors: [String: String]?
+    // fork additions (HyprMacExperiments). `var` with a default, like
+    // upstream's later fields, so upstream's `SavedConfig(...)` call sites
+    // compile without naming them.
+    var outerPaddingSides: PaddingSides? = nil
+    var workspaceWallpapers: [String: String]? = nil
+    var workspaceColors: [String: String]? = nil
     // workspaces (1...workspaceCount) that show sticky-ruled apps; sorted on write
-    let stickyWorkspaces: [Int]?
+    var stickyWorkspaces: [Int]? = nil
     // `var` with a default so the synthesized memberwise init takes it as a
     // trailing optional — existing `SavedConfig(...)` call sites keep compiling.
     var restoreLayoutOnLaunch: Bool? = nil
+    var windowRules: [WindowRule]? = nil
+    // fork: per-app effects beside upstream's pins (see AppRule)
+    var appRules: [AppRule]? = nil
 }
 
 /// Optional per-side overrides for the uniform `outerPadding`. A nil side
@@ -300,9 +305,11 @@ extension SavedConfig {
         case chromeFadeDurationSec, windowCornerRadius
         case scratchpadTileByDefault, scratchpadRegionInset
         // fork additions (HyprMacExperiments)
-        case windowRules, outerPaddingSides, workspaceWallpapers, workspaceColors
+        case outerPaddingSides, workspaceWallpapers, workspaceColors
         case stickyWorkspaces
+        case appRules = "experimentsAppRules"
         case restoreLayoutOnLaunch
+        case windowRules
     }
 
     init(from decoder: Decoder) throws {
@@ -328,23 +335,26 @@ extension SavedConfig {
         }
         self.keybinds = kept
 
+        // the core fields stay strict: every build since v0.4.2 writes them,
+        // with these types. version too, since it will pick which migrations run.
         self.version = try c.decodeIfPresent(Int.self, forKey: .version)
         self.gapSize = try c.decode(CGFloat.self, forKey: .gapSize)
         self.outerPadding = try c.decode(CGFloat.self, forKey: .outerPadding)
         self.enabled = try c.decode(Bool.self, forKey: .enabled)
-        self.focusFollowsMouse = try c.decodeIfPresent(Bool.self, forKey: .focusFollowsMouse)
-        self.hyprKey = try c.decodeIfPresent(HyprKey.self, forKey: .hyprKey)
-        self.excludedBundleIDs = try c.decodeIfPresent([String].self, forKey: .excludedBundleIDs)
-        self.showMenuBarIndicator = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIndicator)
+        self.focusFollowsMouse = Self.tolerant(c, .focusFollowsMouse)
+        // an unknown value, like a case a newer build added, is the default Hypr key
+        self.hyprKey = Self.tolerant(c, .hyprKey)
+        self.excludedBundleIDs = Self.tolerant(c, .excludedBundleIDs)
+        self.showMenuBarIndicator = Self.tolerant(c, .showMenuBarIndicator)
         self.overlayAppearance = c.contains(.overlayAppearance)
             ? ((try? c.decode(OverlayAppearance.self, forKey: .overlayAppearance))
                 ?? UserConfigDefaults.overlayAppearance)
             : nil
-        self.maxSplitsPerMonitor = try c.decodeIfPresent([String: Int].self, forKey: .maxSplitsPerMonitor)
-        self.disabledMonitors = try c.decodeIfPresent([String].self, forKey: .disabledMonitors)
-        self.showFocusBorder = try c.decodeIfPresent(Bool.self, forKey: .showFocusBorder)
-        self.focusBorderColorHex = try c.decodeIfPresent(String.self, forKey: .focusBorderColorHex)
-        self.floatingBorderColorHex = try c.decodeIfPresent(String.self, forKey: .floatingBorderColorHex)
+        self.maxSplitsPerMonitor = Self.tolerant(c, .maxSplitsPerMonitor)
+        self.disabledMonitors = Self.tolerant(c, .disabledMonitors)
+        self.showFocusBorder = Self.tolerant(c, .showFocusBorder)
+        self.focusBorderColorHex = Self.tolerant(c, .focusBorderColorHex)
+        self.floatingBorderColorHex = Self.tolerant(c, .floatingBorderColorHex)
         // A style added by a newer build must not invalidate the whole config.
         // Key presence also marks the new bracket schema, so an unknown value
         // cannot accidentally reimport the old focus-border color.
@@ -355,24 +365,86 @@ extension SavedConfig {
         } else {
             self.focusBracketStyle = nil
         }
-        self.focusBracketColorHex = try c.decodeIfPresent(String.self, forKey: .focusBracketColorHex)
-        self.focusBracketRadius = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketRadius)
-        self.focusBracketThickness = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketThickness)
-        self.focusBracketLength = try c.decodeIfPresent(CGFloat.self, forKey: .focusBracketLength)
-        self.dimInactiveWindows = try c.decodeIfPresent(Bool.self, forKey: .dimInactiveWindows)
-        self.dimIntensity = try c.decodeIfPresent(Double.self, forKey: .dimIntensity)
-        self.mouseHoverPollHz = try c.decodeIfPresent(Int.self, forKey: .mouseHoverPollHz)
-        self.chromeFadeDurationSec = try c.decodeIfPresent(Double.self, forKey: .chromeFadeDurationSec)
-        self.windowCornerRadius = try c.decodeIfPresent(CGFloat.self, forKey: .windowCornerRadius)
-        self.scratchpadTileByDefault = try c.decodeIfPresent(Bool.self, forKey: .scratchpadTileByDefault)
-        self.scratchpadRegionInset = try c.decodeIfPresent(CGFloat.self, forKey: .scratchpadRegionInset)
+        self.focusBracketColorHex = Self.tolerant(c, .focusBracketColorHex)
+        self.focusBracketRadius = Self.tolerant(c, .focusBracketRadius)
+        self.focusBracketThickness = Self.tolerant(c, .focusBracketThickness)
+        self.focusBracketLength = Self.tolerant(c, .focusBracketLength)
+        self.dimInactiveWindows = Self.tolerant(c, .dimInactiveWindows)
+        self.dimIntensity = Self.tolerant(c, .dimIntensity)
+        self.mouseHoverPollHz = Self.tolerant(c, .mouseHoverPollHz)
+        self.chromeFadeDurationSec = Self.tolerant(c, .chromeFadeDurationSec)
+        self.windowCornerRadius = Self.tolerant(c, .windowCornerRadius)
+        self.scratchpadTileByDefault = Self.tolerant(c, .scratchpadTileByDefault)
+        self.scratchpadRegionInset = Self.tolerant(c, .scratchpadRegionInset)
         // fork additions (HyprMacExperiments)
-        self.windowRules = try c.decodeIfPresent([WindowRule].self, forKey: .windowRules)
-        self.outerPaddingSides = try c.decodeIfPresent(PaddingSides.self, forKey: .outerPaddingSides)
-        self.workspaceWallpapers = try c.decodeIfPresent([String: String].self, forKey: .workspaceWallpapers)
-        self.workspaceColors = try c.decodeIfPresent([String: String].self, forKey: .workspaceColors)
-        self.stickyWorkspaces = try c.decodeIfPresent([Int].self, forKey: .stickyWorkspaces)
-        self.restoreLayoutOnLaunch = try c.decodeIfPresent(Bool.self, forKey: .restoreLayoutOnLaunch)
+        self.outerPaddingSides = Self.tolerant(c, .outerPaddingSides)
+        self.workspaceWallpapers = Self.tolerant(c, .workspaceWallpapers)
+        self.workspaceColors = Self.tolerant(c, .workspaceColors)
+        self.stickyWorkspaces = Self.tolerant(c, .stickyWorkspaces)
+        self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
+        let windowRules = Self.tolerantWindowRules(c)
+        if c.contains(.appRules) {
+            self.windowRules = windowRules
+            self.appRules = Self.tolerant(c, .appRules)
+        } else {
+            // a config from before the fork took upstream's pins: its
+            // windowRules entries carry the fork's effects, which upstream's
+            // WindowRule drops on the next save. move them out first
+            let legacy = Self.legacyForkRuleEffects(c)
+            self.appRules = legacy
+            self.windowRules = legacy == nil
+                ? windowRules
+                : windowRules?.filter { Constants.workspaceRange.contains($0.workspace) }
+        }
+    }
+
+    // the fork's effects inside legacy windowRules entries, one AppRule per
+    // entry that sets any. nil when no entry does: nothing to move. entries
+    // that only carried a priority (workspace 0) leave the pins
+    private static func legacyForkRuleEffects(_ c: KeyedDecodingContainer<CodingKeys>) -> [AppRule]? {
+        guard c.contains(.windowRules), (try? c.decodeNil(forKey: .windowRules)) == false,
+              var arr = try? c.nestedUnkeyedContainer(forKey: .windowRules) else { return nil }
+        var effects: [AppRule] = []
+        while !arr.isAtEnd {
+            if (try? arr.decodeNil()) == true { continue }
+            guard let element = try? arr.decode(FailableAppRule.self) else { break }
+            if let rule = element.rule, rule.hasEffect { effects.append(rule) }
+        }
+        guard !effects.isEmpty else { return nil }
+        hyprLog(.notice, .config, "config.json: moved \(effects.count) app rule effect(s) out of windowRules into experimentsAppRules")
+        return effects
+    }
+
+    // same per-element tolerance as keybinds: the rules are hand-editable
+    // and travel between builds over iCloud, so a bad rule costs only itself
+    private static func tolerantWindowRules(_ c: KeyedDecodingContainer<CodingKeys>) -> [WindowRule]? {
+        guard c.contains(.windowRules), (try? c.decodeNil(forKey: .windowRules)) == false else { return nil }
+        guard var arr = try? c.nestedUnkeyedContainer(forKey: .windowRules) else {
+            hyprLog(.notice, .config, "config.json has a windowRules value this build can't read; using no rules")
+            return nil
+        }
+        var kept: [WindowRule] = []
+        while !arr.isAtEnd {
+            if (try? arr.decodeNil()) == true { continue }
+            guard let element = try? arr.decode(FailableWindowRule.self) else { break }
+            if let rule = element.rule { kept.append(rule) }
+        }
+        return kept
+    }
+
+    // one optional field. a value this build can't read (a case a newer
+    // build added, a changed type, a hand-edit typo) costs just that field,
+    // which is treated as missing, instead of the whole config. the value
+    // stays out of the log because it is hand-editable text.
+    private static func tolerant<T: Decodable>(_ c: KeyedDecodingContainer<CodingKeys>,
+                                               _ key: CodingKeys) -> T? {
+        do {
+            return try c.decodeIfPresent(T.self, forKey: key)
+        } catch {
+            hyprLog(.notice, .config,
+                    "config.json has a \(key.stringValue) value this build can't read; using the default")
+            return nil
+        }
     }
 }
 
@@ -393,11 +465,35 @@ private struct FailableKeybind: Decodable {
     }
 }
 
+// one legacy fork rule's effects, or nil when they don't decode.
+private struct FailableAppRule: Decodable {
+    let rule: AppRule?
+
+    init(from decoder: Decoder) throws {
+        rule = try? AppRule(from: decoder)
+    }
+}
+
+// one window rule, or nil when it doesn't decode. same trick as FailableKeybind.
+private struct FailableWindowRule: Decodable {
+    let rule: WindowRule?
+
+    init(from decoder: Decoder) throws {
+        do {
+            rule = try WindowRule(from: decoder)
+        } catch {
+            rule = nil
+            hyprLog(.warning, .config, "skipping malformed window rule")
+        }
+    }
+}
+
 // monitor-specific settings — stored locally, never synced via iCloud
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
-    let linkedMonitors: Bool?
+    // fork fields default to nil so upstream's call sites compile unchanged
+    var linkedMonitors: Bool? = nil
     // accordion mode (single-screen stacked layout). accordionMonitor nil
     // resolves to the built-in display at runtime.
     var accordionMode: Bool? = nil

@@ -206,6 +206,80 @@ final class KeybindDecoderToleranceTests: XCTestCase {
         XCTAssertEqual(saved.restoreLayoutOnLaunch, true)
     }
 
+    func testRetileAllWireFormatDecodes() throws {
+        let json = #"{"action":{"retileAll":{}},"keyCode":15,"modifiers":1}"#
+        XCTAssertEqual(try JSONDecoder().decode(Keybind.self, from: Data(json.utf8)).action, .retileAll)
+    }
+
+    func testRetileAllRoundTripsThroughSavedConfig() throws {
+        let bind = Keybind(keyCode: 15, modifiers: .hypr, action: .retileAll)
+        let encoded = String(data: try JSONEncoder().encode(bind), encoding: .utf8)!
+        XCTAssertTrue(encoded.contains(#""retileAll":{}"#), encoded)
+        let json = """
+        {"keybinds":[\(encoded)],"gapSize":8,"outerPadding":8,"enabled":true}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        let reloaded = try JSONDecoder().decode(SavedConfig.self, from: try JSONEncoder().encode(saved))
+        XCTAssertEqual(reloaded.keybinds.map(\.action), [.retileAll])
+    }
+
+    // an older build meets retileAll as an unknown key and drops only that bind
+    func testUnknownActionBesideRetileAllKeepsTheRest() throws {
+        let json = """
+        {"keybinds":[
+            {"action":{"futureRetileThing":{}},"keyCode":1,"modifiers":1},
+            {"action":{"retileAll":{}},"keyCode":15,"modifiers":1}
+        ],"gapSize":8,"outerPadding":8,"enabled":true}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(saved.keybinds.map(\.action), [.retileAll])
+    }
+
+    func testMoveToWorkspaceAndFollowWireFormatDecodes() throws {
+        let json = #"{"action":{"moveToWorkspaceAndFollow":{"_0":10}},"keyCode":29,"modifiers":11}"#
+        let kb = try JSONDecoder().decode(Keybind.self, from: Data(json.utf8))
+        XCTAssertEqual(kb.action, .moveToWorkspaceAndFollow(10))
+        XCTAssertEqual(kb.keyCode, 29)
+        XCTAssertEqual(kb.modifiers, [.hypr, .control, .shift])
+    }
+
+    // its own frozen key with the same {"_0": N} payload as moveToDesktop,
+    // never the silent move's key
+    func testMoveToWorkspaceAndFollowEncodesUnderItsOwnKey() throws {
+        let kb = Keybind(keyCode: 20, modifiers: [.hypr, .control, .shift],
+                         action: .moveToWorkspaceAndFollow(3))
+        let s = String(data: try JSONEncoder().encode(kb), encoding: .utf8)!
+        XCTAssertTrue(s.contains(#""moveToWorkspaceAndFollow":{"_0":3}"#), s)
+        XCTAssertFalse(s.contains("moveToDesktop"), s)
+
+        let json = #"{"keybinds":[\#(s)],"gapSize":8,"outerPadding":8,"enabled":true}"#
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        let reloaded = try JSONDecoder().decode(SavedConfig.self, from: try JSONEncoder().encode(saved))
+        XCTAssertEqual(reloaded.keybinds, [kb])
+    }
+
+    // a build from before this action reads it as an unknown key, the way
+    // this build reads the made-up one below. only those binds go: the
+    // silent move, the valid follow bind and every setting survive. a follow
+    // bind with no workspace number is dropped the same way.
+    func testUnknownOrBrokenFollowBindBesideKnownOnesKeepsTheRest() throws {
+        let json = """
+        {"keybinds":[
+            {"action":{"moveToDesktop":{"_0":3}},"keyCode":20,"modifiers":3},
+            {"action":{"moveToWorkspaceAndFollowLater":{"_0":3}},"keyCode":21,"modifiers":11},
+            {"action":{"moveToWorkspaceAndFollow":{}},"keyCode":23,"modifiers":11},
+            {"action":{"moveToWorkspaceAndFollow":{"_0":3}},"keyCode":20,"modifiers":11}
+        ],"gapSize":14,"outerPadding":6,"enabled":true,"focusFollowsMouse":false,
+          "excludedBundleIDs":["com.apple.FaceTime"]}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(saved.keybinds.map(\.action), [.moveToWorkspace(3), .moveToWorkspaceAndFollow(3)])
+        XCTAssertEqual(saved.gapSize, 14)
+        XCTAssertEqual(saved.outerPadding, 6)
+        XCTAssertEqual(saved.focusFollowsMouse, false)
+        XCTAssertEqual(saved.excludedBundleIDs, ["com.apple.FaceTime"])
+    }
+
     // MARK: - malformed-direction tolerance (was crash, now log + fallback)
 
     func testMalformedFocusDirectionFallsBack() throws {
@@ -446,13 +520,66 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             dimInactiveWindows: nil, dimIntensity: nil,
             mouseHoverPollHz: nil, chromeFadeDurationSec: nil,
             windowCornerRadius: nil,
-            scratchpadTileByDefault: nil, scratchpadRegionInset: nil,
-            windowRules: nil, outerPaddingSides: nil,
-            workspaceWallpapers: nil, workspaceColors: nil, stickyWorkspaces: nil)
+            scratchpadTileByDefault: nil, scratchpadRegionInset: nil)
         let data = try JSONEncoder().encode(saved)
         let decoded = try JSONDecoder().decode(SavedConfig.self, from: data)
         XCTAssertEqual(decoded.keybinds.count, Keybind.defaults.count)
         XCTAssertEqual(decoded.keybinds.map(\.action), Keybind.defaults.map(\.action))
+    }
+
+    // MARK: - documented hand-edit examples
+
+    // the hand-edit section of docs/keybinds-and-actions.md once showed
+    // "modifiers": { "rawValue": 1 }. ModifierFlags is an OptionSet with the
+    // standard RawRepresentable coding, so the wire format is a bare number.
+    // the object form fails that one keybind, and the per-keybind tolerance
+    // drops it without a word to the user.
+    func testRawValueObjectModifiersAreDropped() throws {
+        let documented = #"{ "keyCode": 123, "modifiers": { "rawValue": 1 }, "action": { "focusDirection": { "_0": "left" } } }"#
+        XCTAssertThrowsError(try JSONDecoder().decode(Keybind.self, from: Data(documented.utf8)))
+
+        let json = """
+        {"keybinds":[\(documented)],"gapSize":8,"outerPadding":8,"enabled":true}
+        """
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertTrue(saved.keybinds.isEmpty)
+    }
+
+    // every line of every ```json block in docs/keybinds-and-actions.md must
+    // decode: a line with keyCode as a Keybind (alone and inside a config,
+    // where the tolerance would hide a bad one), any other line as an Action.
+    // this keeps the documented examples from drifting off the wire format.
+    func testDocumentedJSONExamplesDecode() throws {
+        let doc = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("docs/keybinds-and-actions.md")
+        let text = try String(contentsOf: doc, encoding: .utf8)
+
+        var examples: [String] = []
+        var inJSONBlock = false
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inJSONBlock = !inJSONBlock && trimmed == "```json"
+                continue
+            }
+            if inJSONBlock && !trimmed.isEmpty { examples.append(trimmed) }
+        }
+        XCTAssertGreaterThanOrEqual(examples.count, 8, "found only \(examples.count) examples")
+
+        for example in examples {
+            if example.contains(#""keyCode""#) {
+                let kb = try JSONDecoder().decode(Keybind.self, from: Data(example.utf8))
+                let json = """
+                {"keybinds":[\(example)],"gapSize":8,"outerPadding":8,"enabled":true}
+                """
+                let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+                XCTAssertEqual(saved.keybinds, [kb], example)
+            } else {
+                XCTAssertNoThrow(try JSONDecoder().decode(Action.self, from: Data(example.utf8)), example)
+            }
+        }
     }
 
     // MARK: - SavedConfig wire format is unchanged
@@ -478,9 +605,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: 30, chromeFadeDurationSec: 0.15,
             windowCornerRadius: 13,
-            scratchpadTileByDefault: true, scratchpadRegionInset: 0.03,
-            windowRules: nil, outerPaddingSides: nil,
-            workspaceWallpapers: nil, workspaceColors: nil, stickyWorkspaces: nil)
+            scratchpadTileByDefault: true, scratchpadRegionInset: 0.03)
         let data = try JSONEncoder().encode(saved)
         let object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         XCTAssertEqual(Set(object.keys), [
@@ -516,9 +641,7 @@ final class KeybindDecoderToleranceTests: XCTestCase {
             dimInactiveWindows: true, dimIntensity: 0.5,
             mouseHoverPollHz: 30, chromeFadeDurationSec: 0.15,
             windowCornerRadius: 13,
-            scratchpadTileByDefault: true, scratchpadRegionInset: 0.03,
-            windowRules: nil, outerPaddingSides: nil,
-            workspaceWallpapers: nil, workspaceColors: nil, stickyWorkspaces: nil)
+            scratchpadTileByDefault: true, scratchpadRegionInset: 0.03)
         let first = try encoder.encode(saved)
         let decoded = try JSONDecoder().decode(SavedConfig.self, from: first)
         let second = try encoder.encode(decoded)

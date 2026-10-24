@@ -21,6 +21,9 @@ enum Action: Equatable {
     case swapDirection(Direction)
     case switchWorkspace(Int)
     case moveToWorkspace(Int)
+    /// Move the focused window to workspace N, then switch to N with that
+    /// window focused. A refused move does not switch.
+    case moveToWorkspaceAndFollow(Int)
     /// Move the focused window to the adjacent monitor's visible
     /// workspace. Only `.left` / `.right` are meaningful. Encodes
     /// under the legacy `"moveWorkspaceToMonitor"` wire key — the
@@ -69,6 +72,10 @@ enum Action: Equatable {
     case saveLayout
     /// Restore the saved layout for the active display configuration.
     case restoreLayout
+    /// Redistribute every window across its workspaces and retile, the
+    /// menu bar's "Retile all spaces". Also moves pinned apps' windows
+    /// back onto their pinned workspaces.
+    case retileAll
 }
 
 // MARK: - Codable
@@ -94,6 +101,7 @@ extension Action: Codable {
         case swapDirection
         case switchWorkspace        = "switchDesktop"
         case moveToWorkspace        = "moveToDesktop"
+        case moveToWorkspaceAndFollow
         case moveWindowToMonitor    = "moveWorkspaceToMonitor"
         case toggleFloating
         case toggleSplit
@@ -114,6 +122,7 @@ extension Action: Codable {
         case toggleAccordion
         case saveLayout
         case restoreLayout
+        case retileAll
     }
 
     /// Accepted-but-not-emitted aliases. Lets a hand-edited config
@@ -162,6 +171,8 @@ extension Action: Codable {
             self = .switchWorkspace(try inner.decode(Int.self, forKey: ._0))
         case .moveToWorkspace:
             self = .moveToWorkspace(try inner.decode(Int.self, forKey: ._0))
+        case .moveToWorkspaceAndFollow:
+            self = .moveToWorkspaceAndFollow(try inner.decode(Int.self, forKey: ._0))
         case .cycleWorkspace:
             self = .cycleWorkspace(try inner.decode(Int.self, forKey: ._0))
         case .launchApp:
@@ -189,6 +200,7 @@ extension Action: Codable {
             self = .resizeDirection(try Self.decodeDirection(inner, field: "resizeDirection"))
         case .saveLayout:    self = .saveLayout
         case .restoreLayout: self = .restoreLayout
+        case .retileAll:     self = .retileAll
         }
     }
 
@@ -221,6 +233,9 @@ extension Action: Codable {
             try p.encode(n, forKey: ._0)
         case .moveToWorkspace(let n):
             var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToWorkspace)
+            try p.encode(n, forKey: ._0)
+        case .moveToWorkspaceAndFollow(let n):
+            var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToWorkspaceAndFollow)
             try p.encode(n, forKey: ._0)
         case .cycleWorkspace(let n):
             var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .cycleWorkspace)
@@ -265,6 +280,8 @@ extension Action: Codable {
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .saveLayout)
         case .restoreLayout:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .restoreLayout)
+        case .retileAll:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .retileAll)
         }
     }
 }

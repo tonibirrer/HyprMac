@@ -20,13 +20,13 @@ enum KeybindCategory: String, CaseIterable {
         case .swapDirection, .toggleFloating, .toggleSplit, .closeWindow,
              .toggleScratchpad, .moveToScratchpad, .resizeDirection:
             return .windowManagement
-        case .switchWorkspace, .moveToWorkspace, .moveWindowToMonitor, .cycleWorkspace,
-             .moveToNextEmptyWorkspace:
+        case .switchWorkspace, .moveToWorkspace, .moveToWorkspaceAndFollow, .moveWindowToMonitor,
+             .cycleWorkspace, .moveToNextEmptyWorkspace:
             return .workspaces
         case .launchApp, .runCommand:
             return .apps
-        case .showKeybinds, .showWorkspaceOverview, .toggleTiling,
-             .toggleSingleScreen, .toggleAccordion, .saveLayout, .restoreLayout:
+        case .showKeybinds, .showWorkspaceOverview, .toggleTiling, .saveLayout, .restoreLayout,
+             .retileAll, .toggleSingleScreen, .toggleAccordion:
             return .system
         }
     }

@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import Combine
 @testable import HyprMac
 
 final class WorkspaceOverviewPresentationTests: XCTestCase {
@@ -158,6 +159,71 @@ final class WorkspaceOverviewPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(tall, 900)
     }
 
+    func testOverviewModelPublishesFreshSnapshotsAndSkipsEqualOnes() {
+        let first = [WorkspaceSnapshot(id: 1, monitorID: 1, monitorName: "Studio", isActive: true,
+                                       windows: [window(11, "Notes", "com.apple.TextEdit")])]
+        let model = WorkspaceOverviewModel(snapshots: first)
+        var publishes = 0
+        let sink = model.objectWillChange.sink { publishes += 1 }
+        defer { sink.cancel() }
+
+        model.update(snapshots: first, scratchpad: [])
+        XCTAssertEqual(publishes, 0, "a quiet poll must not redraw the overview")
+
+        let opened = [WorkspaceSnapshot(id: 1, monitorID: 1, monitorName: "Studio", isActive: true,
+                                        windows: [window(11, "Notes", "com.apple.TextEdit"),
+                                                  window(12, "Terminal", "com.apple.Terminal")])]
+        model.update(snapshots: opened, scratchpad: [window(13, "Scratch", "com.apple.Notes")])
+        XCTAssertEqual(publishes, 2)
+        XCTAssertEqual(model.snapshots.first?.windows.map(\.id), [11, 12])
+        XCTAssertEqual(model.scratchpad.map(\.id), [13])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(model.snapshots, query: "terminal").map(\.id), [1])
+    }
+
+    func testClosedOverviewSkipsSnapshotWork() {
+        let controller = WorkspaceOverviewController()
+        XCTAssertFalse(controller.isOpen)
+        var walked = false
+        controller.refreshIfOpen { walked = true; return ([], []) }
+        XCTAssertFalse(walked, "a closed overview must not walk AX for snapshots")
+    }
+
+    @MainActor
+    func testOpenOverviewViewRedrawsFromModelUpdates() throws {
+        guard ProcessInfo.processInfo.environment["HYPRMAC_HEADLESS_TESTS"] == "1" else {
+            throw XCTSkip("requires isolated config")
+        }
+        func workspaces(_ ids: ClosedRange<Int>) -> [WorkspaceSnapshot] {
+            ids.map { WorkspaceSnapshot(id: $0, monitorID: 1, monitorName: "Studio", isActive: $0 == 1,
+                                        windows: [window(CGWindowID($0), "Window", "com.apple.TextEdit")]) }
+        }
+        let model = WorkspaceOverviewModel(snapshots: workspaces(1...2))
+        var frames: [Int: CGRect] = [:]
+        let view = WorkspaceOverviewView(model: model,
+                                         selectWorkspace: { _ in },
+                                         selectWindow: { _, _ in },
+                                         onCardFramesChange: { frames = $0 })
+            .frame(width: 1400, height: 700)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 1400, height: 700)
+
+        func settle(until count: Int) {
+            let deadline = Date().addingTimeInterval(0.5)
+            host.layoutSubtreeIfNeeded()
+            while frames.count != count, Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                host.layoutSubtreeIfNeeded()
+            }
+        }
+        settle(until: 2)
+        XCTAssertEqual(Set(frames.keys), [1, 2])
+
+        // same hosting view, no new rootView: the open panel's path
+        model.update(snapshots: workspaces(1...3), scratchpad: [])
+        settle(until: 3)
+        XCTAssertEqual(Set(frames.keys), [1, 2, 3])
+    }
+
     @MainActor
     func testRenderOverviewAtSupportedWidths() throws {
         guard ProcessInfo.processInfo.environment["HYPRMAC_RENDER_OVERVIEW"] == "1" else {
@@ -178,8 +244,7 @@ final class WorkspaceOverviewPresentationTests: XCTestCase {
                             "com.apple.TextEdit")] : [])
                 }
                 let view = WorkspaceOverviewView(
-                    snapshots: snapshots,
-                    scratchpad: [],
+                    model: WorkspaceOverviewModel(snapshots: snapshots),
                     selectWorkspace: { _ in },
                     selectWindow: { _, _ in },
                     onCardFramesChange: { frames = $0 })

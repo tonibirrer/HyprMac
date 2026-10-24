@@ -61,6 +61,11 @@ class HyprWindow: Equatable, Hashable {
     /// next Outlook window the same probe.
     var bundleID: String?
 
+    /// `true` for a Quick Look preview panel admitted by
+    /// `WindowAdmissionFilter`. The panel belongs to whichever app opened
+    /// it and always floats (`FloatingAdmissionPolicy`).
+    var isQuickLookPanel = false
+
     init(element: AXUIElement, windowID: CGWindowID, ownerPID: pid_t) {
         self.element = element
         self.windowID = windowID
@@ -251,11 +256,14 @@ class HyprWindow: Equatable, Hashable {
     /// `setFrame`. Used by the hide path so macOS doesn't animate or
     /// reposition the parked window — animations cause apps to snap
     /// to nearby monitors and become half-visible.
-    func setPositionOnly(_ point: CGPoint) {
+    @discardableResult
+    func setPositionOnly(_ point: CGPoint) -> AXError {
         cachedFrame = nil
+        var rc: AXError = .success
         withEnhancedUIDisabled {
-            position = point
+            rc = writePosition(point)
         }
+        return rc
     }
 
     /// Disable `AXEnhancedUserInterface` on the owning app for the
@@ -287,7 +295,27 @@ class HyprWindow: Equatable, Hashable {
     /// Used when stacking several windows (scratchpad show) where only
     /// the final one should take focus.
     func raise() {
+        Self.activationObserver?(ownerPID)
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    }
+
+    /// Told the owner pid before every focus, raise or activation HyprMac
+    /// asks a window for, on every path, so the app activation that may
+    /// follow is known to be HyprMac's own and not the user's. Set once by
+    /// `WindowManager`.
+    static var activationObserver: ((pid_t) -> Void)?
+
+    /// How long after `activate()` the diagnostic asks whether the app is
+    /// active. `NSRunningApplication.isActive` is updated from the
+    /// workspace notification on the main run loop, so it lags the
+    /// activation by however long the main thread is busy.
+    static let activationCheckDelay: TimeInterval = 0.1
+    static var activationCheckMS: Int { Int((activationCheckDelay * 1000).rounded()) }
+
+    /// Make this the app's main window without raising or activating, so
+    /// a later activation brings this window forward and not another one.
+    func makeMain() {
+        AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
     }
 
     /// Bring this window forward and give it keyboard focus, raising
@@ -299,6 +327,7 @@ class HyprWindow: Equatable, Hashable {
     /// is unreliable when the app was not already active because the
     /// AX writes can race the activation.
     func focus() {
+        Self.activationObserver?(ownerPID)
         let app = NSRunningApplication(processIdentifier: ownerPID)
         let alreadyActive = app?.isActive ?? false
         let wid = windowID
@@ -312,11 +341,15 @@ class HyprWindow: Equatable, Hashable {
             // .activateIgnoringOtherApps is the legacy option but still functions on Tahoe;
             // empty-options activate() is silently dropped from non-keyboard contexts.
             app?.activate(options: [.activateIgnoringOtherApps])
-            // verify activation actually flipped — if not, log it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak app] in
+            // verify activation actually flipped — if not, log it. isActive
+            // follows the workspace notification, which lands well after
+            // 10 ms when the main thread is busy with the frame writes that
+            // follow a focus; asked that early it said "dropped" on nearly
+            // every focus that then went through.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.activationCheckDelay) { [weak app] in
                 let nowActive = app?.isActive ?? false
                 if !nowActive {
-                    hyprLog(.notice, .focus, "focus(\(wid)) activate dropped — app still inactive 10ms after activate()")
+                    hyprLog(.debug, .focus, "focus(\(wid)) activate dropped — app still inactive \(Self.activationCheckMS)ms after activate()")
                 } else {
                     hyprLog(.debug, .focus, "focus(\(wid)) activate ok — app flipped active")
                 }
@@ -331,14 +364,16 @@ class HyprWindow: Equatable, Hashable {
         }
     }
 
-    /// Give this window keyboard focus without changing z-order.
+    /// Give this window keyboard focus, activating its app when needed.
     ///
-    /// Uses `_SLPSSetFrontProcessWithOptions` to activate the process
-    /// in place, then `SLPSPostEventRecordTo` to synthesize the
-    /// keyboard-focus events. Floating windows stay exactly where
-    /// they are — used by FFM and `Hypr+Arrow` to avoid disturbing
-    /// the user's z-stack.
+    /// Despite the name this can raise. The kAXMain write makes this the
+    /// app's main window, and `NSRunningApplication.activate` brings the
+    /// app's main and key windows forward, so a tile covered by a floater
+    /// ends up above it.
+    /// `TiledFocusRouter` uses `makeFrontAndKeyWithoutRaise` instead when
+    /// a floater covers the target.
     func focusWithoutRaise() {
+        Self.activationObserver?(ownerPID)
         let wid = windowID
 
         // window-level AX: doesn't raise on its own — kAXRaiseAction is what raises.
@@ -359,23 +394,35 @@ class HyprWindow: Equatable, Hashable {
             let appEl = AXUIElementCreateApplication(ownerPID)
             AXUIElementSetAttributeValue(appEl, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
             app.activate(options: [.activateIgnoringOtherApps])
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak app] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.activationCheckDelay) { [weak app] in
                 let nowActive = app?.isActive ?? false
                 if !nowActive {
-                    hyprLog(.notice, .focus, "focusWithoutRaise(\(wid)) activate dropped — app still inactive 10ms after activate()")
+                    hyprLog(.debug, .focus, "focusWithoutRaise(\(wid)) activate dropped — app still inactive \(Self.activationCheckMS)ms after activate()")
                 }
             }
         }
 
-        // SkyLight: route the synthesized key-focus event to the specific window.
-        // byte layout matches yabai's window_manager_make_key_window.
+        guard let sl = makeFrontAndKeyWithoutRaise() else { return }
+        hyprLog(.debug, .focus, "focusWithoutRaise(\(wid)) ax main=\(mainRC.rawValue) focused=\(focRC.rawValue) wasActive=\(wasActive) \(sl)")
+    }
+
+    /// Front the owning process and make this window key, with no AX
+    /// writes, no `activate()` and no click. This is yabai's
+    /// focus-without-raise: `_SLPSSetFrontProcessWithOptions` with the
+    /// window id, then the two key-window event records.
+    ///
+    /// Returns the SkyLight result codes for the log, or `nil` when the
+    /// process has no PSN.
+    @discardableResult
+    func makeFrontAndKeyWithoutRaise() -> String? {
         var psn = ProcessSerialNumber()
         guard GetProcessForPID(ownerPID, &psn) == noErr else {
-            hyprLog(.notice, .focus, "focusWithoutRaise(\(wid)) GetProcessForPID failed")
-            return
+            hyprLog(.notice, .focus, "makeFrontAndKey(\(windowID)) GetProcessForPID failed")
+            return nil
         }
         let setFrontRC = _SLPSSetFrontProcessWithOptions(&psn, UInt32(windowID), kCPSUserGenerated)
 
+        // byte layout matches yabai's window_manager_make_key_window.
         var bytes = [UInt8](repeating: 0, count: 0xf8)
         bytes[0x04] = 0xF8
         bytes[0x08] = 0x01
@@ -389,8 +436,36 @@ class HyprWindow: Equatable, Hashable {
 
         bytes[0x08] = 0x02
         let post2RC = SLPSPostEventRecordTo(&psn, &bytes[0])
+        return "sl front=\(setFrontRC.rawValue) post1=\(post1RC.rawValue) post2=\(post2RC.rawValue)"
+    }
 
-        hyprLog(.debug, .focus, "focusWithoutRaise(\(wid)) ax main=\(mainRC.rawValue) focused=\(focRC.rawValue) wasActive=\(wasActive) sl front=\(setFrontRC.rawValue) post1=\(post1RC.rawValue) post2=\(post2RC.rawValue)")
+    /// Tell `pid` that one of its windows gained or lost focus. yabai sends
+    /// this pair (lost on the old key window, gained on the new one, 40 ms
+    /// apart) when focus moves between two windows of the frontmost app.
+    @discardableResult
+    static func postWindowFocusEvent(pid: pid_t, windowID: CGWindowID, gained: Bool) -> CGError? {
+        var psn = ProcessSerialNumber()
+        guard GetProcessForPID(pid, &psn) == noErr else { return nil }
+        var bytes = [UInt8](repeating: 0, count: 0xf8)
+        bytes[0x04] = 0xF8
+        bytes[0x08] = 0x0D
+        bytes[0x8a] = gained ? 0x01 : 0x02
+        var widBytes = UInt32(windowID)
+        withUnsafeBytes(of: &widBytes) { src in
+            for i in 0..<4 { bytes[0x3c + i] = src[i] }
+        }
+        return SLPSPostEventRecordTo(&psn, &bytes[0])
+    }
+
+    /// The window AX reports as focused in `pid`'s app, as a `CGWindowID`.
+    static func axFocusedWindowID(pid: pid_t) -> CGWindowID? {
+        let app = AXUIElementCreateApplication(pid)
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        var wid: CGWindowID = 0
+        guard _AXUIElementGetWindow(value as! AXUIElement, &wid) == .success, wid != 0 else { return nil }
+        return wid
     }
 
     /// Apps that must never receive a synthesized click: remote-desktop and
@@ -452,6 +527,7 @@ class HyprWindow: Equatable, Hashable {
     /// Title-bar coordinate (`midX`, `minY + 4`) avoids window controls and any
     /// in-content button. A bare down+up does not start a drag.
     func focusViaSyntheticClick() {
+        Self.activationObserver?(ownerPID)
         guard let frame = self.frame else {
             hyprLog(.notice, .focus, "focusViaSyntheticClick(\(windowID)) no frame")
             return

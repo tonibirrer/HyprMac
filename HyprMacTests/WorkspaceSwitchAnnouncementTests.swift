@@ -6,7 +6,7 @@ import Cocoa
 // onWillSwitch, so the announcement has to leave before the hide/retile/focus
 // pass, not after it — off onDidSwitch the panel cannot paint until the main
 // thread stops writing AX, which is most of a second on Tahoe. the AX sweep
-// itself is not a seam, so what these tests can pin is the announcement's
+// is not recorded here, so what these tests can pin is the announcement's
 // position among the seams that surround it: after the cursor screen is read,
 // before the retile, and with the same screen onDidSwitch will report.
 //
@@ -20,6 +20,7 @@ final class WorkspaceSwitchAnnouncementTests: XCTestCase {
     private var orchestrator: WorkspaceOrchestrator!
     private var screen: NSScreen!
     private var events: [String] = []
+    private var retileWindows: [HyprWindow]??
     private var willScreen: NSScreen?
     private var didScreen: NSScreen?
     private var visible: Int!
@@ -50,7 +51,10 @@ final class WorkspaceSwitchAnnouncementTests: XCTestCase {
             self?.events.append("cursor-screen")
             return self?.screen ?? NSScreen.main!
         }
-        orchestrator.tileAllVisibleSpaces = { [weak self] in self?.events.append("retile") }
+        orchestrator.tileAllVisibleSpaces = { [weak self] windows in
+            self?.events.append("retile")
+            self?.retileWindows = .some(windows)
+        }
         orchestrator.onWillSwitch = { [weak self] workspace, screen in
             self?.events.append("will:\(workspace)")
             self?.willScreen = screen
@@ -64,6 +68,18 @@ final class WorkspaceSwitchAnnouncementTests: XCTestCase {
         let others = workspaceManager.workspacesAnchoredTo(screen).filter { $0 != visible }.sorted()
         try XCTSkipIf(others.isEmpty, "needs another workspace anchored to this screen")
         hidden = others[0]
+    }
+
+    /// the switch walked AX for its bookkeeping and the reveal walked again,
+    /// with the switched screen empty in between; the reveal takes the
+    /// switch's walk
+    func testTheRevealTakesTheSwitchsWalk() throws {
+        let walk = [makeWindow(id: 4201)]
+        orchestrator.allWindows = { walk }
+
+        orchestrator.switchWorkspace(hidden)
+
+        XCTAssertEqual(retileWindows??.map(\.windowID), [4201], "the retile got the switch's own walk")
     }
 
     func testTheSwitchIsAnnouncedBeforeTheRetile() throws {

@@ -31,15 +31,16 @@ struct WindowChanges {
     let returned: [HyprWindow]
 
     /// Windows that disappeared. Each id is either in
-    /// `fullyForgottenIDs` (pid dead) or moved to `hiddenWindowIDs` (pid
-    /// alive, app minimized or window closed but app still running).
+    /// `fullyForgottenIDs` (pid dead, or a Quick Look panel) or moved to
+    /// `hiddenWindowIDs` (pid alive, app minimized or window closed but
+    /// app still running).
     let goneIDs: Set<CGWindowID>
 
     /// Every id the service called `stateCache.forget(_:)` on this
-    /// cycle. Includes pid-dead windows from the gone path plus ids
-    /// swept during stale-state reconciliation. The caller runs external
-    /// cleanup for each: engine min-size memory, workspace assignment,
-    /// focus + border + dim state.
+    /// cycle. Includes pid-dead windows and Quick Look panels from the
+    /// gone path, plus ids swept during stale-state reconciliation. The
+    /// caller runs external cleanup for each: engine min-size memory,
+    /// workspace assignment, focus + border + dim state.
     let fullyForgottenIDs: Set<CGWindowID>
 
     /// Windows whose physical screen no longer matches their recorded
@@ -58,6 +59,10 @@ struct WindowChanges {
     /// `true` when a guarded partial snapshot should be checked again soon
     /// instead of waiting for the slow reconcile timer.
     let requestsRecheck: Bool
+    /// `true` when the cycle was skipped because the session is locked or
+    /// the displays are asleep. The snapshot is not the desktop, so the
+    /// caller does nothing else with it either.
+    var heldForInterruption = false
 
     /// `true` when at least one observed change warrants a retile.
     /// Stale-state sweeps do not bump this — they are silent state
@@ -125,6 +130,41 @@ final class WindowDiscoveryService {
     private var hiddenAt: [CGWindowID: Date] = [:]
     private static let flapWindowSec: TimeInterval = 5.0
 
+    /// A locked session, sleeping displays or a switched-out user session
+    /// empty the on-screen window list, so a missing window says nothing
+    /// then. Without this a lock outlasted the 4 s wake suppression and the
+    /// three mass-gone skips, every window was marked hidden and pulled out
+    /// of its tree, and the unlock rebuilt each tree in reading order with
+    /// default ratios. Each reason keeps the time it began.
+    private var interruptions: [String: Date] = [:]
+    private var interruptionHoldLogged = false
+    /// how long a span may last if its end notification never comes. long
+    /// enough for a night. a hotkey press, a menu action or a stop also
+    /// ends it: the lock screen keeps all of those from happening.
+    static let interruptionCap: TimeInterval = 12 * 60 * 60
+    /// injected so tests can move past the cap
+    var now: () -> Date = { Date() }
+
+    private static let interruptionSpans: [String: (reason: String, begins: Bool)] = [
+        "com.apple.screenIsLocked": ("locked", true),
+        "com.apple.screenIsUnlocked": ("locked", false),
+        NSWorkspace.screensDidSleepNotification.rawValue: ("screens asleep", true),
+        NSWorkspace.screensDidWakeNotification.rawValue: ("screens asleep", false),
+        NSWorkspace.sessionDidResignActiveNotification.rawValue: ("session inactive", true),
+        NSWorkspace.sessionDidBecomeActiveNotification.rawValue: ("session inactive", false),
+    ]
+
+    /// Quick Look panels in the last snapshot. The panel is one long-lived
+    /// window per app: closing it orders it out, the app stops listing it,
+    /// and the next preview brings back the same id. Left to the ordinary
+    /// gone path it would become a ghost that keeps its workspace and its
+    /// floating flag, and the next preview would come back "returned" to
+    /// wherever the last one was. So a panel that leaves the snapshot is
+    /// forgotten outright, for any reason — closed, its app hidden or
+    /// deactivated, Quick Look's full-screen view — and each opening is a
+    /// new floating window.
+    private var quickLookPanelIDs: Set<CGWindowID> = []
+
     init(stateCache: WindowStateCache,
          accessibility: AccessibilityManager,
          displayManager: DisplayManager,
@@ -155,8 +195,151 @@ final class WindowDiscoveryService {
             snapshot: snapshot,
             runningPIDs: runningPIDs,
             excludedBundleIDs: excludedBundleIDs,
-            focusedWindowID: focusedWindowID
+            focusedWindowID: focusedWindowID,
+            unreadableWindowIDs: accessibility.unreadableWindowIDs
         )
+    }
+
+    /// Known windows the last cycle held because AX could not read them.
+    /// Kept so the outage is logged at its edges rather than every cycle.
+    private var heldUnreadableIDs: Set<CGWindowID> = []
+    /// Known windows the last cycle held because their app still lists
+    /// them while the window server no longer shows them on screen.
+    private var heldListedIDs: Set<CGWindowID> = []
+    /// When each listed-but-off-screen window was first missed, for the
+    /// hold's span.
+    private var listedSince: [CGWindowID: Date] = [:]
+
+    /// How long a window its app still lists is held after it leaves the
+    /// screen. Long enough for a native full-screen excursion that lasts a
+    /// look, a Space switched and switched back, or a stale snapshot; a
+    /// window moved to another Space for good is hidden once it passes.
+    static let listedHoldSpan: TimeInterval = 5.0
+
+    /// Every known window the last cycle held, for whatever reason. A tile
+    /// pass between polls keeps their leaves and writes them nothing.
+    var heldWindowIDs: Set<CGWindowID> { heldUnreadableIDs.union(heldListedIDs) }
+
+    /// How long until the earliest off-screen hold runs out, so the caller
+    /// can poll then rather than at the next reconcile. nil without one.
+    var secondsUntilAHoldEnds: TimeInterval? {
+        guard let earliest = listedSince.values.min() else { return nil }
+        return max(0.1, Self.listedHoldSpan - now().timeIntervalSince(earliest))
+    }
+
+    private func noteHeld(unreadable: Set<CGWindowID>, listed: Set<CGWindowID>) {
+        if unreadable != heldUnreadableIDs {
+            let began = unreadable.subtracting(heldUnreadableIDs)
+            let ended = heldUnreadableIDs.subtracting(unreadable)
+            heldUnreadableIDs = unreadable
+            if !began.isEmpty {
+                hyprLog(.notice, .discovery, "holding \(began.count) unreadable window(s) in place: "
+                        + "\(began.sorted()) — on screen, but their app did not answer AX")
+            }
+            if !ended.isEmpty {
+                hyprLog(.notice, .discovery, "unreadable window(s) readable again: \(ended.sorted())")
+            }
+        }
+        if listed != heldListedIDs {
+            let began = listed.subtracting(heldListedIDs)
+            let ended = heldListedIDs.subtracting(listed)
+            heldListedIDs = listed
+            if !began.isEmpty {
+                hyprLog(.notice, .discovery, "holding \(began.count) window(s) off the screen in place: "
+                        + "\(began.sorted()) — their app still lists them (another Space, full screen,"
+                        + " or a stale snapshot); hidden if not back within"
+                        + " \(Int(Self.listedHoldSpan))s")
+            }
+            if !ended.isEmpty {
+                hyprLog(.notice, .discovery, "off-screen hold ended: \(ended.sorted())")
+            }
+        }
+    }
+
+    /// The missing windows their app still lists, as long as the hold
+    /// lasts. The window server no longer shows the window on screen and
+    /// its app says it is neither minimized nor hidden with the app: it is
+    /// on another Space, in a native full-screen excursion, or the snapshot
+    /// was stale. Those come back on their own within seconds, and a window
+    /// taken out of its tree meanwhile expands its neighbour over the slot
+    /// and comes back somewhere else. Held for `listedHoldSpan`; one still
+    /// missing after that is hidden as before, with its reservation.
+    private func listedButOffScreen(_ candidates: Set<CGWindowID>, runningPIDs: Set<pid_t>,
+                                    state: (CGWindowID, pid_t) -> AccessibilityManager.HiddenWindowState?)
+        -> Set<CGWindowID> {
+        let now = self.now()
+        var held: Set<CGWindowID> = []
+        for id in listedSince.keys where !candidates.contains(id) {
+            listedSince.removeValue(forKey: id)
+        }
+        for id in candidates.sorted() {
+            guard let pid = stateCache.windowOwners[id], runningPIDs.contains(pid),
+                  !quickLookPanelIDs.contains(id),
+                  stateCache.cachedWindows[id]?.isQuickLookPanel != true,
+                  state(id, pid) == .present else {
+                listedSince.removeValue(forKey: id)
+                continue
+            }
+            let since = listedSince[id] ?? now
+            if now.timeIntervalSince(since) < Self.listedHoldSpan {
+                listedSince[id] = since
+                held.insert(id)
+            } else {
+                listedSince.removeValue(forKey: id)
+            }
+        }
+        return held
+    }
+
+    /// Start or end one reason for a session interruption, by notification
+    /// name. Names that open or close no span are ignored.
+    func noteSystemInterruption(_ name: String) {
+        guard let span = Self.interruptionSpans[name] else { return }
+        let wasActive = !interruptions.isEmpty
+        if span.begins {
+            guard interruptions[span.reason] == nil else { return }
+            interruptions[span.reason] = now()
+            if !wasActive {
+                interruptionHoldLogged = false
+                hyprLog(.notice, .discovery, "session interruption began (\(span.reason))"
+                        + " — missing windows are not marked gone until it ends")
+            }
+            return
+        }
+        guard let since = interruptions.removeValue(forKey: span.reason) else { return }
+        let seconds = Int(now().timeIntervalSince(since))
+        if interruptions.isEmpty {
+            hyprLog(.notice, .discovery, "session interruption ended (\(span.reason)) after \(seconds)s")
+        } else {
+            hyprLog(.notice, .discovery, "session interruption: \(span.reason) ended after \(seconds)s,"
+                    + " still \(interruptions.keys.sorted().joined(separator: ", "))")
+        }
+    }
+
+    /// End any interruption on evidence that the session is in use.
+    func endSessionInterruption(evidence: String) {
+        guard !interruptions.isEmpty else { return }
+        hyprLog(.notice, .discovery, "session interruption ended by \(evidence)"
+                + " (was \(interruptions.keys.sorted().joined(separator: ", ")))")
+        interruptions.removeAll()
+    }
+
+    /// Whether a lock, display sleep or switched-out session span is open.
+    /// The admission recovery reads this so its own retry timer never runs
+    /// an attempt from the partial window list a poll would ignore.
+    var isSessionInterrupted: Bool { sessionInterruptionActive() }
+
+    /// Whether an interruption is in effect. Past the cap it ends itself.
+    private func sessionInterruptionActive() -> Bool {
+        guard let start = interruptions.values.min() else { return false }
+        let elapsed = now().timeIntervalSince(start)
+        guard elapsed < Self.interruptionCap else {
+            hyprLog(.notice, .discovery, "session interruption cap reached after \(Int(elapsed))s"
+                    + " (\(interruptions.keys.sorted().joined(separator: ", "))) — missing windows count again")
+            interruptions.removeAll()
+            return false
+        }
+        return true
     }
 
     /// Testable entry point. Pure with respect to AX and `NSWorkspace`:
@@ -166,17 +349,57 @@ final class WindowDiscoveryService {
     /// - Returns: a `WindowChanges` value describing what changed and
     ///   what the caller still needs to apply (workspace assignment,
     ///   external cleanup, retile, refocus).
+    /// - Parameter unreadableWindowIDs: windows the walk could not read
+    ///   although the window server shows them. They are held: not gone, not
+    ///   hidden, not returned, and nothing about them changes this cycle. A
+    ///   missing window its app still lists is held the same way for
+    ///   `listedHoldSpan`.
     func computeChanges(snapshot: [HyprWindow],
                         runningPIDs: Set<pid_t>,
                         excludedBundleIDs: Set<String>,
-                        focusedWindowID: CGWindowID) -> WindowChanges {
+                        focusedWindowID: CGWindowID,
+                        unreadableWindowIDs: Set<CGWindowID> = []) -> WindowChanges {
         let currentIDs = Set(snapshot.map { $0.windowID })
+
+        // a known window missing from the snapshot is gone only when AX
+        // answered for it. one that is on screen by the window server's
+        // account but whose app did not answer is held where it is, in every
+        // store, until a pass can read it again: a single failed read used to
+        // pull the window out of its tree, expand the neighbour over it, and
+        // re-insert it somewhere else on the next poll.
+        let missing = stateCache.knownWindowIDs.subtracting(currentIDs)
+        let unreadable = missing.intersection(unreadableWindowIDs)
+        // one AX question per missing window per cycle, shared between the
+        // hold and the hidden classification below
+        var states: [CGWindowID: AccessibilityManager.HiddenWindowState?] = [:]
+        func hiddenState(_ id: CGWindowID, pid: pid_t) -> AccessibilityManager.HiddenWindowState? {
+            if let asked = states[id] { return asked }
+            let state = accessibility.hiddenWindowState(windowID: id, pid: pid)
+            states[id] = state
+            return state
+        }
+        let listed = listedButOffScreen(missing.subtracting(unreadable), runningPIDs: runningPIDs,
+                                        state: hiddenState)
+        let held = unreadable.union(listed)
+        noteHeld(unreadable: unreadable, listed: listed)
 
         // partial AX snapshots (post-wake, unresponsive apps) can report half
         // the desktop gone in one cycle; real user actions never do. skip the
         // whole cycle before mutating any cache state — but only a bounded
         // number of times, so a genuine mass close still processes.
-        let apparentlyGone = stateCache.knownWindowIDs.subtracting(currentIDs)
+        let apparentlyGone = missing.subtracting(held)
+        // while locked or asleep nothing is marked gone, and nothing else in
+        // the cycle is applied either: the snapshot is not the desktop
+        if !apparentlyGone.isEmpty, sessionInterruptionActive() {
+            let line = "session interruption: \(apparentlyGone.count)/\(stateCache.knownWindowIDs.count)"
+                + " known windows missing — holding them, nothing marked gone"
+            hyprLog(interruptionHoldLogged ? .debug : .notice, .discovery, line)
+            interruptionHoldLogged = true
+            return WindowChanges(newWindows: [], newOnDisabledMonitor: [], returned: [],
+                                 goneIDs: [], fullyForgottenIDs: [], screenDrift: [],
+                                 focusedWindowGone: false, requestsRecheck: false,
+                                 heldForInterruption: true)
+        }
         if apparentlyGone.count >= 3, apparentlyGone.count * 2 > stateCache.knownWindowIDs.count,
            massGoneSkips < 3 {
             massGoneSkips += 1
@@ -234,11 +457,13 @@ final class WindowDiscoveryService {
             stateCache.knownWindowIDs.insert(w.windowID)
             stateCache.windowOwners[w.windowID] = w.ownerPID
 
-            // auto-float excluded apps and explicitly fixed-size windows
+            // auto-float excluded apps, explicitly fixed-size windows and
+            // quick look previews
             let excluded = bundleIDForPID(w.ownerPID).map(excludedBundleIDs.contains) ?? false
             if let reason = FloatingAdmissionPolicy.reason(
                 isExcluded: excluded,
-                isSizeSettable: isWindowSizeSettable(w)
+                isSizeSettable: isWindowSizeSettable(w),
+                isQuickLookPanel: w.isQuickLookPanel
             ) {
                 stateCache.floatingWindowIDs.insert(w.windowID)
                 w.isFloating = true
@@ -263,14 +488,26 @@ final class WindowDiscoveryService {
             newWindows.append(w)
         }
 
-        // gone
-        let gone = stateCache.knownWindowIDs.subtracting(currentIDs)
+        // gone. the held ids stay out of this: they are still known
+        let gone = apparentlyGone
         for id in gone {
             goneIDs.insert(id)
+            // startup and Retile All register windows without a discovery
+            // pass, so the cached window is the other place a panel shows up
+            let isQuickLookPanel = quickLookPanelIDs.contains(id)
+                || stateCache.cachedWindows[id]?.isQuickLookPanel == true
             stateCache.tiledPositions.removeValue(forKey: id)
             stateCache.cachedWindows.removeValue(forKey: id)
 
-            if let pid = stateCache.windowOwners[id], runningPIDs.contains(pid) {
+            if isQuickLookPanel {
+                // never a ghost and never reserved; its floating flag goes
+                // with it
+                let bundle = stateCache.windowOwners[id].flatMap(bundleIDForPID) ?? "?"
+                stateCache.forget(id)
+                fullyForgotten.insert(id)
+                hiddenAt.removeValue(forKey: id)
+                hyprLog(.notice, .discovery, "quick look panel gone: \(id) (\(bundle)) — forgotten with its floating state, no ghost")
+            } else if let pid = stateCache.windowOwners[id], runningPIDs.contains(pid) {
                 // app still running — window minimized/hidden/closed-but-app-alive.
                 // keep cache state intact apart from moving to hidden, so an
                 // un-minimize comes back as "returned" not "new".
@@ -281,7 +518,7 @@ final class WindowDiscoveryService {
                 // Cmd-H'd, on another Space, or unreadable. nil (AX unreadable)
                 // reserves too — the safe side — but gets re-checked next cycle
                 // so a close isn't reserved forever.
-                let state = accessibility.hiddenWindowState(windowID: id, pid: pid)
+                let state = hiddenState(id, pid: pid)
                 if state != .absent {
                     stateCache.reservedHiddenWindowIDs.insert(id)
                     if state == nil { unverifiedReservedIDs[id] = 0 }
@@ -319,6 +556,8 @@ final class WindowDiscoveryService {
         stateCache.reservedHiddenWindowIDs.formIntersection(stateCache.hiddenWindowIDs)
         unverifiedReservedIDs = unverifiedReservedIDs.filter { stateCache.hiddenWindowIDs.contains($0.key) }
         let drift = detectScreenDrift(snapshot, justReturned: reopened)
+
+        quickLookPanelIDs = Set(snapshot.lazy.filter(\.isQuickLookPanel).map(\.windowID))
 
         let focusedGone = goneIDs.contains(focusedWindowID)
 
@@ -369,6 +608,9 @@ final class WindowDiscoveryService {
             }
             guard !currentIDs.contains(id) else { continue }
             guard let pid = stateCache.windowOwners[id], runningPIDs.contains(pid) else { continue }
+            // an app the walk is backing off from would answer nil without
+            // being asked; that is not one of the few asks this gets
+            guard !accessibility.isBackingOff(pid: pid) else { continue }
             switch accessibility.hiddenWindowState(windowID: id, pid: pid) {
             case .absent:
                 stateCache.reservedHiddenWindowIDs.remove(id)

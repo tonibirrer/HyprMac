@@ -243,17 +243,18 @@ struct LayoutEngine {
         }
 
         let leaf = placement.leaf
-        let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize,
-                                        padding: outerPadding) ?? rect
+        leaf.insert(window)
+        // the axis chosen now is the axis this split keeps. read off the
+        // rect at every layout, a later ratio change or a constrained
+        // neighbour flipped it and turned a stack into columns. a remembered
+        // boundary brings its own axis back through applySavedRatios.
         // a direction the full-height rule forced belongs to the window,
         // not the slot: the column lock re-derives it on every mapping
-        // change, so no override is pinned here (it would outlive a swap)
-        let needsOverride = !placement.columnRule
-            && leaf.splitOverride == nil
-            && leaf.savedSplitRatio == nil
-            && placement.direction != leaf.direction(for: leafRect)
-        leaf.insert(window)
-        if needsOverride { leaf.splitOverride = placement.direction }
+        // change, so it is never pinned (it would outlive a swap)
+        if leaf.splitOverride == nil, !placement.columnRule {
+            leaf.splitOverride = placement.direction
+            leaf.splitOverrideIsAutomatic = true
+        }
         tree.applyFullHeight()
         if let leafRect = tree.rectForNode(leaf, in: rect, gap: gapSize, padding: outerPadding) {
             hyprLog(.debug, .lifecycle, "smart insert fit at depth \(leaf.depth) (\(Int(leafRect.width))x\(Int(leafRect.height)))")

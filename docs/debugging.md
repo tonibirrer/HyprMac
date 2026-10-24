@@ -181,6 +181,8 @@ logs no trace line; it appears only in typed results. Four line names:
   — once per window after its writes, listing every AX setter that went
   out with its raw `AXError` code (0 is success) and how long it took.
   `size2` is the second size write of the resize-move-resize pattern.
+  A window that moves first lists `position` first, then
+  `settle:ok/<n>ms` or `settle:cut/<n>ms` for the wait on its position.
   `complete=true` means all three setters returned success; it is
   evidence that the writes were issued, not proof the app applied them.
   A window that never got past the EnhancedUI bracket logs `steps=none`.
@@ -202,7 +204,15 @@ logs no trace line; it appears only in typed results. Four line names:
   for, `complete` every window whose three setters all returned
   success. `write` covers the write pass, `read` the settle loop,
   `settle` just the sleeps inside it, and `headroom` is what was left
-  of the 0.36 s deadline.
+  of the attempt's deadline: 0.36 s, or 1 s for a pass that moves a window
+  across a backing scale change, grown for the targets and cut to what is
+  left of the two-second pass budget (`docs/tiling-algorithm.md`
+  "Two-pass layout").
+- `frame attempt: phase=candidate gen=<n> wids=[…] verdict=accepted in
+  place — every window is already on its target in two reads, nothing
+  written` — at debug, instead of the line above, for a first pass whose
+  targets the capture already found in place and a second read
+  confirmed. No setter went out and nothing was waited for.
 
 `FrameReadbackPoller` logs one `min evidence:` line per window it treats
 as a min-size conflict, under the same category and tier:
@@ -219,6 +229,94 @@ accompanies `learn=true`. The enum has two more cases,
 the line is only reached inside a rejected candidate or adjusted pass,
 and a restoration pass classifies nothing, so it logs no `min evidence:`
 lines at all.
+
+Every candidate that is refused also logs one line at `.notice` under
+`tiling`, so Console shows it without the file log or the trace tier:
+
+```
+verified layout candidate failed: reason=geometryMismatch(74) phase=candidate off=[74: target=(1724.0, 38.0, 1708.0, 1394.0) actual=(1724.0, 38.0, 1708.0, 1136.0)] actual=[115: (8.0, 38.0, 1708.0, 1394.0), 74: (1724.0, 38.0, 1708.0, 1136.0)]
+verified layout rollback leaves newcomers in place: ids=[74] — their originals are outside the restoration rect
+```
+
+`off` lists each window that read back more than a point from its target,
+or `actual=unread` when the readback never got it. `phase` is the pass that
+failed last: `candidate`, or `adjusted` after a min-size ratio adjustment.
+The `verified layout rejected and restored:` and `verified layout
+degraded:` lines that follow print the frames after the rollback, which is
+why this line exists. The second line names newcomers whose captured
+original was off the restoration rect — a window moved in from another
+screen, or a parked one. The rollback puts the incumbents back and leaves
+those wherever the candidate left them: on the destination if their writes
+went out, where they were if the candidate failed before reaching them. An
+ordinary tiling pass then reports them stranded, and the admission
+recovery's lines follow.
+
+An attempt that times out also logs one `.notice` line with its timings, so
+Console shows which call used up the budget without the file log (the numbers
+here are made up):
+
+```
+frame attempt timed out: phase=candidate gen=812 wids=[59300] reason=deadlineExceeded written=[59300] complete=[59300] read=[] write=190ms readLoop=190ms settle=0ms elapsed=380ms deadline=360ms samples=1 slowestRead=190ms steps=[59300:size:0/2ms,position:0/95ms,size2:0/95ms/total=192ms]
+```
+
+`read` lists the windows that read back before the budget ran out.
+`steps` is per window: each setter with its raw AX code and duration, then
+the window's total, which also covers the Enhanced UI begin. `slowestRead` is the
+longest single position-plus-size read. Timeouts are `deadlineExceeded`,
+`attemptsExhausted` and `cannotComplete` failures.
+
+A pass that moves a window onto a screen with a different backing scale
+logs, before its first write:
+
+```
+verified layout scale change: ids=[59300:1x→2x] deadline=1000ms
+```
+
+A window crossing onto another screen logs its write order once per attempt,
+before its first write. The reason names the screen holding most of its
+original:
+
+```
+write order: wid=77803 size-first (fits source S34C65xT) target=1496x841
+write order: wid=5100 position-first (does not fit source LG BL450) target=3424x1399
+write order: wid=5300 position-first (parked) target=1496x928
+```
+
+A position-first window whose position does not read back on target twice
+within a third of the deadline is sized anyway, and says so:
+
+```
+position settle cut short: wid=<id> phase=candidate after=<n>ms samples=<n> last=(x,y) target=(x,y) — writing size anyway
+```
+
+The admission recovery's narrowing lines, all `[notice] [tiling]`:
+
+- `admission retry tiles what fits: refused=[…] ws<N> — the known minima
+  do not fit them beside the rest` — the retry dropped the fewest
+  newcomers the known floors rule out and ran the pass for the rest,
+  before writing or after an attempt that learned the floors. The dropped
+  ones come back refused and float without another attempt, as
+  `noFittingSlot`.
+- `admission recovery narrowed: floating […] ws<N> cause=<failure> —
+  retrying […] without them (round <n> of 3)` — the retry was refused on
+  some of its newcomers: those float, the rest get the pass again inside
+  the same retry. After three rounds the rest float as before.
+
+The admission recovery's timeout lines, all `[notice] [tiling]`:
+
+- `admission retry timed out: ids=[…] ws<N> cause=<failure> — not a refusal,
+  retrying in <ms>ms` — another retry is armed (500 ms, then 1000 ms).
+- `admission retry attempt: ws<N> bypassMinimaBefore=[…] keepOnTimeout=true`
+  — the last retry the bound allows.
+- `verified layout kept unverified: reason=<failure> phase=<…> ids=[…] — a
+  timeout, not a refusal; no rollback`, then `admission kept unverified:
+  ws<N> ids=[…] reason=<failure> — tiled, key marked unverified`, then
+  `admission recovery resolved: <id> (kept tiled unverified after <n>
+  timed-out retries, last=<failure>)`.
+- `admission recovery held: ids=[<id>] ws<N> — last retry timed out without
+  a complete write (<failure>); in no tree, not floated` — some window did
+  not get all three setters back, so the last retry had nothing to keep. A
+  later layout that tiles the window releases it.
 
 `MinSizeMemory` then logs what it did with that evidence under
 `category: lifecycle`, in three shapes:
@@ -388,7 +486,8 @@ holds it.
 `recovery pending` reports newcomers a failed admission left outside the
 tree and that admission recovery has not finished with. A window is listed
 while its one retry is armed, and while it is waiting for evidence — it was
-unreadable, or its workspace was hidden, when its turn came. It leaves the
+unreadable, its workspace was hidden, the screens were being reconfigured,
+or the session was locked or asleep when its turn came. It leaves the
 list when the retry tiles it, when a later layout tiles it, when the
 fallback floats it in place, when the user acts on it, or when it goes
 away. An id that stays here across several dumps is a window nothing can
@@ -593,17 +692,226 @@ visible topmost floater by its physical window ID. A delayed restore must
 still refer to the current, visible, known tiled focus target and must not
 run during menu tracking or scratchpad display.
 
-Actual reconciliation writes log `raise behind: wids=[…] focus=<id>`,
-`raise behind failed: wid=<id> rc=<AXError>`, and
+Actual reconciliation writes log `raise behind: wids=[…] under=[…] focus=<id>
+front=<pid>`, `raise behind failed: wid=<id> rc=<AXError>`, and
 `raise behind restore: wid=<id>` at notice level. Same-app passes that write
 nothing stay silent. Correlate these with `ffm-topmost-floating`, ordinary
 `ffm-topmost`, `cycleFocus`, and `ax event: focusedWindowChanged pid=<pid>`.
+The next section covers the lines added for issue #10.
 
 Live acceptance requires two overlapping Safari windows, one tiled and one
 floating after admission refusal. Hover each exposed window in turn, move
 to another app, then press Hypr+Shift+T. Check exact AX window identity and stable
 z-order as well as the visible result; unit tests cannot establish macOS AX
 behavior. Keep existing logs before restarting the app.
+
+### Floaters, open menus and no-raise focus (issue #10)
+
+The report: with tiled windows and a floater on the same workspace, a
+Chrome bookmark-folder menu closed as soon as it opened, and some apps
+(Zoom) flickered between focused and unfocused. A related problem with
+focus-follows-mouse: moving off a floater onto the tile behind it lifted
+the tile over the floater.
+
+What the source showed:
+
+- `raiseBehind` ran 50 ms after every app activation and at the end of every
+  discovery pass. A click on a tile lifts it over the floater, so the next
+  pass raised the floater and, 20 ms later, restored focus to the tile with
+  `focusWithoutRaise`. That restore writes kAXMain, may call
+  `activate()`, and posts key-window events, and its own comment said those
+  events dismiss menus. Chrome's bookmark folders are not NSMenus
+  (chromium maps a views `TYPE_MENU` widget to `kCGPopUpMenuWindowLevel`,
+  101), so the HIToolbox menu-tracking guard never saw them.
+- Hover hit-testing skipped every window whose layer is not 0. With a menu
+  hanging over a floater, the pointer "hit" the floater and focus-follows-mouse
+  focused it with a synthetic click.
+- Nothing limited `raiseBehind`. An app that activates itself when raised,
+  or a raise Tahoe ignores, could repeat raise and restore on every
+  activation.
+- `focusWithoutRaise` is not raise-free: kAXMain plus
+  `NSRunningApplication.activate` bring the app's main and key windows
+  forward, and the hover path adds a synthetic title-bar click.
+
+What changed:
+
+- `WindowStacking` reads the window list. An open popup is a window of the
+  frontmost app at layer 101 or above (below the screen saver). Hover focus,
+  `refocusUnderCursor`, `raiseBehind`, its restore, the focus invariant, the
+  focus repair on a bare Hypr press, and the no-raise fallback all stand
+  down while one is open. A popup-level window open longer than 30 s is
+  treated as part of its app and stops counting. A raised window of the
+  frontmost app under the pointer (a menu, a floating panel) is never
+  hit-tested through. Other apps' high windows are still skipped, so a
+  click-through overlay does not freeze focus.
+- `raiseBehind` only raises a floater a tile actually overlaps, checks the
+  stack 50 ms later, and restores focus only when the raise moved the front
+  app away from the focused tile. `RaiseBehindThrottle` cools a
+  floater/tile pair down after a raise that did not lift it (30 s), a raise
+  within 1 s of our own restore (the loop), or 4 raises in 5 s (10 s). The
+  loop cooldown starts at 15 s and doubles with each loop up to 600 s. A
+  pair quiet for 300 s after its cooldown ends starts over at 15 s.
+- `TiledFocusRouter` handles hover, Hypr+Arrow, Hypr keydown, the focus
+  invariant, the raise restore and the click re-raise. Workspace switches,
+  window moves and the scratchpad still use their own focus calls, which can
+  lift a tile. When a floater covers the target tile it sends only
+  `_SLPSSetFrontProcessWithOptions` and
+  the key-window event records, as yabai does, plus yabai's lost/gained pair
+  when focus moves inside the frontmost app. No kAXMain write, no
+  `activate()`, no click. 80 ms later it checks whether the target app is
+  frontmost and the target window is AX-focused. If not, it falls back to
+  the usual path and logs it, unless a menu opened or the user switched to
+  another app meanwhile. Hypr+Arrow warps the cursor to the part of the
+  tile the floater leaves uncovered.
+- The dim cuts a floater's hole only where the floater is in front. For
+  each floater, `WindowStacking.occluders` lists the tiles stacked above it
+  in the window list, and `DimmingOverlay` takes them back out of the hole.
+  Before this, clicking a tile over a floater left a bright rectangle on
+  the tile where the floater used to show. A floater the list does not show
+  keeps its whole hole, as before. The cutouts are redrawn when the stack
+  can change: after a click's mouse-up, a focused or main window change, an
+  app activation, a raise-behind or click re-raise, and the usual focus
+  path. `scheduleRestackRefresh` coalesces each burst into one refresh.
+  That refresh reads the window list once for the dim and once more for
+  the border occlusion when the border is on. It runs per event, not per
+  mouse move, and only while a floater is visible.
+- The click re-raise keeps floaters in front of tiles after a click. About
+  40 ms after the mouse-up of a real click on a tile (not a drag, not a
+  Hypr or Option gesture, not our own synthetic click), each floater on the
+  same workspace that the tile now covers gets an AXRaise. 50 ms later the
+  stack is checked, and keyboard focus goes back to the tile through
+  `TiledFocusRouter` (`reason=click-reraise`), so the tile stays key with
+  the floater on top. The click itself reaches the tile as usual. It stands
+  down while a menu tracks or a popup is open, while the scratchpad is up,
+  when focus has moved on, and when the click landed inside the floater's
+  frame, since raising it would cover the spot just clicked. A raise that
+  leaves the floater under the tile, or a refocus that misses, cools the
+  pair down for 30 s, so an app that refuses stops costing a flicker per
+  click. A click re-raise counts toward no burst, since it follows one
+  click. When the floater's app took the front, the click counts as a
+  loop and the pair cools at once, on the same doubling scale.
+- A click is credited to the window the window list puts under the
+  pointer when that window is one of ours, so a floater a tile has buried
+  no longer takes the focus tracker from the tile that got the click.
+
+Log lines, all at notice level:
+
+| Line | Category | Meaning |
+|---|---|---|
+| `ffm paused: popup wid=<id> pid=<pid> layer=<n> bounds=<rect>` | mouse | hover focus stopped for an open menu |
+| `ffm resumed: popup <id> gone` | mouse | hover focus back |
+| `ignoring popup <id> pid=<pid> layer=<n>: open 30s, treated as part of the app` | mouse | a menu-level window that never closes no longer counts for any guard |
+| `refocus under cursor skipped: popup …` | mouse | post-click refocus held off |
+| `raise behind deferred: popup wid=<id> pid=<pid> layer=<n>` | floating | raise held until the menu closes |
+| `raise behind: wids=[…] under=[…] focus=<id> front=<pid>` | floating | floaters raised, and the tiles that covered them |
+| `raise behind ineffective: wid=<id> still under <id> — cooldown 30s` | floating | the window server kept the tile on top |
+| `raise behind kept focus: wid=<id> front=<pid>` | floating | no restore sent |
+| `raise behind restore: wid=<id> (front moved <pid> → <pid>)` | floating | the raised app took focus; it went back |
+| `raise behind restore skipped: popup wid=<id> layer=<n>` | floating | a menu opened meanwhile, so focus stayed where it was |
+| `raise behind cooldown: pair=<floater>/<tile> reason=loop\|burst for <n>s` | floating | loop or burst stopped |
+| `no-raise focus: wid=<id> pid=<pid> reason=<why> floaters=[…] layers=[…] front=<pid> crossApp=<bool> prevKey=<id>` | focus | a covered tile was focused without activate or click. `layers` 3 means the floater was at the floating level; `crossApp=true` means SkyLight had to switch the front process |
+| `no-raise focus verify: wid=<id> … front=<pid> (want <pid>) key=<id> floatersAbove=[…] layers=[…] buried=[…] → landed\|missed, floaters kept above\|buried` | focus | whether focus landed, and whether the floaters stayed above the tile |
+| `no-raise focus fallback: wid=<id> path=activate\|activate+click after a miss (front=<pid> want <pid>, key=<id>); this lifts the tile over […]` | focus | it did not land; the usual path ran and lifts the tile |
+| `no-raise focus superseded: wid=<id>` | focus | a newer focus replaced a same-app hand-off |
+| `no-raise focus verify: wid=<id> superseded` | focus | a newer focus came before the check |
+| `no-raise focus fallback skipped: …` | focus | a menu opened, or the user switched apps, meanwhile |
+| `focus invariant skipped: popup …` | focus | the invariant held off |
+| `ensureFocus skipped: popup …` | focus | a bare Hypr press left the menu open |
+| `click re-raise: floater=<id> tile=<id> sameApp=<bool> → on top` | floating | a click buried the floater and the raise put it back |
+| `click re-raise: … → ineffective — cooldown 30s` | floating | the window server kept the tile on top; the pair rests |
+| `click re-raise: … → skipped(<reason>)` | floating | `click under floater`, `focus moved`, `popup …`, `menu tracking`, `scratchpad`, `tile app not front`. A cooldown skip logs at debug |
+| `click re-raise failed: wid=<id> rc=<n>` | floating | AXRaise returned an error |
+| `click re-raise refocus missed: tile=<id> floaters=[…] — cooldown 30s` | floating | the tile did not stay key under the floater |
+| `click re-raise refocus skipped: …` | floating | focus moved, a menu or popup opened, or the scratchpad came up before the hand-back. The floater may stay key |
+
+One repro answers the Tahoe question. If `verify` says `landed` with the
+floater in `floatersAbove` and an empty `buried`, the no-raise path works
+there. If it says `missed` and a `fallback` line follows, Tahoe refused it
+and hover onto a covered tile still lifts the tile, as before. On the
+MacBook (macOS 27, Safari only, September 26) hover, Hypr+Arrow and typing
+into a covered tile all logged `landed` with the floater in
+`floatersAbove`. Every one of those had the target's app already in
+front. No-raise focus that has to switch the front process
+(`crossApp=true`) has not been seen live yet.
+
+Cross-app AXRaise does not work on macOS 27. The same day, a Messages
+Quick Look preview under a Safari tile logged `raise behind: wids=[5252]
+under=[71889]` and then `raise behind ineffective: wid=5252 still under
+71889`. So raise-behind and the click re-raise can only lift a floater of
+the tile's own app. A floater of another app stays in front only if focus
+never lifts the tile over it, which is the no-raise path's job.
+
+Floating-level floaters. AppKit puts a floating panel (a Quick Look
+preview, an inspector) at the floating level, CG layer 3, while its app is
+active, and drops it to layer 0 when the app deactivates. The floater rules
+used to look at layer 0 only. After a click on the preview made Messages
+active, the preview sat at layer 3 and hover onto a Safari tile saw no
+covering floater. It took the usual path, activated Safari, the preview
+dropped to layer 0, and the tile came up over it. Now a window HyprMac
+manages as a floater counts on layer 0 or layer 3 in the router,
+raise-behind, the click re-raise and the dim cutouts. A layer-3 floater is
+above every tile, so its cutout is whole. Unmanaged layer-3 windows are
+still ignored, and a raised window of the front app that we do not manage
+still blocks hover. Hovering a managed floater at layer 3 is a hit on that
+floater, and so is a click on it.
+
+For that repro, click the preview, then hover a Safari tile. It should log
+`no-raise focus: wid=<tile> pid=<safari> reason=ffm floaters=[<preview>]
+layers=[3] front=<messages> crossApp=true`. Then one of:
+
+- `no-raise focus verify: … front=<safari> (want <safari>) key=<tile> …
+  → landed, floaters kept above`: the process switch worked and the
+  preview stayed in front after dropping to layer 0.
+- `… → landed, floaters buried`: focus moved, but the preview fell under
+  the tile. A `raise behind … ineffective` line usually follows.
+- `… → missed, …` then `no-raise focus fallback: … after a miss (…)`:
+  SkyLight would not switch the front process. The usual path ran and
+  lifted the tile, as before this fix.
+
+For the click re-raise, click a tile beside a floater. Same app should log
+`click re-raise: … sameApp=true → on top`, then `no-raise focus: …
+reason=click-reraise` and `no-raise focus verify: … → landed, floaters
+kept above`. A cross-app pair logs `→ ineffective — cooldown 30s` once per
+30 s, as on macOS 27. The tile then stays on top, and the dim shows the
+floater only where it is in front.
+
+### A floater changed size or left the screen
+
+The report (September 26): a floating window dragged onto the S34C65xT
+ultrawide grew far past the screen and off its edge. The notice log showed
+only the drag. The cause is not confirmed. Reading the source found no code
+that scales a floater's size by a ratio between screens, and no frame write
+at all for a plain title-bar drag of a floater: the drag capture is
+ineligible under a floater, discovery's screen drift skips floaters, and the
+floater keeps its workspace.
+
+Every frame HyprMac writes to a floater now goes through
+`FloatingFramePlacement` (`HyprWindow.placeFloating`). It logs one
+`[notice] [floating]` line and clamps the frame into the destination
+screen's usable frame, shrinking it if it is too big and moving it in if it
+hangs off an edge:
+
+```
+floating frame write: wid=<id> reason=<why> from=(x, y, w, h) on '<screen>' @<n>x to=(x, y, w, h) on '<screen>' @<n>x [clamped from (x, y, w, h) into usable (x, y, w, h)]
+```
+
+The reasons are `workspace reveal, saved frame`, `carry to another screen`,
+`float toggle, original frame`, `float toggle, centered (no usable
+original)`, `focus cycle, off-screen floater`, `scratchpad show`,
+`scratchpad untile`, `all workspaces full, original frame`, `stop, original
+frame` and `stop, cascade onto the main screen`. Parking in the hide corner
+is position-only and does not log here.
+
+A floater drag also logs, 0.18 s after the release:
+
+```
+floater drag: wid=<id> from=(x, y, w, h) on '<screen>' @<n>x to=(x, y, w, h) on '<screen>' @<n>x resized=<bool> fitsUsable=<bool>
+```
+
+and `floater drag +1s: …` if the frame is still changing a second later. On
+the next repro: a `floater drag` line with `resized=true` and no `floating
+frame write` line before it means the app or macOS changed the size, not
+HyprMac. A `floating frame write` line names the path that did it.
 
 ### Rejected drag feedback and source restoration
 
@@ -641,6 +949,56 @@ started with equal halves and rejected Messages at 528 points. Drag candidates
 now adjust their private ratios for known minimum sizes before AX writes,
 then pass through the existing readback and restoration checks. This does
 not publish unverified frames or change admission recovery.
+
+### Tiled drag decisions and drops across monitors
+
+Every tiled release logs its decision under `category: tiling`, in this
+order. Points and frames are global CG coordinates (top-left origin). A plain
+click is a release that never moved, so its lines are trace tier (`.debug`):
+the `release` line always, and the `mode` and `settle read` lines when the
+mode is `none` or the gesture is `unmoved`. Turn on `HyprMacVerboseLogging`
+(see Log tiers) to see them in a Release build. Everything else is `.notice`.
+
+- `tiled drag release: dragged=<id> point=cg(<x>,<y>) source=ws<N> on
+  '<name>' display=<n> full=<rect> sourceTiles=<rect> onSourceTiles=<bool>
+  release='<name>' display=<n> full=<rect> sameTree=<id edge|none>`. When
+  the point is on the source tiles it adds `tiles=[…]`, one entry per source
+  tile.
+- `tiled drag mode: dragged=<id> swap=<bool> mode=<insert(<id> <edge>)|swap(<id>)|crossMonitor|none …>`.
+- For `crossMonitor`, WindowManager may log `tiled drag across monitors
+  refused on <name>: <reason>` (a disabled monitor, the scratchpad). The
+  engine then logs either `tiled drag across monitors declined: …
+  reason=<…>`, and the release restores, or `tiled drag across monitors
+  target: … ws<N> on '<name>' members=[…]`.
+- `tiled drag settle read: dragged=<id> original=<rect> read=<rect> dw=<n>
+  dh=<n> press=cg(<x>,<y>) pressEdges=[<edges>]|unknown
+  oppositeDrift=[<edge>:<n>,…] gesture=unmoved|move|resize
+  centerOnSource=<bool> decision=<…>`. This is the read 100 ms after release.
+  `oppositeDrift` is how far the edge opposite each grabbed one moved. A
+  resize needs a press in an edge's band, every drift within 3 points, and a
+  grabbed axis changed by more than 4. One centred off the source tiles
+  restores. A failed read logs `tiled drag settle read failed: …
+  reason=<trace>` instead.
+- For a plain move across monitors:
+  - `tiled drag across monitors targets: point=cg(…) tiles=[<id>
+    frame=(x,y,w,h) dist=<d> l=<> r=<> t=<> b=<>; …] chosen=<id> <edge>`. The
+    frames are the release tree's layout slots, the same ones the live drop
+    preview uses. The four fractions are the normalized distances to each
+    edge, measured from
+    the point clamped into that tile. The smallest picks the edge, with ties
+    going left, right, top, bottom.
+  - Then `tiled drag across monitors: … placement=<edge> of <id>|swap with
+    <id>|root`.
+
+Failure reasons print raw AX codes, for example `writeFailed(77705, -25204)`
+(`-25204` is `kAXErrorCannotComplete`, what an AX messaging timeout
+returns). A drag call that times out gets one longer try, logged as `frame
+attempt AX timeout recovery: phase=<capture|candidate|restoration>
+reason=<trace> ids=[…] timeout=250ms deadline=<ms>`, then `… accepted` or
+`… refused: reason=<trace>`. The deadline is 750ms, or 1000ms when the drop
+runs under the scale-change budget. Once the drop's 2.5-second budget is
+spent, the longer try is cut instead: `frame attempt AX timeout recovery
+skipped: phase=<…> reason=<trace> ids=[…] — the drop's time budget is spent`.
 
 ### Tab detach followed by a false restoration warning
 
@@ -739,6 +1097,12 @@ AX before `refreshDimming` and `refreshBorderOcclusion` to avoid
 the "half-dim" artifact — if you see stale-rect dimming, that read
 path is the place to look first.
 
+A bright hole on a tile, or a dimmed floater, means the floater
+cutout followed an old stack. The cutouts come from the window list
+through the mouse tracker's 80 ms cache, and `scheduleRestackRefresh`
+drops that cache first. A z-order change none of its triggers sees
+stays wrong until the next focus change or poll.
+
 ### "Why did discovery think this was a new window?"
 
 ```
@@ -760,6 +1124,126 @@ looked", which only the file log keeps:
 - `poll: 14 windows, 213ms since last` — at the top of every
   `pollWindowChanges`, with the snapshot size and the elapsed wall
   clock since the previous poll.
+
+### Windows rearranged after a lock or sleep
+
+A locked session, sleeping displays and a switched-out user session all
+empty the on-screen window list. `WindowDiscoveryService` holds every
+missing window from the start of such a span to its end. A poll that finds
+a known window missing does nothing else: nothing is marked hidden, nothing
+leaves its tree, and no retile, drift re-apply, park repair or recovery
+attempt runs from it. All `[notice] [discovery]`:
+
+```
+session interruption began (locked) — missing windows are not marked gone until it ends
+session interruption: 5/5 known windows missing — holding them, nothing marked gone
+session interruption: screens asleep ended after 142s, still locked
+session interruption ended (locked) after 205s
+session interruption ended by hotkey press (was locked)
+session interruption ended by action (was locked)
+session interruption cap reached after 43200s (locked) — missing windows count again
+```
+
+The spans are `com.apple.screenIsLocked` to `screenIsUnlocked`,
+`screensDidSleep` to `screensDidWake`, and `sessionDidResignActive` to
+`sessionDidBecomeActive`. The span ends when every reason has ended. The
+holding line is `.notice` once per span and `.debug` after that. A span
+whose end notification never came also ends on a stop, on the 12-hour cap,
+on any bound hotkey firing, or on anything that goes through
+`handleAction`: a workspace button or the Keybinds or Workspace overview
+row in the menu-bar menu, or choosing a workspace in the overview. A bare
+Hypr press does not end it, and neither does choosing a window in the
+overview.
+
+The admission recovery's own 250 ms retry waits for the span too. A retry
+that comes due inside it runs no attempt, floats nothing and retiles
+nothing, because `getAllWindows()` is partial then. The window logs
+`admission recovery pending: … not judgeable yet` and waits for evidence.
+The first poll or retile after the span ends gives it its one attempt;
+after an unlock, that poll comes once the 4-second hold below is over.
+
+Every notification listed above, and `didWake`, goes through
+`systemInterruption`. Each one arms the 4-second `discovery suppressed`
+hold, resets the hotkey state, clears a stuck Dock flag, ends menu tracking
+and hides the scratchpad. `screensDidSleep` is new to that list, so display
+sleep on its own now does all of that as well. Before the span existed, a
+lock that outlasted the 4-second hold and the three mass-gone skips marked
+every window hidden, and the unlock rebuilt each tree in reading order with
+default ratios.
+
+### A window vanished for a poll and came back somewhere else
+
+Two kinds of missing window are held rather than judged: kept known, on
+their workspace and in their tree, with no frame written to them, so the
+neighbours keep their slots and the return is usually a pass whose frames
+already stand, accepted in place. All `[notice] [discovery]`:
+
+```
+holding 1 unreadable window(s) in place: [21915] — on screen, but their app did not answer AX
+unreadable window(s) readable again: [21915]
+holding 2 window(s) off the screen in place: [15173, 21915] — their app still lists them (another Space, full screen, or a stale snapshot); hidden if not back within 5s
+off-screen hold ended: [15173, 21915]
+```
+
+The first is an app that failed the walk's window-list or frame read
+while the window server still shows the window (`AX window-list read
+FAILED for <bundle>` precedes it). The second is a window the window
+server no longer shows on screen while its app still lists it, neither
+minimized nor hidden with the app: a native full-screen app on the
+display, a Space switched away, or a stale snapshot. That hold lasts five
+seconds, and a poll is scheduled for when it runs out; a window still
+missing then is `window hidden` as before, with its slot reserved.
+`FLAP: … returned <n>ms after vanishing` on the return is the diagnostic
+for a window that was not held and came back within five seconds; with
+both holds in place it should be rare. Every tile pass logs
+`retile: ws<N> holds […] — leaves kept, no frame written` for the members
+it kept out of the pass.
+
+### "Why isn't this window managed?" (filtered windows, Quick Look)
+
+Discovery keeps only what `WindowAdmissionFilter` admits: standard windows
+and Quick Look panels, which always float. Everything else is dropped
+before it can claim a CG id. Each dropped window logs once per window id
+per launch, `[notice] [discovery]`:
+
+```
+AX filter dropped: wid=4811 pid=512 bundle=com.apple.finder reason=subrole role=AXWindow subrole=AXDialog roleDesc=dialog ident=nil modal=false title='…' frame=(400,200,265,480) cg=layer0 alpha=1.00
+```
+
+`reason` is `role`, `subrole` or `modal`. It can also be `fullScreen` or
+`noVisibleWindow` for a Quick Look-subrole window whose own id could not be
+read. `cg` is the window's own CG entry, or `none` when it has none on
+layer 0 or 3. Minimized windows are skipped before the filter and do not
+log.
+
+A window with the Quick Look subrole and a readable id logs its verdict
+instead, when the verdict changes, so once per opening while it stays
+admitted:
+
+```
+quick look panel admitted: wid=812 pid=431 bundle=com.apple.finder cg=layer3 alpha=1.00 frame=(555,238,810,543) — floats
+quick look panel not admitted: wid=812 pid=431 bundle=com.apple.finder reason=noVisibleWindow cg=layer3 alpha=0.00 frame=(555,238,810,543)
+quick look panel gone: 812 (com.apple.finder) — forgotten with its floating state, no ghost
+```
+
+`not admitted` reasons are `modal`, `fullScreen` (native full screen) and
+`noVisibleWindow` (no own CG window, alpha 0 as in Quick Look's own
+full-screen view, or a layer other than 0 or 3). `gone` means discovery
+forgot the panel instead of keeping it as a ghost. An admitted panel also
+logs `auto-float quick look preview` at `[debug] [discovery]` (file log
+only), and Hypr+T on it logs `float→tile refused: <id> is a quick look
+preview` at `[notice] [floating]`.
+
+To learn what a preview reports on a new macOS, open one and read the file
+log:
+
+```bash
+grep -E 'AX filter dropped|quick look' ~/Library/Logs/HyprMac/com.zachgray.HyprMac.debug.log
+```
+
+If the panel shows up as `AX filter dropped` with some other subrole, the
+subrole changed; `WindowAdmissionFilter.quickLookSubrole` is the one value
+to update.
 
 ## Retile churn / full-screen flicker
 

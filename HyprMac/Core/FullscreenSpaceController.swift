@@ -19,7 +19,8 @@ import Cocoa
 ///   hidden and the tiler lose it.
 ///
 /// Games are left alone: their processes are ignored, as the game screen
-/// owns them.
+/// owns them, and on a setup without one their Space is the user's to
+/// enter and leave like any app's.
 ///
 /// Threading: main thread only.
 final class FullscreenSpaceController {

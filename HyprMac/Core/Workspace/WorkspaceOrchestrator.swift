@@ -30,19 +30,27 @@ final class WorkspaceOrchestrator {
     private let dimmingOverlay: DimmingOverlay
     private let suppressions: SuppressionRegistry
     private let revalidation: MinimaRevalidation
+    /// Every admission result a move produces goes here, so a refused
+    /// arrival is tracked by the recovery like one from any other pass
+    /// instead of sitting assigned, visible and in no tree.
+    var noteAdmission: (TilingEngine.AdmissionResult) -> Void = { _ in }
 
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
     var currentFocusedWindow: () -> HyprWindow? = { nil }
     var actualFocusedWindow: () -> HyprWindow? = { nil }
     var focusTransferredWindow: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
     var warpToWindow: (HyprWindow) -> Void = { _ in }
+    var warpCursor: (CGPoint) -> Void = { _ in }
     var transferRejected: ((HyprWindow, String) -> Void)?
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
     var updatePositionCache: () -> Void = { }
-    var tileAllVisibleSpaces: () -> Void = { }
+    /// Retile every visible workspace. A switch hands over the walk it
+    /// already took: the walk between the last park write and the first
+    /// reveal write left the switched screen empty for its duration.
+    var tileAllVisibleSpaces: ([HyprWindow]?) -> Void = { _ in }
     /// Every window AX can see right now. A seam because the explicit
-    /// revalidation attempt needs the destination's tenants, and a test has
-    /// no desktop to read them off.
+    /// revalidation attempt needs the destination's tenants, a switch picks
+    /// the window to focus from it, and a test has no desktop to read them off.
     var allWindows: () -> [HyprWindow] = { [] }
     var animatedRetile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
     /// Fired as soon as the destination workspace and its screen are known,
@@ -117,6 +125,7 @@ final class WorkspaceOrchestrator {
             accessibility?.getActualFocusedStandardWindow()
         }
         self.warpToWindow = { [weak cursorManager] in cursorManager?.warpToCenter(of: $0) }
+        self.warpCursor = { [weak cursorManager] in cursorManager?.warp(to: $0) }
     }
 
     // MARK: - switch
@@ -154,11 +163,12 @@ final class WorkspaceOrchestrator {
         // the desired end state. Repeated Hypr+F is therefore a no-op, even if
         // that sole window is currently floating.
         guard sourceIDs.count > 1 else { return }
-        guard FloatingAdmissionPolicy.reason(
+        if let reason = FloatingAdmissionPolicy.reason(
             isExcluded: focused.bundleID.map(excludedBundleIDs().contains) ?? false,
             isSizeSettable: focused.isSizeSettable
-        ) == nil else {
-            rejectTransfer(focused, message: "This window cannot be tiled")
+        ) {
+            rejectTransfer(focused, message: reason == .excludedApp
+                ? FloatingAdmissionPolicy.neverTileMessage : "This window cannot be tiled")
             return
         }
         // a workspace with nothing on screen is empty, same as the menu bar:
@@ -340,7 +350,11 @@ final class WorkspaceOrchestrator {
     /// Suppresses `activation-switch` and `mouse-focus` for the duration
     /// (and a tail) of the switch — `best.focus()` queues asynchronous
     /// notifications that would otherwise re-bounce focus.
-    func switchWorkspace(_ number: Int, preferredWindowID: CGWindowID? = nil) {
+    ///
+    /// `preferredFrame` is where the caller just put the preferred window,
+    /// for the warp when AX has not caught up with that write yet.
+    func switchWorkspace(_ number: Int, preferredWindowID: CGWindowID? = nil,
+                         preferredFrame: CGRect? = nil) {
         // hold polls off for the duration of the transition. Tahoe AX
         // writes lag, so a poll mid-transition reads stale frames and
         // drift detection can falsely reassign windows.
@@ -387,7 +401,8 @@ final class WorkspaceOrchestrator {
                 focusBorder.hide(); dimmingOverlay.hideAll()
             } else if let best {
                 best.focus()
-                cursorManager.warpToCenter(of: best)
+                warp(toSwitchPick: best, preferredWindowID: preferredWindowID,
+                     placedFrame: preferredFrame, workspace: number, screen: result.screen)
                 focusController.recordFocus(best.windowID, reason: "switchWorkspace-already-visible")
                 updateFocusBorder(best)
             } else {
@@ -485,7 +500,9 @@ final class WorkspaceOrchestrator {
         let listed = Set(allWindows.map(\.windowID))
         let unlisted = tiledBefore.filter { !listed.contains($0) && isLiveTile($0) }
         let evidence = unlisted.isEmpty ? nil : describeUnlistedWindows(unlisted)
-        tileAllVisibleSpaces()
+        // every write above dropped the cached frame it changed, and the pass
+        // captures live frames, so the walk from before the parks is valid input
+        tileAllVisibleSpaces(allWindows)
         tilingEngine.accordionFrontOverride = nil
 
         // a workspace with a native-fullscreen window shows it: its app
@@ -496,7 +513,8 @@ final class WorkspaceOrchestrator {
             focusBorder.hide(); dimmingOverlay.hideAll()
         } else if let best {
             best.focus()
-            cursorManager.warpToCenter(of: best)
+            warp(toSwitchPick: best, preferredWindowID: preferredWindowID,
+                 placedFrame: preferredFrame, workspace: number, screen: result.screen)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")
             updateFocusBorder(best)
         } else {
@@ -591,7 +609,7 @@ final class WorkspaceOrchestrator {
         let windows = allWindows()
         guard windows.contains(where: { missing.contains($0.windowID) }) else { return false }
 
-        tileAllVisibleSpaces()
+        tileAllVisibleSpaces(windows)
 
         let stillMissing = untiledLiveTiles(missing, on: dropped.workspace)
         let placed = missing.subtracting(stillMissing)
@@ -705,6 +723,19 @@ final class WorkspaceOrchestrator {
         return carried
     }
 
+    /// The window a caller asked the switch to focus (a move that follows
+    /// its window, a pick in the overview) is warped to where it is going.
+    /// Any other pick keeps the plain warp to its live center.
+    private func warp(toSwitchPick window: HyprWindow, preferredWindowID: CGWindowID?,
+                      placedFrame: CGRect?, workspace: Int, screen: NSScreen) {
+        if window.windowID == preferredWindowID {
+            warpCursor(followPoint(for: window, workspace: workspace, screen: screen,
+                                   placedFrame: placedFrame))
+        } else {
+            cursorManager.warpToCenter(of: window)
+        }
+    }
+
     // MARK: - move focused window to workspace
 
     /// Move the focused window to workspace `number`.
@@ -721,7 +752,20 @@ final class WorkspaceOrchestrator {
     ///
     /// Special-cases windows on disabled monitors: they unfloat into
     /// the target as tiled windows on success.
-    func moveToWorkspace(_ number: Int) {
+    ///
+    /// `follow` also switches to the destination with the window focused.
+    /// A visible destination already gets that from the ordinary focus and
+    /// warp. A hidden one skips the park and the source retile: the switch
+    /// hides the source (same monitor) or retiles it (other monitor) in its
+    /// one pass, and focuses the moved window. A refused move never switches.
+    func moveToWorkspace(_ number: Int, follow: Bool = false) {
+        // a hand-edited keybind can name any number. 0 is the scratchpad's
+        // internal id and nothing past 10 exists, so neither is a destination.
+        guard Constants.workspaceRange.contains(number) else {
+            hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): no such workspace — ignored")
+            NSSound.beep()
+            return
+        }
         guard let focused = currentFocusedWindow() else { return }
         // hold polls off for the duration of the transition. Tahoe AX
         // writes lag, so a poll mid-transition reads the moved window
@@ -743,10 +787,13 @@ final class WorkspaceOrchestrator {
 
         let isFloating = stateCache.floatingWindowIDs.contains(focused.windowID)
 
-        hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): '\(focused.title ?? "?")' (\(focused.windowID)) floating=\(isFloating) currentWs=\(currentWorkspace.map(String.init) ?? "nil") srcScreen=\(screen.localizedName)")
+        hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): '\(focused.title ?? "?")' (\(focused.windowID)) floating=\(isFloating) follow=\(follow) currentWs=\(currentWorkspace.map(String.init) ?? "nil") srcScreen=\(screen.localizedName)")
 
-        // when coming from disabled monitor, unfloat so it enters tiling on target
-        let willTile = onDisabledMonitor || !isFloating
+        // when coming from disabled monitor, unfloat so it enters tiling on
+        // target. a quick look preview, or an app in Never tile, stays
+        // floating wherever it goes.
+        let isNeverTile = focused.bundleID.map(excludedBundleIDs().contains) ?? false
+        let willTile = ((onDisabledMonitor && !isNeverTile) || !isFloating) && !focused.isQuickLookPanel
 
         // target screen is the workspace's static home — same answer
         // whether the workspace is currently visible or hidden.
@@ -823,17 +870,37 @@ final class WorkspaceOrchestrator {
         }
 
         // unfloat if coming from disabled monitor
-        if onDisabledMonitor && isFloating {
+        if onDisabledMonitor && isFloating && willTile {
             stateCache.floatingWindowIDs.remove(focused.windowID)
             focused.isFloating = false
             hyprLog(.debug, .workspace, "unfloating '\(focused.title ?? "?")' from disabled monitor → workspace \(number)")
         }
 
+        if follow && !targetVisible {
+            // no park and no source retile: either would show on screen for
+            // a moment before the switch below undoes it
+            if !isFloating, let cw = currentWorkspace {
+                tilingEngine.removeWindowMembershipOnly(focused, fromWorkspace: cw)
+            }
+            workspaceManager.moveWindow(focused.windowID, toWorkspace: number)
+            let carried = willTile ? nil : carryFloaterToScreen(focused, targetScreen)
+            hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): following '\(focused.title ?? "?")' (\(focused.windowID)) to \(targetScreen.localizedName) tiled=\(willTile)")
+            switchWorkspace(number, preferredWindowID: focused.windowID, preferredFrame: carried)
+            return
+        }
+
+        // where a carried floater was put, for the follow's warp
+        var carriedFrame: CGRect?
+
         // animate remaining windows filling the gap
         animatedRetile({ [self] in
-            // remove from current workspace's tiling tree
+            // remove from current workspace's tiling tree. membership only:
+            // the one retile after this block lays the source out once the
+            // window has left. a retile here grew the neighbour under the
+            // window while it was still there, and then every remaining
+            // tile was written a second time
             if !isFloating, let cw = currentWorkspace {
-                tilingEngine.removeWindow(focused, fromWorkspace: cw)
+                tilingEngine.removeWindowMembershipOnly(focused, fromWorkspace: cw)
             }
 
             // reassign globally
@@ -849,7 +916,7 @@ final class WorkspaceOrchestrator {
                 // park position as the "real" frame.
                 hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): target visible — placing '\(focused.title ?? "?")' (\(focused.windowID)) on \(targetScreen.localizedName) tiled=\(willTile)")
                 if !willTile {
-                    carryFloaterToScreen(focused, targetScreen)
+                    carriedFrame = carryFloaterToScreen(focused, targetScreen)
                 }
             } else {
                 // target hidden — park at the global hide corner until the
@@ -859,6 +926,13 @@ final class WorkspaceOrchestrator {
                 // monitor so the next show is a single-screen transition).
                 if isFloating && !onDisabledMonitor {
                     workspaceManager.saveFloatingFrame(focused)
+                } else if isFloating && isNeverTile, let frame = focused.frame {
+                    // still floating off a disabled monitor: save a frame on
+                    // the target's display for the reveal to restore
+                    workspaceManager.setSavedFloatingFrame(
+                        Self.carriedFloaterFrame(frame, from: displayManager.cgRect(for: screen),
+                                                 to: displayManager.cgRect(for: targetScreen)),
+                        for: focused.windowID)
                 }
                 hyprLog(.notice, .workspace, "moveToWorkspace(\(number)): parking '\(focused.title ?? "?")' (\(focused.windowID)) homeScreen=\(targetScreen.localizedName) at \(workspaceManager.hidePosition())")
                 workspaceManager.hideInCorner(focused, on: targetScreen)
@@ -866,9 +940,13 @@ final class WorkspaceOrchestrator {
         }, { [self] in
             if targetVisible {
                 // destination is on screen — focus follows the window,
-                // matching switchWorkspace's focus+warp behavior.
+                // matching switchWorkspace's focus+warp behavior. the warp
+                // aims at the destination: the live frame still reads the
+                // source screen while the first layout attempt is failing,
+                // and ensureFocus picks from the screen under the cursor.
                 focused.focusWithoutRaise()
-                cursorManager.warpToCenter(of: focused)
+                warpCursor(followPoint(for: focused, workspace: number, screen: targetScreen,
+                                       placedFrame: carriedFrame))
                 focusController.recordFocus(focused.windowID, reason: "moveToWorkspace-follow")
                 updateFocusBorder(focused)
             } else {
@@ -891,11 +969,10 @@ final class WorkspaceOrchestrator {
     ///
     /// `sourceScreen` is not decoration. A visible destination is always
     /// another screen, so the window is standing on `sourceScreen` when the
-    /// attempt captures it, and a captured original outside the restoration
-    /// rect cancels the whole rollback — the incumbents would keep the failed
-    /// candidate's frames and the window would be left on a screen it is not
-    /// assigned to, which the next poll reads as drift and acts on. The
-    /// engine is told to reach both screens.
+    /// attempt captures it. Without the reach the rollback leaves a newcomer
+    /// from outside the restoration rect where the candidate put it — on a
+    /// screen it is not assigned to, which the next poll reads as drift and
+    /// acts on. The engine is told to reach both screens.
     ///
     /// - Returns: whether the screen accepted a layout holding `window`.
     private func revalidateVisibleDestination(_ window: HyprWindow, workspace: Int,
@@ -927,13 +1004,27 @@ final class WorkspaceOrchestrator {
     /// Place a floating window onto `screen`, preserving its size and its
     /// relative position. No-op when the floater is already substantially
     /// visible on the target screen.
-    private func carryFloaterToScreen(_ window: HyprWindow, _ screen: NSScreen) {
-        guard let frame = window.frame else { return }
+    ///
+    /// - Returns: the frame the floater now has, nil when it has none to read.
+    @discardableResult
+    private func carryFloaterToScreen(_ window: HyprWindow, _ screen: NSScreen) -> CGRect? {
+        guard let frame = window.frame else { return nil }
         let targetRect = displayManager.cgRect(for: screen)
-        if frame.isSubstantiallyVisible(on: targetRect, threshold: 0.5) { return }
+        if frame.isSubstantiallyVisible(on: targetRect, threshold: 0.5) { return frame }
 
         let sourceScreen = displayManager.screen(for: window) ?? screen
-        let sourceRect = displayManager.cgRect(for: sourceScreen)
+        let carried = window.placeFloating(
+            Self.carriedFloaterFrame(frame, from: displayManager.cgRect(for: sourceScreen), to: targetRect),
+            reason: "carry to another screen", on: screen, from: frame, displayManager: displayManager)
+        return carried
+    }
+
+    /// Where a floater at `frame` lands when carried from the screen at
+    /// `sourceRect` to the one at `targetRect`: the same size, capped to the
+    /// target, at the same relative position, clamped inside it. Unchanged
+    /// when the frame is already mostly on the target.
+    static func carriedFloaterFrame(_ frame: CGRect, from sourceRect: CGRect, to targetRect: CGRect) -> CGRect {
+        if frame.isSubstantiallyVisible(on: targetRect, threshold: 0.5) { return frame }
         let relX = sourceRect.width > 0 ? (frame.midX - sourceRect.minX) / sourceRect.width : 0.5
         let relY = sourceRect.height > 0 ? (frame.midY - sourceRect.minY) / sourceRect.height : 0.5
         let size = CGSize(width: min(frame.width, targetRect.width),
@@ -942,7 +1033,67 @@ final class WorkspaceOrchestrator {
                              y: targetRect.minY + relY * targetRect.height - size.height / 2)
         origin.x = max(targetRect.minX, min(origin.x, targetRect.maxX - size.width))
         origin.y = max(targetRect.minY, min(origin.y, targetRect.maxY - size.height))
-        window.setFrame(CGRect(origin: origin, size: size))
+        return CGRect(origin: origin, size: size)
+    }
+
+    /// Seat a floater on the workspace its app is pinned to. Membership is
+    /// the caller's. The frame is worked out from what is known, never read
+    /// back after a write (AX reads lag writes on Tahoe): a parked floater
+    /// starts from its saved frame, anything else from its live one. That
+    /// frame is carried onto the workspace's display, then either placed
+    /// there or, when the workspace is hidden, saved for the reveal while
+    /// the window parks.
+    func placePinnedFloater(_ window: HyprWindow, onWorkspace workspace: Int, fromWorkspace source: Int?) {
+        guard let home = workspaceManager.homeScreenForWorkspace(workspace) else { return }
+        let id = window.windowID
+        let parked = source.map { !workspaceManager.isWorkspaceVisible($0) } ?? false
+        let start = parked ? workspaceManager.savedFloatingFrame(for: id) : window.frame
+        let targetVisible = workspaceManager.isWorkspaceVisible(workspace)
+        hyprLog(.notice, .workspace, "window rule: floater '\(window.title ?? "?")' (\(id)) → ws\(workspace)"
+                + " visible=\(targetVisible) parked=\(parked)")
+        guard let start else {
+            // nothing known to carry: park it, and the reveal leaves it where it is
+            if !targetVisible { workspaceManager.hideInCorner(window, on: home) }
+            return
+        }
+        let sourceRect = displayManager.screen(at: CGPoint(x: start.midX, y: start.midY))
+            .map(displayManager.cgRect(for:)) ?? displayManager.cgRect(for: home)
+        let carried = Self.carriedFloaterFrame(start, from: sourceRect, to: displayManager.cgRect(for: home))
+        if targetVisible {
+            workspaceManager.clearSavedFloatingFrame(for: id)
+            window.placeFloating(carried, reason: "window rule", on: home, from: start,
+                                 displayManager: displayManager)
+        } else {
+            workspaceManager.setSavedFloatingFrame(carried, for: id)
+            workspaceManager.hideInCorner(window, on: home)
+        }
+    }
+
+    /// Where the cursor goes when focus follows `window` to `workspace` on
+    /// `screen`: the middle of its slot in that tree, else of the frame a
+    /// floater was just placed at, else of its live frame, taking the first
+    /// that lies on `screen`. Falls back to the middle of the screen, so the
+    /// cursor always lands on the destination even when the first layout
+    /// attempt failed and the window is still standing on the source.
+    private func followPoint(for window: HyprWindow, workspace: Int, screen: NSScreen,
+                             placedFrame: CGRect? = nil) -> CGPoint {
+        let rect = displayManager.cgRect(for: screen)
+        let candidates: [(String, CGRect?)] = [
+            ("slot", tilingEngine.intendedRect(for: window.windowID, onWorkspace: workspace, screen: screen)),
+            ("placed frame", placedFrame),
+            ("live frame", window.frame),
+        ]
+        var point = CGPoint(x: rect.midX, y: rect.midY)
+        var source = "screen middle"
+        for case let (name, frame?) in candidates
+        where rect.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+            point = CGPoint(x: frame.midX, y: frame.midY)
+            source = name
+            break
+        }
+        hyprLog(.notice, .workspace, "follow warp: \(window.windowID) → ws\(workspace)"
+                + " \(screen.localizedName) at (\(Int(point.x)),\(Int(point.y))) from \(source)")
+        return point
     }
 
     /// Focus the best remaining window on `screen`'s active workspace
@@ -1131,7 +1282,7 @@ final class WorkspaceOrchestrator {
         }
 
         if !result.moved.isEmpty || !laidOut.isEmpty {
-            tileAllVisibleSpaces()
+            tileAllVisibleSpaces(nil)
         }
         if !result.moved.isEmpty {
             NotificationCenter.default.post(name: .hyprMacWorkspaceChanged, object: nil)
@@ -1223,6 +1374,7 @@ final class WorkspaceOrchestrator {
                 layout = tilingEngine.tileWindows(windows, onWorkspace: workspace, screen: screen,
                                                   alsoRestoringWithin: reach)
             }
+            noteAdmission(layout)
             if layout.published && arriving.isSubset(of: layout.publishedIDs) {
                 laidOut[workspace] = (screen, ids)
                 continue
@@ -1245,10 +1397,10 @@ final class WorkspaceOrchestrator {
             hyprLog(.notice, .workspace, "moveWindows: ws\(workspace) refused its arrivals"
                     + " [\(arriving.sorted().map(String.init).joined(separator: ", "))]"
                     + " \(layout.failure.map { "\($0)" } ?? "no slot")")
-            // the refused candidate may have been published in part, or its
-            // frames left in place when a parked arrival put the rollback out
-            // of reach. record what was tried so the next round lays the
-            // destination out again without these arrivals
+            // the refused candidate may have been published in part, or a
+            // parked arrival left where the candidate put it while the rest
+            // were rolled back. record what was tried so the next round lays
+            // the destination out again without these arrivals
             laidOut[workspace] = (screen, ids)
             return workspace
         }

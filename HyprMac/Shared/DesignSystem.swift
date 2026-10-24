@@ -28,6 +28,11 @@ extension Color {
     static let hyprMagenta = Color(nsColor: .hyprMagenta)
 }
 
+extension UserConfig {
+    // the configured floating color for swiftui markers; brand magenta when unset
+    var resolvedFloatingColor: Color { Color(nsColor: resolvedFloatingBorderColor) }
+}
+
 extension NSColor {
     // dark: bright cyan that reads as neon on near-black.
     // light: deeper cyan that holds contrast against white.
@@ -103,9 +108,11 @@ class OverlayHostingView<Content: View>: NSHostingView<Content> {
 struct OverlayPalette {
     let scheme: ColorScheme
     var isDark: Bool { scheme == .dark }
-    var background: Color {
-        isDark ? Color(red: 0.025, green: 0.032, blue: 0.075).opacity(0.98)
-            : Color(red: 0.94, green: 0.95, blue: 0.97).opacity(0.98)
+    var background: Color { opaqueBackground.opacity(0.98) }
+    /// `background` with no transparency, for chrome that covers scrolling rows
+    var opaqueBackground: Color {
+        isDark ? Color(red: 0.025, green: 0.032, blue: 0.075)
+            : Color(red: 0.94, green: 0.95, blue: 0.97)
     }
     var surface: Color { isDark ? .white.opacity(0.055) : .black.opacity(0.045) }
     var activeSurface: Color { isDark ? .white.opacity(0.10) : .black.opacity(0.08) }

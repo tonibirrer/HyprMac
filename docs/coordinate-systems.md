@@ -48,7 +48,9 @@ it rather than re-deriving the math inline.
 Tiled insertion captures mouse-down and mouse-up event points before AX
 work or deferred scheduling. It does not sample the live cursor to choose
 the release target. Source matching requires exact screen containment and
-physical display identity; it does not use the nearest-screen fallback.
+physical display identity; it does not use the nearest-screen fallback. A
+release on another monitor matches that screen the same way, by exact
+containment in its full display frame.
 
 ## Multi-monitor
 
@@ -155,6 +157,12 @@ the best available request and read the frame back to find out what happened
 
 Same-screen tile updates pass `crossMonitor: false` and skip step 3
 to save one AX call per window per retile.
+
+Step 1 assumes the source screen can hold the target size. A verified layout
+moves a window first instead when it is parked or when its target is bigger
+than the screen it stands on, since step 1 would be clamped there. See the
+write order paragraph under "Two-pass layout" in
+[tiling-algorithm.md](tiling-algorithm.md).
 
 ### Hide-corner sliver
 

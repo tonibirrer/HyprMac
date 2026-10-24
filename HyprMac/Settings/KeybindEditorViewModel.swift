@@ -28,6 +28,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case swapDirection          = "Swap Direction"
         case switchWorkspace        = "Switch Workspace"
         case moveToWorkspace        = "Move to Workspace"
+        case moveToWorkspaceAndFollow = "Move to Workspace and Follow"
         case moveWindowToMonitor    = "Move Window to Monitor"
         case toggleFloating         = "Toggle Floating"
         case toggleSplit            = "Toggle Split"
@@ -48,6 +49,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case runCommand             = "Run a command"
         case saveLayout             = "Save Layout"
         case restoreLayout          = "Restore Layout"
+        case retileAll              = "Retile All Spaces"
     }
 
     /// nil unless the command action is selected and its line is unusable
@@ -58,6 +60,13 @@ final class KeybindEditorViewModel: ObservableObject {
     var commandValidationMessage: String? { commandValidationError?.message }
 
     var canSave: Bool { recordedKeyCode != 0 && commandValidationError == nil }
+
+    /// another bind already on the recorded chord. saving would put two binds
+    /// on one chord, which the keys list cannot tell apart.
+    func conflict(in binds: [Keybind], editing original: Keybind?) -> Keybind? {
+        guard recordedKeyCode != 0 else { return nil }
+        return binds.conflict(with: buildKeybind(), editing: original)
+    }
 
     func load(_ bind: Keybind?) {
         guard let bind else { return }
@@ -72,6 +81,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .swapDirection(let d):          selectedAction = .swapDirection;          directionParam = d
         case .switchWorkspace(let n):        selectedAction = .switchWorkspace;        workspaceParam = n
         case .moveToWorkspace(let n):        selectedAction = .moveToWorkspace;        workspaceParam = n
+        case .moveToWorkspaceAndFollow(let n): selectedAction = .moveToWorkspaceAndFollow; workspaceParam = n
         case .moveWindowToMonitor(let d):    selectedAction = .moveWindowToMonitor;    directionParam = d
         case .toggleFloating:                selectedAction = .toggleFloating
         case .toggleSplit:                   selectedAction = .toggleSplit
@@ -95,6 +105,7 @@ final class KeybindEditorViewModel: ObservableObject {
             commandParam = cmd
         case .saveLayout:                    selectedAction = .saveLayout
         case .restoreLayout:                 selectedAction = .restoreLayout
+        case .retileAll:                     selectedAction = .retileAll
         }
     }
 
@@ -109,6 +120,7 @@ final class KeybindEditorViewModel: ObservableObject {
         case .swapDirection:          action = .swapDirection(directionParam)
         case .switchWorkspace:        action = .switchWorkspace(workspaceParam)
         case .moveToWorkspace:        action = .moveToWorkspace(workspaceParam)
+        case .moveToWorkspaceAndFollow: action = .moveToWorkspaceAndFollow(workspaceParam)
         case .moveWindowToMonitor:    action = .moveWindowToMonitor(directionParam)
         case .toggleFloating:         action = .toggleFloating
         case .toggleSplit:            action = .toggleSplit
@@ -132,6 +144,7 @@ final class KeybindEditorViewModel: ObservableObject {
                 command: commandParam.trimmingCharacters(in: .whitespaces))
         case .saveLayout:             action = .saveLayout
         case .restoreLayout:          action = .restoreLayout
+        case .retileAll:              action = .retileAll
         }
         return Keybind(keyCode: recordedKeyCode, modifiers: mods, action: action)
     }

@@ -62,21 +62,53 @@ struct FrameReadbackPoller {
         self.ioFactory = ioFactory
     }
 
-    func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
-                     gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
-        applyLayout(layouts, usableFrame: usableFrame, gap: gap,
-                    generation: requestedGeneration, configuration: configuration,
-                    phase: .candidate)
+    /// The same poller with the scale-change budget, for a pass that moves a
+    /// window onto a screen with a different backing scale factor.
+    func withScaleChangeBudget() -> FrameReadbackPoller {
+        FrameReadbackPoller(configuration: configuration.withScaleChangeBudget,
+                            generation: generation, ioFactory: ioFactory)
     }
 
-    func applyWorkspaceReveal(_ layouts: [(HyprWindow, CGRect)], parkedWindowIDs: Set<CGWindowID>,
+    var deadline: TimeInterval { configuration.deadline }
+
+    /// The clock its passes run on, the io's own, so a budget measured
+    /// across passes spends the same time they do.
+    var now: TimeInterval { ioFactory([:], generation).now() }
+
+    /// The same poller with its deadline capped at `remaining`, what is
+    /// left of the attempt's whole budget. Every budget this pass may grow
+    /// by stays under the cap too.
+    func withRemainingBudget(_ remaining: TimeInterval) -> FrameReadbackPoller {
+        var capped = configuration
+        capped.deadlineCap = remaining
+        capped.deadline = min(configuration.deadline, remaining)
+        return FrameReadbackPoller(configuration: capped, generation: generation, ioFactory: ioFactory)
+    }
+
+    /// A candidate pass. `originalFrames` are the frames the caller captured
+    /// just before; with them a layout every window already stands on is
+    /// accepted from the capture, without a write or a wait.
+    func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
+                     gap: CGFloat, generation requestedGeneration: UInt64,
+                     originalFrames: [CGWindowID: CGRect]? = nil) -> Result {
+        applyLayout(layouts, usableFrame: usableFrame, gap: gap,
+                    generation: requestedGeneration, configuration: configuration,
+                    phase: .candidate, originalFrames: originalFrames)
+    }
+
+    /// A candidate pass where `positionFirstWindowIDs` move before they are
+    /// sized: windows revealed from the hide corner, or crossing from a
+    /// screen too small for their target. See `positionSettleWindowIDs`.
+    func applyWorkspaceReveal(_ layouts: [(HyprWindow, CGRect)],
+                              positionFirstWindowIDs: Set<CGWindowID>,
                               usableFrame: CGRect, gap: CGFloat,
-                              generation requestedGeneration: UInt64) -> Result {
+                              generation requestedGeneration: UInt64,
+                              originalFrames: [CGWindowID: CGRect]? = nil) -> Result {
         var revealConfiguration = configuration
-        revealConfiguration.positionSettleWindowIDs = parkedWindowIDs
+        revealConfiguration.positionSettleWindowIDs = positionFirstWindowIDs
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: revealConfiguration,
-                           phase: .candidate)
+                           phase: .candidate, originalFrames: originalFrames)
     }
 
     func applyRestoration(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
@@ -86,16 +118,60 @@ struct FrameReadbackPoller {
         strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
         strictConfiguration.aggregateSafetySlack = strictConfiguration.sizeTolerance
         strictConfiguration.correspondenceOnly = true
+        // the rollback is the safety net: a refused candidate is undone by
+        // it, and a rollback that fails leaves the candidate's frames under
+        // the old tree. it returns as soon as its frames read back stable,
+        // so the larger cap costs the happy path nothing
+        strictConfiguration.deadline = max(strictConfiguration.deadline,
+                                           strictConfiguration.withTimeoutRecoveryBudget.deadline)
+        strictConfiguration.maximumAttempts = max(
+            strictConfiguration.maximumAttempts,
+            Int((strictConfiguration.deadline / strictConfiguration.pollInterval).rounded(.up)))
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: strictConfiguration,
                            phase: .restoration)
     }
 
+    /// Windows the base deadline is sized for, and what each one past that
+    /// adds. One deadline covered every setter and every readback sample of
+    /// the whole key, so a workspace of eight healthy windows ran out of it
+    /// on ordinary IPC latency and rolled back.
+    static let windowsInBaseBudget = 3
+    static let perWindowBudget: TimeInterval = 0.08
+
+    /// `configuration` with its deadline grown for `count` targets, and by
+    /// the position settle each of the `positionFirst` targets may spend
+    /// before its size goes out, and the sample limit grown with it. A
+    /// reveal of two parked windows used to spend the whole base deadline
+    /// in its write phase with both settles succeeding, time out before a
+    /// single readback, roll the incumbent back over them, and get the same
+    /// layout accepted by the recovery's retry a quarter second later.
+    static func scaled(_ configuration: FrameSizingConfiguration, for count: Int,
+                       positionFirst: Int = 0) -> FrameSizingConfiguration {
+        let extra = Double(max(0, count - windowsInBaseBudget)) * perWindowBudget
+            + Double(max(0, positionFirst)) * configuration.positionSettleBudget
+        guard extra > 0 else { return configuration }
+        var scaled = configuration
+        scaled.deadline = configuration.capped(configuration.deadline + extra)
+        // the settle cap is a third of the deadline; grown with it, three
+        // settles that all hit their cap would eat the whole grown deadline
+        // before a size or a readback. each settle keeps the cap it was
+        // budgeted for
+        scaled.positionSettleBudgetOverride = configuration.positionSettleBudget
+        scaled.maximumAttempts = max(configuration.maximumAttempts,
+                                     Int((scaled.deadline / configuration.pollInterval).rounded(.up)))
+        return scaled
+    }
+
     private func applyLayout(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                              gap: CGFloat, generation requestedGeneration: UInt64,
-                             configuration: FrameSizingConfiguration,
-                             phase: FrameSizingPhase) -> Result {
+                             configuration baseConfiguration: FrameSizingConfiguration,
+                             phase: FrameSizingPhase,
+                             originalFrames: [CGWindowID: CGRect]? = nil) -> Result {
         let ids = layouts.map { $0.0.windowID }
+        let positionFirst = ids.filter { baseConfiguration.positionSettleWindowIDs.contains($0) }.count
+        let configuration = Self.scaled(baseConfiguration, for: layouts.count,
+                                        positionFirst: positionFirst)
         let unstarted = FrameSizingAttempt.Progress(phase: phase, generation: requestedGeneration,
                                                     targetIDs: ids)
         guard generation() == requestedGeneration else {
@@ -112,19 +188,43 @@ struct FrameReadbackPoller {
                           observations: [], accepted: [], progress: unstarted)
         }
         let windows = Dictionary(uniqueKeysWithValues: layouts.map { ($0.0.windowID, $0.0) })
-        if generation() == requestedGeneration {
-            for (window, _) in layouts { window.cachedFrame = nil }
-        }
         let attempt = FrameSizingAttempt(
             io: ioFactory(windows, generation),
             configuration: configuration
         )
+        let targets = layouts.map { FrameSizingAttempt.Target(windowID: $0.0.windowID, frame: $0.1) }
+        // a layout every window already stands on, within a point: the
+        // capture that produced the originals is the first readback, a second
+        // read has to agree with it, and then nothing is written and nothing
+        // is waited for. the cached frames stay, since nothing moved
+        if let originalFrames,
+           let inPlace = attempt.alreadyApplied(targets: targets, originalFrames: originalFrames,
+                                                usableFrame: usableFrame, gap: gap,
+                                                generation: requestedGeneration),
+           Self.standsStill(attempt.captureFrames(windowIDs: ids, generation: requestedGeneration),
+                            as: originalFrames) {
+            hyprLog(.debug, .tiling, "frame attempt: phase=\(phase.rawValue) gen=\(requestedGeneration) "
+                    + "wids=\(ids) verdict=accepted in place — every window is already on its"
+                    + " target in two reads, nothing written")
+            return classify(inPlace, layouts: layouts, configuration: configuration)
+        }
+        if generation() == requestedGeneration {
+            for (window, _) in layouts { window.cachedFrame = nil }
+        }
         let raw = attempt.apply(
-            targets: layouts.map { .init(windowID: $0.0.windowID, frame: $0.1) },
+            targets: targets,
             usableFrame: usableFrame, gap: gap, generation: requestedGeneration,
             phase: phase
         )
         return classify(raw, layouts: layouts, configuration: configuration)
+    }
+
+    /// Whether a second read found every window exactly where the first
+    /// one did. Two stable reads are what the verdict asks of a written
+    /// frame; a layout taken as standing gets the same.
+    static func standsStill(_ again: FrameSizingAttempt.Result, as first: [CGWindowID: CGRect]) -> Bool {
+        guard case .accepted = again.verdict else { return false }
+        return first.allSatisfy { again.actualFrames[$0.key] == $0.value }
     }
 
     func captureFrames(_ windows: [HyprWindow], generation requestedGeneration: UInt64) -> FrameSizingAttempt.Result {
@@ -163,8 +263,25 @@ struct FrameReadbackPoller {
             // cell rounding is not a min-size floor, so it must not teach
             // one. the boundary is the candidate overshoot tolerance
             // whatever configuration this pass ran under.
-            let widthConflict = actual.width > target.width + self.configuration.sizeOvershootTolerance
-            let heightConflict = actual.height > target.height + self.configuration.sizeOvershootTolerance
+            let learnWidth = actual.width > target.width + self.configuration.sizeOvershootTolerance
+            let learnHeight = actual.height > target.height + self.configuration.sizeOvershootTolerance
+            // a window that rounds up by less than that passes its own match
+            // and can still fail the pair or the screen: a terminal a cell
+            // wider than its slot eats the gap. that pass gets the adjusted
+            // layout, with room for the rounding, or the key rolled back and
+            // rolled back again on every retile. the rounding is still not a
+            // floor, so it teaches nothing.
+            var aggregateRejection = false
+            if case let .rejected(failure) = raw.verdict {
+                switch failure {
+                case .overlap, .gapViolation, .outsideUsableFrame: aggregateRejection = true
+                default: break
+                }
+            }
+            let adjustThreshold = aggregateRejection
+                ? configuration.aggregateSafetySlack : self.configuration.sizeOvershootTolerance
+            let widthConflict = actual.width > target.width + adjustThreshold
+            let heightConflict = actual.height > target.height + adjustThreshold
             if widthConflict || heightConflict, case .rejected = raw.verdict {
                 let refusal = Self.learningRefusal(windowID: window.windowID,
                                                    target: target, actual: actual,
@@ -172,10 +289,12 @@ struct FrameReadbackPoller {
                                                    positionTolerance: configuration.positionTolerance)
                 if refusal == nil {
                     conflicts.append(Conflict(window: window, allocated: target, actual: actual.size))
-                    observations.append(Observation(window: window, target: target.size,
-                                                    actual: actual.size,
-                                                    widthConflict: widthConflict,
-                                                    heightConflict: heightConflict))
+                    if learnWidth || learnHeight {
+                        observations.append(Observation(window: window, target: target.size,
+                                                        actual: actual.size,
+                                                        widthConflict: learnWidth,
+                                                        heightConflict: learnHeight))
+                    }
                 }
                 hyprLog(.debug, .tiling, "min evidence: wid=\(window.windowID) "
                         + "phase=\(phase.rawValue) "

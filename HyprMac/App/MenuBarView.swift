@@ -104,7 +104,7 @@ struct MenuBarView: View {
                             .frame(width: 25, height: 23)
                             .background(RoundedRectangle(cornerRadius: 4).fill(workspace.isActive ? Color.hyprCyan : (workspace.isOccupied ? Color.hyprMagenta.opacity(0.24) : Color.white.opacity(0.06))))
                             .foregroundStyle(workspace.isActive ? Color.hyprBackground : Color.hyprTextPrimary)
-                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? Color.hyprMagenta : Color.clear, lineWidth: 1.5))
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? config.resolvedFloatingColor : Color.clear, lineWidth: 1.5))
                     }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to workspace \(workspace.id)")
                 }
             }
@@ -140,6 +140,10 @@ struct MenuBarView: View {
             }
             MenuBarRow("Retile all spaces", icon: "rectangle.3.group") {
                 NotificationCenter.default.post(name: .hyprMacRetileAll, object: nil)
+            } trailing: {
+                if let binding = config.keybinds.first(where: { $0.action == .retileAll }) {
+                    KeybadgeView(bind: binding, fontSize: 11)
+                }
             }
             #if !HYPRMAC_DEBUG_VARIANT
             MenuBarRow("Check for updates…", icon: "arrow.down.circle") {

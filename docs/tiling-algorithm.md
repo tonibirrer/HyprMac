@@ -12,17 +12,48 @@ recovery turn without another sizing attempt. Count-based initial assignment
 is unchanged. Float-to-tile never evicts a neighbor into scratchpad.
 
 Verified incumbent identity survives temporary tree removal and display
-migration. Returning incumbents take slots before newcomers and never become
-admission fallback targets. If returning incumbents cannot all fit, the engine
+migration. It ends when the window leaves by an explicit move or is
+admitted to another workspace, so a window that drifted to another screen
+and is moved back is a newcomer again. Returning incumbents take slots
+before newcomers and never become admission fallback targets. If returning
+incumbents cannot all fit, the engine
 writes nothing and keeps the whole key unverified. Adjustment uses guarded
 refusal evidence and skips an adjusted write when the proposed frames cannot
 accommodate the refused axes within the existing candidate allowance.
 
-Display fingerprints refresh their input and include physical ID and usable
-bounds. Every display reconcile invalidates active sizing, including a mode
-change that leaves tree keys unchanged. Focus and informational actions keep
+Display fingerprints refresh their input and are the sorted list of each
+display's name and frame, plus the usable bounds; the physical display id
+is not part of them. It changed on some wakes without the desk changing,
+and `NSScreen.screens` came back in another order, and either read as a
+new topology: every workspace re-homed and every visible one retiled for a
+desk that had not changed. Two displays cannot share a frame, so the name
+and frame identify one. Every display reconcile invalidates active sizing,
+including a mode change that leaves tree keys unchanged. Focus and informational actions keep
 pending admission recovery. See [the stability audit](stability-audit-2026-09-13.md)
 for regression evidence and unresolved display/focus limitations.
+
+A window discovery takes out of a tree for a poll or two — an AX read
+that failed, a minimize, Cmd-H, a Space — remembers its slot: the subtree
+it shared a split with, the side it was on, and the split's axis and
+ratio (`TilingEngine.SlotMemory`). It goes back beside that subtree when
+it returns, so nothing else moves; two that leave together come back
+together, the restores running until none is left that can. A memory is
+kept while its neighbours are not in the tree and spent once they are, or
+by a smart insert, or by an explicit departure (a move, a float, a send),
+which makes the window a newcomer wherever it lands next. A pin the user
+set with `togglesplit` comes back as the user's pin.
+
+Ratios reset only when the membership changes: a pass over the same
+members keeps the ratios the last accepted pass found, so a known minimum
+is not probed again on every retile, and user-set ratios survive every
+reset. A removal before the pass — discovery's, or an explicit one —
+resets them itself, so a split skewed for a min-size app does not stay
+skewed after that app is gone.
+
+Smart insert pins the axis it chose at the split, so a later ratio change
+cannot flip a stack into columns; the pin is automatic, never saved, and
+dropped when the tree's screen turns to the other orientation, by
+migration or in place.
 
 ## Tree shape
 
@@ -225,7 +256,19 @@ frames and reads back what the OS actually accepted. When pass 1
 reveals an oversize, pass 2 redistributes the parent's split ratio.
 
 The engine first captures every affected window's actual position and
-size. `FrameSizingAttempt` applies each requested frame in resize–move–resize
+size. A first pass whose every target is where its window already stands,
+within one point in position and in size, and whose captured frames pass
+the aggregate checks as they are, is accepted from that capture once a
+second read finds every window exactly where the capture did. Nothing is
+written and nothing is waited for (`verdict=accepted in place`, a debug
+`frame attempt` line). Most passes are this: a workspace switch retiles
+the other screen, a move retiles its source twice, a poll re-applies a
+tree. Each used to send three setters per window and wait a settle and a
+stable readback of frames that never moved. Any window off its target
+runs the ordinary pass for the whole key. The tiled drop never takes that
+shortcut: its originals are the press-time capture, not where the windows
+stand at the release, and a drop always changes the layout.
+`FrameSizingAttempt` applies each requested frame in resize–move–resize
 order, retains AX write errors, and reads the complete layout back. Two
 stable samples are required. Position may differ by at most one AX point.
 Candidate size may differ by at most twenty points in either direction, which
@@ -262,9 +305,96 @@ the Swift deadline. Stable off-target frames wait at least 0.24 seconds
 before becoming a geometry rejection. Failed reads and superseded work
 never become accepted geometry.
 
+A call that AX gives up on after using nearly all of its messaging timeout
+returns `cannotComplete`. That covers a setter, a frame read, or the
+enhanced-UI read that opens a window's writes. Such a call is a timeout,
+not a refusal, and gets one more try with a 0.25-second call timeout and a
+0.75-second deadline (`withTimeoutRecoveryBudget`). A verified layout takes
+that try after its rollback verifies. A tiled drag takes it straight away,
+on the settle read, the release screen's read, each candidate and each
+rollback. A `cannotComplete` that comes back at once is AX refusing, and
+gets no second try.
+
+A pass that moves a window onto a screen with a different backing scale
+factor gets a 1-second deadline instead, with the sample limit raised to
+match. The engine compares the scale of the screen holding most of each
+captured original with the scale of the destination screen. The app redraws
+everything at the new scale while the attempt's calls wait behind it. On the
+MacBook (2x panel, 1x externals) every Hypr+Shift+N onto the panel ran out of
+the 0.36 s budget with nothing read back, and the retry 250 ms later usually
+verified. The per-call messaging timeout does not change. A rollback gets the
+longer deadline only when it carries such a window back. A parked window
+counts for the screen it is parked on, and hidden windows all park in one
+corner of the rightmost screen, so on the MacBook desk every reveal onto the
+2x panel gets the longer deadline and logs the scale change. The budget only
+costs time when the app is slow to answer.
+
+A window crossing screens picks its write order per window. It is crossing
+when its captured original is less than half on the destination. Each one
+logs a `write order:` notice. Resize-move-resize stays the default: when the
+target size fits the usable frame of the screen holding most of the
+original, the window is resized there, moved whole, and resized again. It
+moves first only when it is parked, hidden or on no screen, or when its
+target is bigger than that screen. A size written there would be clamped by
+it, which is how a parked reveal onto the portrait settled 1528 tall against
+1874. The size-first default exists for the other case: a 3424-wide
+ultrawide window moved first onto the 1512-wide panel lay over the portrait
+next to it on the way.
+
+A position-first window waits for two stable on-target position reads
+before its size goes out, but for at most a third of the deadline. After
+that the size goes out anyway and the readback judges. Without the cap, a
+position that never read back steady used the whole deadline with no size
+written, and the attempt could only time out. The cap is per window, and
+the deadline grows by it for every position-first target, so a reveal of
+several parked windows has the time their settles take. Two parked windows
+used to spend the whole base deadline in the write phase with both settles
+succeeding, time out before a single readback, and get the same layout
+accepted by the recovery's retry a quarter second later. A cut wait also
+changes how a failure is counted. The attempt
+used to end as `attemptsExhausted`, a timeout that the admission recovery
+retries. It now ends with the readback's verdict, and a
+`geometryMismatch` there is a refusal, which can float the window.
+
+The deadline grows by 80 ms for every target past three and by the
+position settle budget for every position-first target, and the sample
+limit with it. One deadline for every setter and every sample of the
+whole key ran out on eight healthy windows.
+
+The forward passes of one attempt share one cap (`TilingEngine.passBudget`,
+two seconds): the candidate, its adjusted pass, the topology recovery and
+the timeout recovery's retry. Each pass's deadline is cut to what is left
+when it starts, and a pass after the candidate with less than a quarter
+second left does not start. Summed, their own deadlines came to more than
+three seconds of a blocked main thread. The rollbacks sit outside the cap.
+A rollback is the safety net, and one cut short stops mid-write with some
+windows still on candidate frames, so each keeps its own deadline of 0.75
+seconds plus 80 ms per target past three. The worst case for one attempt
+of eight windows is about 3.5 seconds: the capture, two seconds of passes,
+and one last rollback. Admission recovery's narrowing rounds for a key
+share one such cap between them, and stop narrowing once it is spent.
+
+A minimum the memory already knows (`observed` provenance) shapes the
+first pass: the candidate is adjusted for it before any frame is written,
+and its ratios are kept while the membership stays the same. Asking the
+app to take a slot it refused last time only repeated the resize the user
+watched, and then the adjusted pass, on every retile.
+
+A window that rounds its size up by less than the size tolerance passes
+its own match and can still fail the pair or the screen: a terminal a
+cell wider than its slot eats the gap. Such an aggregate rejection
+records a conflict at the aggregate slack, so the adjusted pass runs with
+room for the rounding. It teaches no minimum, since a cell of rounding is
+not a floor.
+
 Only a known, stable size conflict permits a second pass.
 `BSPTree.adjustForMinSizes` adjusts constrained ratios, and the final
-adjusted layout goes through the same complete verification. The second
+adjusted layout goes through the same complete verification. A split the
+user set by hand is left alone as long as another ancestor on the axis
+can make room. When none can, the verified pass lets it give way by the
+minimum, since the alternative is a layout refused and rolled back on
+every retile. Fit checks never ask for that, so a hand-set ratio still
+refuses a swap or an arrival up front. The second
 pass runs on the apparent conflict; what the memory is allowed to learn
 from it is a narrower question, decided per window under "Min-size
 memory" below. Membership and
@@ -273,7 +403,16 @@ Failed first tiles do not create a live tree; failed scratchpad migrations keep
 the source tree. The engine checks captured
 original frames against the usable screen before writing them back. Parked
 workspace frames are not valid restoration targets for a visible workspace;
-the result remains degraded without moving windows back offscreen. Valid
+the result remains degraded without moving windows back offscreen. An
+original is a restoration target when it lies within the restoration rect
+by the same one-point slack the rollback's own validation grants its
+readback, so a half-point rounding or a window a point past the Dock
+edge still goes back where it was. The one
+exception is a newcomer the pass itself inserted, one neither in the live
+tree nor admitted to the workspace: its off-screen original says nothing
+about the tree being rolled back. It stays wherever the candidate left it,
+and the incumbents are restored and verified without it. An ordinary tiling
+pass reports it stranded for the admission recovery. Valid
 original frames are written once and restoration is verified. Scratchpad
 restoration uses the full display bounds, even when its candidate layout uses
 an inset region. Results distinguish
@@ -300,7 +439,12 @@ treated as evidence that writes completed.
 ### Restoration correspondence is not tiled validity
 
 A rollback asks every window to go back exactly where it was. It is verified
-per window against the strict one-point size and position bound. The
+per window against the strict one-point size and position bound. It gets
+at least the timeout recovery's 0.75-second deadline, not the candidate's
+0.36, and the attempt's pass cap never cuts it. It is the safety net: a rollback that
+fails leaves the candidate's frames under the old tree. It returns as soon
+as its frames read back stable, so the longer deadline costs a healthy
+rollback nothing. The
 pairwise checks are not verdicts on it: two originals that overlapped before
 the candidate ran still overlap after it, and calling that a failed rollback
 would be a lie about correspondence. The overlap is reported separately on
@@ -345,7 +489,8 @@ fails on whichever window refused its frame, and that is usually an
 incumbent: Safari 21611 refused while 26016 was the window that had just
 opened.
 
-`AdmissionRecovery` finishes those windows in at most two steps.
+`AdmissionRecovery` finishes those windows in at most two steps, or a few
+more when the app does not answer in time (step 3).
 
 1. **One retry, about 250 ms later**, through an injected scheduler and
    under a fresh generation. It honours everything the failed attempt
@@ -360,6 +505,10 @@ opened.
    Seeded hints, app hints and every other window's memory all still count,
    and `MinSizeMemory` is never cleared.
 
+   The retry the verified layout itself runs after an AX messaging
+   timeout (`verified layout AX timeout recovery`) is reconciled like
+   every other pass, so a floor it reads back is known to this retry.
+
    With every tenant's floor in hand the retry runs the structural fit check
    first, over the newcomers it is retrying and the live tree's incumbents
    and nothing else: a held window or a second stranded newcomer sitting on
@@ -367,7 +516,14 @@ opened.
    ordinary pass would simply leave it out. When the arrangement cannot exist — the Outlook case, where a
    938 pt floor, a 574 pt floor, the gap and the padding do not fit in
    1496 pt of usable width — it resolves there, without a single setter, and
-   logs `admission retry refused pre-write`. Before acting the recovery
+   logs `admission retry refused pre-write`. When only some of the newcomers
+   are the problem, the retry drops the fewest the known floors rule out —
+   the one whose removal makes the rest fit, else the one with the biggest
+   floor, and again — tiles the rest in the same pass, and reports the
+   dropped ones as `refusedIDs` (`admission retry tiles what fits`); it does
+   the same after an attempt that learned the floors itself. Eight windows
+   opening on a laptop screen used to float as a set because two of them
+   could not share it with anyone. Before acting the recovery
    re-checks the assignment, the workspace's home screen, whether the
    workspace is visible, whether the app is running, whether the window
    still exists and can be read, and whether the user has floated it.
@@ -380,6 +536,23 @@ opened.
    answer; nothing implements it, and selecting it still floats the window
    so nothing is left untracked. One named policy point, one line to change.
 
+   A second failure that names some of the newcomers still waiting and not
+   all of them — the window that would not take its frame, both of an
+   overlapping pair, plus whatever the engine refused pre-write — floats
+   those and runs the pass again for the rest without them, inside the same
+   retry and without a new timer, up to `narrowingRounds` (three) times.
+   Every round floats at least one window, so the loop ends on its own; the
+   bound keeps a key that refuses every arrangement from becoming a visible
+   resize storm. A failure that names an incumbent or nobody says nothing
+   about which newcomer to give up on, and a timeout is not a refusal;
+   neither narrows (`admission recovery narrowed`). A newcomer the engine
+   dropped pre-write floats as `noFittingSlot`, its own reason, not the
+   verdict of the pass that tiled the rest. A pending window that the
+   fallback retile or a newer layout tiled meanwhile is resolved, never
+   floated off its tile. The pre-write check takes the windows in the order
+   the pass inserts them (incumbents first, then left to right), so its
+   verdict does not change with the window server's z-order.
+
    The recovery then asks the engine to drop the key's unverified
    mark, and the engine decides: `clearUnverifiedGeometry` drops it only if
    every attempt on that key since the last accepted layout put its own
@@ -388,9 +561,31 @@ opened.
    one faithfully restores wherever that left the incumbents. The mark then
    stands until a layout for the key is accepted, which is the one thing
    that redeems it.
+3. **A timeout is not a refusal.** `FrameSizingFailure.isTimeout` covers
+   `deadlineExceeded`, `attemptsExhausted`, and read, write or cleanup
+   failures with `cannotComplete`, which is what an AX messaging timeout
+   returns. A retry that fails that way gets another retry, 500 ms later,
+   and then one more after 1 s (`timeoutRetryDelays`). The last one runs
+   with `keepingUnverifiedOnTimeout`. If it times out too, and all three
+   setters returned success for every window it lays out, the engine skips
+   the rollback,
+   publishes the tree with the newcomer in it and leaves the key marked
+   unverified. Only an accepted layout clears that mark. A last retry that
+   timed out before every window got its whole frame (in the capture, or
+   after a newcomer's first size write) has nothing to keep: the window is
+   held, as below, and never floated. A held window is a newcomer to every
+   later pass on its key, so the next one that tiles it releases it.
+   Two limits: a readback that never settles counts as a timeout, so an app
+   that refuses its size too slowly to settle is kept rather than floated;
+   and keeping skips the AX timeout recovery's relaxed retry. A
+   refusal on any retry, before or after a timeout, still takes step 2.
+   The live case was Safari moved onto the MacBook's 2x panel: the move's
+   layout and the 250 ms retry both timed out, and the window was floated
+   at a size that did not fill the screen.
 
-The retry cannot re-arm itself, and a window already in recovery does not
-collect a second one from a later failed pass. A newcomer that is
+The retry cannot re-arm itself except after a timeout, which step 3
+bounds, and a window already in recovery does not collect a second one from
+a later failed pass. A newcomer that is
 unreadable, or whose workspace is hidden, when its turn comes keeps its
 place in the pending set and waits for a real discovery event or a
 workspace reveal rather than a renewed timer; no frame is invented for it.
@@ -398,9 +593,18 @@ A close, a stop, a later key press, a display change, a workspace move, a
 user float, or a later layout that tiles the window all cancel the pending
 work. Switching or cycling workspaces is the exception: a reveal is the
 evidence a parked newcomer is waiting for, so those two actions leave the
-records alone. A retry that comes due while the screens are being
-reconfigured waits as well, rather than tiling into keys that are about to
-move. Scratchpad tiling never enters this path.
+records alone. Focus and informational presses leave them alone too, and so
+do resize, swap and split-toggle presses: those only rework the live tree,
+which never holds a stranded window, so nothing they do would ever give it
+another attempt. Cancelling there is how a move followed quickly by a resize
+left a window assigned, in no tree, and with nothing scheduled. A retry that
+comes due while the screens are being reconfigured waits as well, rather
+than tiling into keys that are about to move. So does one that comes due
+while the session is locked, the displays sleep or the user session is
+switched out: the window list is partial then, and an attempt from it would
+lay the key out without the windows it is missing. It gets its attempt from
+the first poll or retile after the span ends. Scratchpad tiling never enters
+this path.
 
 Every visible nonfloating assignment is therefore a verified tile, a window
 under a marked key, or a tracked recovery member. The state dump's
@@ -477,7 +681,14 @@ workspace retain that destination's home assignment while parked. A visible
 destination is tiled on its home monitor in the discovery pass. Startup and
 Retile All first fill each monitor's visible workspace in stable screen,
 focus, and frame order. Only the excess probes later workspace numbers across
-monitor homes, wrapping after workspace 10. This count limit does not guarantee
+monitor homes, wrapping after workspace 10.
+
+A window rule changes only the starting workspace. A new window of a pinned
+app starts at its pinned workspace instead of the active one and spills the
+same way; if every workspace is full it stays on the active one, as it would
+unpinned. Startup and Retile All place pinned windows in their own batches
+ahead of the per-monitor ones, so a pin claims its workspace first. See
+"Window rules" in `docs/keybinds-and-actions.md`. This count limit does not guarantee
 that every application's dimensions will fit.
 Hidden assigned nonfloating windows reserve capacity in admission and startup
 packing. Discovery events wait until the initial snapshot completes.
@@ -662,13 +873,31 @@ ordinary rejection happens.
 
 The rollback has to be told it may reach that far. A visible destination is
 always a different screen, so the window is standing on the source screen
-when the attempt captures its original frame, and a captured original
-outside the restoration rect cancels the rollback whole. Left alone that
-would strand the window on the destination screen while it is still assigned
-to the source, which the next poll reads as screen drift and acts on —
-completing the move the user was just told was impossible.
+when the attempt captures its original frame. A newcomer whose original is
+outside the restoration rect is left where the candidate put it. Left alone
+that would strand the window on the destination screen while it is still
+assigned to the source, which the next poll reads as screen drift and acts
+on — completing the move the user was just told was impossible.
 `revalidateAdmission` takes a `restorationReach` for this, and the
 orchestrator passes the source screen's rect.
+
+**Visible destination, ordinary move.** A window that fits takes the other
+order: it leaves the source tree, is reassigned, and the retile that
+follows lays out the destination with it. By then the destination is where
+it belongs, so a refused layout does not send it back. The incumbents are
+restored and verified; the mover stays where the candidate left it, in no
+tree, and the admission recovery retries it about 250 ms later. When the
+candidate's writes reached the mover, that is the destination screen and
+the retry is a same-screen write: a terminal that settled short after a 2x
+to 1x hop (issue #19, 1366×1136 against a 1394 target) gets its second
+write on the screen it now stands on. When the candidate failed on an
+incumbent before reaching the mover, the mover is still on the source
+screen and the retry is its first write. If the retry is refused too, the
+window floats in place and the fallback retile gives the incumbents their
+slots back. Rolling it back across the screens instead
+would leave a nonfloating window on a screen that does not show its
+workspace, and the rollback would be a second scale hop that can land short
+of the strict restoration bound itself.
 
 **Hidden destination.** Nothing is written. Unparking a hidden workspace's
 tenants over the visible one to run an experiment is not what the user
@@ -677,7 +906,8 @@ asked for. The move follows the existing assignment and parking, and
 the source. The first retile after that workspace is shown spends the
 marker, as one `revalidateAdmission` pass. Accepted, the disproved bound is
 lowered. Refused, the newcomer is stranded and the bounded admission
-recovery takes it from there — one retry, then a float in place.
+recovery takes it from there — one retry, then a float in place, or the
+timeout path in step 3 when the app did not answer in time.
 
 The marker is spent by that one reveal whatever the answer, and only by a
 pass that can actually judge the window: an id AX did not return keeps its
@@ -734,16 +964,44 @@ The mouse-up event supplies the release point. The mouse lifecycle latches the
 logical Hypr key when it is held at press, pressed during the drag, or still
 held at release. Option at release remains a compatibility shortcut. After
 the 100 ms settle delay, a bounded read of the captured dragged window
-separates manual resizing from movement. A width or height change greater than
-20 AX points produces a resize candidate. Position and size changes within
-one point are ignored, so text selection does not rearrange unmoved windows.
+separates manual resizing from movement (`TiledDragSnapshot.gesture`). The
+window is unmoved when its position and size are each within a point of the
+captured frame, so text selection does not rearrange unmoved windows. It is a
+resize only when all three of these hold:
+
+- The press landed on the window's resize border. The border is a band just
+  inside the captured frame: 8 points at the left, right and bottom edges and
+  4 at the top, corners giving two edges. The top band is narrow because the
+  title bar starts right below it. There is no outer band: a press outside
+  the frame is not a tile press at all.
+- The edge opposite every grabbed edge stayed within 3 points: maxX for a
+  left edge, minY for a bottom edge, and so on.
+- At least one grabbed axis changed size by more than 4 points.
+
+Anything else is a move. A size change on an axis nobody grabbed counts
+neither way. An aspect-locked side resize moves the other axis, and a corner
+press the band reads as one edge is still that edge's resize. A small resize
+reads as one from its first few points, which keeps the live preview from
+flashing at the start of an edge drag.
+
+A real edge or corner drag keeps the far edge still. A move keeps no edge
+still, even when the app changes its own size on the way. Messages changes
+its height by up to 279 points when it is dragged onto the ultrawide. Reading
+that as a resize rejected the drop, or grew its tile on the source, and a
+press in the top of the title bar would still have done it under a band
+alone. A capture by window id has no press point, so size alone decides
+there, a change over 20 points as before.
 
 An ordinary move chooses a target from the release point within the source
 workspace and physical display. The nearest normalized target edge selects
 left, right, top, or bottom insertion; ties use that order. A latched Hypr
-gesture or Option at release requests a same-tree swap instead. A release
-without a target restores and verifies the captured frames. Cross-monitor and
-cross-workspace insertion are excluded.
+gesture or Option at release requests a same-tree swap instead. A release on
+the source display without a target restores and verifies the captured
+frames, silently: nothing was written before the refusal, the window goes
+back to its slot, and the key keeps speaking for its geometry. Every other
+refusal beeps and flashes, and one that wrote frames also marks the key
+unverified. A release on another display is a drop across monitors,
+described below.
 
 `BSPTree.candidateTree` clones the source, removes the dragged leaf, and
 splits the target on the selected side. Horizontal splits create columns;
@@ -772,6 +1030,138 @@ carries no provenance clears every member, because then nothing is provably
 untouched. Clearing only the dragged id would be wrong: a rollback writes
 every captured original. The finishing flag suppresses polling
 through the settle delay and transaction, without a fixed expiry timer.
+
+### Dropping on another monitor
+
+A plain move released on another display lands in the workspace visible
+there (`WorkspaceManager.workspaceForScreen`). The release screen is the one
+whose whole display frame holds the point, menu bar and Dock included. The
+drop places the window the way a same-tree drop does:
+
+- Over a tile, the window is split in beside it on the nearest normalized
+  edge, with the same edge rule and the same split.
+- In a gap or the padding, the nearest tile takes it, the lower id on a tie.
+  The edge is measured from the point clamped into that tile.
+- A latched Hypr gesture or Option at release swaps it with that tile. The
+  two windows trade leaves, trees and workspaces. Both topologies stay as
+  they were. Ratios move only for a known-minimum conflict, as on any drop.
+- A workspace with no tiles takes the window as its tree root, swap or not.
+
+The source tree loses the window the way it would on a close, and a source
+tree left empty is dropped. Visible floaters on the release screen do not
+block the drop. The same-tree release ignores them too.
+
+The release screen's tree is read before anything is written, and its
+members' actual frames become its originals for a rollback. The target tile is
+chosen from that tree's own layout slots, the same ones the live preview uses.
+Both candidates are private clones from `BSPTree`, built in the engine's drop
+path. Each must stay within its own screen's Max Splits. Each layout gets the
+same known-minimum ratio adjustment as a same-tree drop. If a known minimum
+still overflows its slot by more than 20 points
+(`TilingConfig.frameToleranceXPx`, the overshoot a readback may show), the
+drop is refused (`noRoom`) before any candidate write. The release screen's
+frames go out first, then the source's. Each screen has its own
+`FrameSizingAttempt` against its own usable frame. A window crossing screens
+takes the engine's write order, and two displays with different backing
+scales get the scale-change budget. Both trees publish together, and only
+after every frame on both screens was accepted.
+
+A call that times out on either screen gets its one longer try first.
+Messages took 101 ms to answer a position write right after crossing
+displays, just past the 100 ms call timeout. All of a drop's attempts share
+one 2.5-second budget for those longer tries (`TiledDragBudget`). Once it is
+spent, a timeout gets no longer try, and the drop goes on with its plain
+attempts to its plain outcome. The cut logs `frame attempt AX timeout
+recovery skipped`. The budget bounds the retries, not the drop. Each
+capture, candidate and rollback still runs with its own deadline of 0.36
+seconds, or 1 second under the scale-change budget. So a drop that ends up
+rolling both trees back can still hold the main thread past 2.5 seconds,
+though no longer for the ten or more that every retry could add up to.
+
+A refusal before the first write puts back only the source. The release
+screen was read but never written. These refusals are no target, no room,
+Max Splits, and an invalid candidate, and they report as an ordinary
+same-tree restore that marks only the source key.
+
+A sizing failure after the writes began puts both trees back. The source's
+captured originals go first, the dragged window's among them, then the
+release screen's. Each set is verified against its own screen. Neither
+topology changes, and every key that has a tree is marked unverified. A
+release screen with no tree has no key to mark. So does a commit whose frames
+were accepted but whose setters did not all return success
+(`unverifiedCommit`). The dragged window may already stand on the release
+screen, and publishing nothing while it stays there would leave the source's
+tree and membership claiming it. Superseded work writes nothing more, on
+either screen, as on a same-tree drop: a newer operation owns the geometry.
+A failure whose drop went stale before the rollback is reported degraded
+without one. The cache rules above cover both trees' members, and deferred
+degraded feedback waits for both keys to verify again.
+
+Workspace membership changes only on a commit, through
+`WorkspaceManager.moveWindow`, for the dragged window and for a swapped one.
+It moves in the same synchronous step that published the trees, before the
+drop is reported. After a commit the dragged window keeps focus, and the
+border is drawn on its verified frame rather than on a live AX read.
+
+These cases restore exactly as a release without a target always has: a
+disabled release screen, the scratchpad layer up on any screen, a scratchpad
+source, a point on no screen, and a resize candidate, which keeps the
+same-tree resize rule. A window that did not move is still ignored.
+
+### Live drop preview
+
+While a tiled drag is in progress, a translucent highlight shows where the
+window will land. It uses the focus color the user picked, at low alpha: the
+bracket color when brackets are on, else the focus border color when the
+border is on, else brand cyan (`UserConfig.resolvedDropPreviewColor`). It has a
+thin border and the window corner radius. It appears only after all of these
+hold:
+
+- the press was captured as a tiled press
+- the pointer has passed the drag threshold
+- the drag is a move by the drop's own rule (`TiledDragSnapshot.gesture`),
+  applied to the dragged window's frame from the window list
+  (`CGWindowListCreateDescriptionFromArray`, not AX) at every update. A press
+  that selects text leaves the window unmoved, and an edge drag becomes a
+  resize, so neither shows a preview. The drop reaches the same verdict from
+  its settle read.
+
+What it shows:
+
+- **Plain insert, on either monitor:** the rect the dragged window would get.
+  That is its slot in the candidate tree the drop would build, with the same
+  known-minimum adjustment.
+- **Swap (Hypr latched or held, or Option):** the whole target tile.
+- **An empty workspace on another monitor:** that screen's tiling rect, inside
+  the outer padding.
+- **Nothing** wherever the drop would restore: a gap on the source, a disabled
+  monitor, the scratchpad, a point on no screen, past Max Splits, or no room
+  for a known minimum.
+
+Preview and drop cannot disagree, because both come from the same parts:
+
+- `TiledDropPlanner` picks the target and edge. The drop calls it too: its
+  same-tree target at release, and its target on another monitor.
+- The source tiles are the press capture, which the drop resolves against as
+  well.
+- Another monitor's tiles are that tree's own layout slots
+  (`TiledDropPlanner.slots`), not a live read. The drop now picks its target
+  from those slots too. It still reads that screen's frames first, for the
+  rollback.
+- The rect comes from `TiledDragTransaction.previewFrame`, which builds the
+  same candidates as `drop` and `dropAcrossTrees`.
+
+No AX call runs while the pointer moves. Another monitor's tree is kept
+between updates only while its workspace is still the one visible there and
+the tree is unchanged. A workspace switch, the scratchpad, or any layout since
+the press (which supersedes the drop) shows through at the next update. A
+workspace change or a hotkey action also asks again straight away. Updates come at most 60
+times a second. A move inside that interval is held and applied when it ends,
+so the last position always shows. The panel redraws only when the rect
+changes. A Hypr press or an Option change asks again at the last point. The
+highlight hides at mouse-up, on a stop, and when there is nowhere to land.
+Nothing keeps running after the drag: one held update at most, and it does
+nothing once the drag has ended.
 
 ## `prepareTileLayout` / `prepareSwapLayout` / `prepareToggleSplitLayout`
 

@@ -63,6 +63,9 @@ targets:
       base:
         PRODUCT_MODULE_NAME: HyprMac
         ENABLE_TESTABILITY: YES
+        # load through rpaths so xctest needs no DYLD_* vars
+        LD_DYLIB_INSTALL_NAME: "@rpath/HyprMac.dylib"
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@loader_path"]
 {variant_settings}  HyprMacTests:
     type: bundle.unit-test
     platform: macOS
@@ -73,6 +76,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@loader_path/../../.."]
 schemes:
   HyprMacIsolatedTests:
     build:
@@ -93,6 +97,4 @@ xcodebuild build-for-testing \
     CODE_SIGNING_ALLOWED=NO
 
 PRODUCTS="$AUDIT_DIR/derived/Build/Products/Debug"
-export DYLD_LIBRARY_PATH="$PRODUCTS"
-export DYLD_FRAMEWORK_PATH="$PRODUCTS"
-xcrun xctest -XCTest "$SELECTION" "$PRODUCTS/HyprMacTests.xctest"
+"$(xcrun -f xctest)" -XCTest "$SELECTION" "$PRODUCTS/HyprMacTests.xctest"

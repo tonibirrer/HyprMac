@@ -15,6 +15,10 @@ final class StubAccessibility: AccessibilityManager {
     var stateAnswer: AccessibilityManager.HiddenWindowState?
     /// ids the service asked about, so tests can pin who gets re-verified.
     var queries: [CGWindowID] = []
+    /// pids the walk is backing off from
+    var backingOff: Set<pid_t> = []
+
+    override func isBackingOff(pid: pid_t) -> Bool { backingOff.contains(pid) }
 
     override func hiddenWindowState(windowID: CGWindowID, pid: pid_t) -> AccessibilityManager.HiddenWindowState? {
         queries.append(windowID)
@@ -66,13 +70,15 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         snapshot: [HyprWindow],
         runningPIDs: Set<pid_t> = [],
         excluded: Set<String> = [],
-        focusedID: CGWindowID = 0
+        focusedID: CGWindowID = 0,
+        unreadable: Set<CGWindowID> = []
     ) -> WindowChanges {
         svc.computeChanges(
             snapshot: snapshot,
             runningPIDs: runningPIDs,
             excludedBundleIDs: excluded,
-            focusedWindowID: focusedID
+            focusedWindowID: focusedID,
+            unreadableWindowIDs: unreadable
         )
     }
 
@@ -218,6 +224,134 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         XCTAssertFalse(fourth.requestsRecheck)
     }
 
+    // MARK: - lock and display sleep
+
+    private static let locked = "com.apple.screenIsLocked"
+    private static let unlocked = "com.apple.screenIsUnlocked"
+
+    /// five windows on one live pid, the shape of the 09:36 lock log
+    private func lockFixture() -> (WindowDiscoveryService, WindowStateCache, [HyprWindow]) {
+        let (svc, cache, _) = makeService()
+        let windows = (1...5).map { makeWindow(id: CGWindowID($0), pid: 8000) }
+        cache.knownWindowIDs = Set(windows.map(\.windowID))
+        for w in windows { cache.windowOwners[w.windowID] = 8000 }
+        return (svc, cache, windows)
+    }
+
+    func testALockedSessionHoldsEveryMissingWindowUntilUnlock() {
+        let (svc, cache, windows) = lockFixture()
+        svc.noteSystemInterruption(Self.locked)
+
+        // well past the three mass-gone skips, and through a display sleep
+        // and wake that both happen while the lock screen is up
+        for poll in 0..<8 {
+            if poll == 2 { svc.noteSystemInterruption(NSWorkspace.screensDidSleepNotification.rawValue) }
+            if poll == 5 { svc.noteSystemInterruption(NSWorkspace.screensDidWakeNotification.rawValue) }
+            let changes = compute(svc, snapshot: [], runningPIDs: [8000])
+            XCTAssertTrue(changes.heldForInterruption, "poll \(poll)")
+            XCTAssertTrue(changes.goneIDs.isEmpty, "poll \(poll)")
+            XCTAssertFalse(changes.needsRetile, "poll \(poll)")
+            XCTAssertFalse(changes.requestsRecheck, "no prompt re-poll while locked")
+        }
+        XCTAssertEqual(cache.knownWindowIDs, Set(windows.map(\.windowID)))
+        XCTAssertTrue(cache.hiddenWindowIDs.isEmpty, "nothing was marked hidden")
+
+        svc.noteSystemInterruption(Self.unlocked)
+        let back = compute(svc, snapshot: windows, runningPIDs: [8000])
+
+        XCTAssertTrue(back.returned.isEmpty, "nothing left, so nothing returns")
+        XCTAssertFalse(back.needsRetile, "and no retile rebuilds the trees")
+        XCTAssertFalse(back.heldForInterruption)
+    }
+
+    func testTheSpanLastsUntilEveryReasonHasEnded() {
+        let (svc, _, _) = lockFixture()
+        svc.noteSystemInterruption(NSWorkspace.screensDidSleepNotification.rawValue)
+        svc.noteSystemInterruption(Self.locked)
+        svc.noteSystemInterruption(NSWorkspace.screensDidWakeNotification.rawValue)
+
+        XCTAssertTrue(compute(svc, snapshot: [], runningPIDs: [8000]).goneIDs.isEmpty)
+        XCTAssertFalse(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck)
+
+        svc.noteSystemInterruption(Self.unlocked)
+        XCTAssertTrue(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck,
+                      "unlocked and awake: the ordinary mass-gone guard is back in charge")
+    }
+
+    func testAWindowThatReallyClosedDuringTheLockIsHiddenAfterUnlock() {
+        let (svc, cache, windows) = lockFixture()
+        svc.noteSystemInterruption(Self.locked)
+        let fourLeft = Array(windows.dropFirst())
+        XCTAssertTrue(compute(svc, snapshot: fourLeft, runningPIDs: [8000]).goneIDs.isEmpty)
+
+        svc.noteSystemInterruption(Self.unlocked)
+        let changes = compute(svc, snapshot: fourLeft, runningPIDs: [8000])
+
+        XCTAssertEqual(changes.goneIDs, [1])
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(1))
+    }
+
+    func testTheCapEndsASpanWhoseEndNeverCame() {
+        let (svc, _, _) = lockFixture()
+        var clock = Date(timeIntervalSinceReferenceDate: 0)
+        svc.now = { clock }
+        svc.noteSystemInterruption(Self.locked)
+        clock += WindowDiscoveryService.interruptionCap - 1
+        XCTAssertFalse(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck, "still held")
+
+        clock += 2
+        XCTAssertTrue(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck,
+                      "past the cap the span is over and the mass-gone guard runs")
+    }
+
+    func testAHeldCycleIsOnlyAHoldWhileSomethingIsMissing() {
+        let (svc, _, windows) = lockFixture()
+        svc.noteSystemInterruption(Self.locked)
+
+        XCTAssertFalse(compute(svc, snapshot: windows, runningPIDs: [8000]).heldForInterruption,
+                       "a full snapshot is an ordinary no-op cycle")
+    }
+
+    func testAHotkeyPressEndsTheSpan() {
+        let (svc, _, _) = lockFixture()
+        svc.noteSystemInterruption(Self.locked)
+        svc.endSessionInterruption(evidence: "hotkey press")
+
+        XCTAssertTrue(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck)
+    }
+
+    func testNotificationsThatOpenNoSpanChangeNothing() {
+        let (svc, _, _) = lockFixture()
+        // a system wake says nothing about the lock, and an unlock with no
+        // lock before it has nothing to end
+        svc.noteSystemInterruption(NSWorkspace.didWakeNotification.rawValue)
+        svc.noteSystemInterruption(Self.unlocked)
+
+        XCTAssertTrue(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck)
+    }
+
+    func testASwitchedOutSessionHoldsMissingWindowsToo() {
+        let (svc, _, _) = lockFixture()
+        svc.noteSystemInterruption(NSWorkspace.sessionDidResignActiveNotification.rawValue)
+        XCTAssertFalse(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck)
+
+        svc.noteSystemInterruption(NSWorkspace.sessionDidBecomeActiveNotification.rawValue)
+        XCTAssertTrue(compute(svc, snapshot: [], runningPIDs: [8000]).requestsRecheck)
+    }
+
+    func testTheSpanIsReadableForTheRecoveryRetry() {
+        // the admission recovery's own timer reads this, not a poll
+        let (svc, _, _) = lockFixture()
+        XCTAssertFalse(svc.isSessionInterrupted)
+        svc.noteSystemInterruption(NSWorkspace.screensDidSleepNotification.rawValue)
+        XCTAssertTrue(svc.isSessionInterrupted, "display sleep alone opens a span")
+        svc.noteSystemInterruption(Self.locked)
+        svc.noteSystemInterruption(NSWorkspace.screensDidWakeNotification.rawValue)
+        XCTAssertTrue(svc.isSessionInterrupted, "still locked")
+        svc.noteSystemInterruption(Self.unlocked)
+        XCTAssertFalse(svc.isSessionInterrupted)
+    }
+
     func testGoneWindowWithLivePIDMovesToHidden() {
         let (svc, cache, _) = makeService()
         cache.knownWindowIDs = [10]
@@ -231,6 +365,70 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         XCTAssertTrue(cache.hiddenWindowIDs.contains(10))
         // owner pid retained so the un-hide path can restore the wid as "returned"
         XCTAssertEqual(cache.windowOwners[10], 8000)
+        XCTAssertTrue(changes.needsRetile)
+    }
+
+    // MARK: - unreadable windows
+
+    /// the window server still shows the window; its app just did not
+    /// answer. it stays known, on its workspace and in its tree, and nobody
+    /// asks the same app whether the window is minimized
+    func testAnUnreadableWindowIsHeldNotHidden() {
+        let stub = StubAccessibility()
+        let (svc, cache, _) = makeService(accessibility: stub)
+        cache.knownWindowIDs = [10, 11]
+        cache.windowOwners = [10: 8000, 11: 8000]
+
+        let changes = compute(svc, snapshot: [makeWindow(id: 10, pid: 8000)],
+                              runningPIDs: [8000], unreadable: [11])
+
+        XCTAssertTrue(changes.goneIDs.isEmpty)
+        XCTAssertFalse(changes.needsRetile)
+        XCTAssertTrue(cache.knownWindowIDs.contains(11))
+        XCTAssertFalse(cache.hiddenWindowIDs.contains(11))
+        XCTAssertTrue(stub.queries.isEmpty)
+    }
+
+    /// once the app answers again the window is simply present: not
+    /// returned, not new, nothing to retile
+    func testAHeldWindowThatReadsAgainIsNoChange() {
+        let (svc, cache, _) = makeService(accessibility: StubAccessibility())
+        cache.knownWindowIDs = [10, 11]
+        cache.windowOwners = [10: 8000, 11: 8000]
+        let windows = [makeWindow(id: 10, pid: 8000), makeWindow(id: 11, pid: 8000)]
+        _ = compute(svc, snapshot: [windows[0]], runningPIDs: [8000], unreadable: [11])
+
+        let changes = compute(svc, snapshot: windows, runningPIDs: [8000])
+
+        XCTAssertTrue(changes.returned.isEmpty)
+        XCTAssertTrue(changes.newWindows.isEmpty)
+        XCTAssertFalse(changes.needsRetile)
+    }
+
+    /// a whole app that stops answering is not a mass close
+    func testHeldWindowsDoNotTripTheMassGoneGuard() {
+        let (svc, cache, _) = makeService(accessibility: StubAccessibility())
+        cache.knownWindowIDs = [1, 2, 3, 4]
+        cache.windowOwners = [1: 8000, 2: 8000, 3: 8000, 4: 8000]
+
+        let changes = compute(svc, snapshot: [], runningPIDs: [8000], unreadable: [1, 2, 3, 4])
+
+        XCTAssertFalse(changes.requestsRecheck)
+        XCTAssertTrue(changes.goneIDs.isEmpty)
+        XCTAssertEqual(cache.knownWindowIDs, [1, 2, 3, 4])
+    }
+
+    /// a window its app answered for and no longer lists is gone as before
+    func testAMissingWindowOfAReadableAppIsStillGone() {
+        let (svc, cache, _) = makeService(accessibility: StubAccessibility())
+        cache.knownWindowIDs = [10, 11]
+        cache.windowOwners = [10: 8000, 11: 8000]
+
+        let changes = compute(svc, snapshot: [makeWindow(id: 10, pid: 8000)],
+                              runningPIDs: [8000], unreadable: [])
+
+        XCTAssertEqual(changes.goneIDs, [11])
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(11))
         XCTAssertTrue(changes.needsRetile)
     }
 
@@ -264,17 +462,135 @@ final class WindowDiscoveryServiceTests: XCTestCase {
 
     func testWindowStillListedByItsAppReservesItsWorkspaceSlot() {
         // another Space or native full-screen: the app still lists it, it is
-        // not minimized, and it comes back on its own — not a close.
+        // not minimized, and it comes back on its own — not a close. held
+        // first (below); once the hold passes it is hidden with its slot
+        // reserved.
         let access = StubAccessibility()
         access.stateAnswer = .present
         let (svc, cache, _) = makeService(accessibility: access)
+        var clock = Date(timeIntervalSinceReferenceDate: 1000)
+        svc.now = { clock }
         cache.knownWindowIDs = [12]
         cache.windowOwners[12] = 8200
 
         _ = compute(svc, snapshot: [], runningPIDs: [8200])
+        clock += WindowDiscoveryService.listedHoldSpan + 1
+        _ = compute(svc, snapshot: [], runningPIDs: [8200])
 
         XCTAssertTrue(cache.hiddenWindowIDs.contains(12))
         XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(12))
+    }
+
+    // MARK: - windows off the screen their app still lists
+
+    /// a native full-screen app on the display, or a Space switched away:
+    /// the window server stops showing the window, its app still lists it
+    /// and it is not minimized. taking it out of its tree expanded the
+    /// neighbour over its slot and put it back somewhere else a second later
+    func testAWindowItsAppStillListsIsHeldBeforeItIsHidden() {
+        let access = StubAccessibility()
+        access.stateAnswer = .present
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [10, 12]
+        cache.windowOwners = [10: 8200, 12: 8200]
+
+        let changes = compute(svc, snapshot: [makeWindow(id: 10, pid: 8200)], runningPIDs: [8200])
+
+        XCTAssertTrue(changes.goneIDs.isEmpty)
+        XCTAssertFalse(changes.needsRetile)
+        XCTAssertTrue(cache.knownWindowIDs.contains(12))
+        XCTAssertFalse(cache.hiddenWindowIDs.contains(12))
+        XCTAssertEqual(svc.heldWindowIDs, [12])
+        XCTAssertEqual(access.queries, [12], "asked once, for the hold and the classification together")
+    }
+
+    func testAListedWindowBackWithinTheSpanIsNoChange() {
+        let access = StubAccessibility()
+        access.stateAnswer = .present
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [10, 12]
+        cache.windowOwners = [10: 8200, 12: 8200]
+        let windows = [makeWindow(id: 10, pid: 8200), makeWindow(id: 12, pid: 8200)]
+        _ = compute(svc, snapshot: [windows[0]], runningPIDs: [8200])
+
+        let changes = compute(svc, snapshot: windows, runningPIDs: [8200])
+
+        XCTAssertTrue(changes.returned.isEmpty)
+        XCTAssertFalse(changes.needsRetile)
+        XCTAssertTrue(svc.heldWindowIDs.isEmpty)
+    }
+
+    func testAListedWindowStillMissingAfterTheSpanIsHiddenAndReserved() {
+        let access = StubAccessibility()
+        access.stateAnswer = .present
+        let (svc, cache, _) = makeService(accessibility: access)
+        var clock = Date(timeIntervalSinceReferenceDate: 1000)
+        svc.now = { clock }
+        cache.knownWindowIDs = [10, 12]
+        cache.windowOwners = [10: 8200, 12: 8200]
+        let other = makeWindow(id: 10, pid: 8200)
+        _ = compute(svc, snapshot: [other], runningPIDs: [8200])
+        clock += 3
+        XCTAssertFalse(compute(svc, snapshot: [other], runningPIDs: [8200]).needsRetile, "still held")
+        clock += 3
+
+        let changes = compute(svc, snapshot: [other], runningPIDs: [8200])
+
+        XCTAssertEqual(changes.goneIDs, [12])
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(12))
+        XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(12))
+        XCTAssertTrue(svc.heldWindowIDs.isEmpty)
+    }
+
+    /// the hold ends on its own; the caller polls then, not at the next
+    /// ten-second reconcile
+    func testAHoldSaysWhenItEnds() {
+        let access = StubAccessibility()
+        access.stateAnswer = .present
+        let (svc, cache, _) = makeService(accessibility: access)
+        var clock = Date(timeIntervalSinceReferenceDate: 1000)
+        svc.now = { clock }
+        cache.knownWindowIDs = [10, 12]
+        cache.windowOwners = [10: 8200, 12: 8200]
+        let other = makeWindow(id: 10, pid: 8200)
+        XCTAssertNil(svc.secondsUntilAHoldEnds)
+
+        _ = compute(svc, snapshot: [other], runningPIDs: [8200])
+        XCTAssertEqual(svc.secondsUntilAHoldEnds!, WindowDiscoveryService.listedHoldSpan, accuracy: 0.001)
+        clock += 3
+        XCTAssertEqual(svc.secondsUntilAHoldEnds!, WindowDiscoveryService.listedHoldSpan - 3, accuracy: 0.001)
+        clock += 3
+        _ = compute(svc, snapshot: [other], runningPIDs: [8200])
+        XCTAssertNil(svc.secondsUntilAHoldEnds, "hidden now; nothing to wait for")
+    }
+
+    func testAListedWindowMinimizedDuringTheHoldIsHiddenAtOnce() {
+        let access = StubAccessibility()
+        access.stateAnswer = .present
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [10, 12]
+        cache.windowOwners = [10: 8200, 12: 8200]
+        let other = makeWindow(id: 10, pid: 8200)
+        _ = compute(svc, snapshot: [other], runningPIDs: [8200])
+        access.stateAnswer = .minimized
+
+        let changes = compute(svc, snapshot: [other], runningPIDs: [8200])
+
+        XCTAssertEqual(changes.goneIDs, [12])
+        XCTAssertTrue(cache.hiddenWindowIDs.contains(12))
+    }
+
+    func testAClosedWindowIsNeverHeld() {
+        let access = StubAccessibility()
+        access.stateAnswer = .absent
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [10, 12]
+        cache.windowOwners = [10: 8200, 12: 8200]
+
+        let changes = compute(svc, snapshot: [makeWindow(id: 10, pid: 8200)], runningPIDs: [8200])
+
+        XCTAssertEqual(changes.goneIDs, [12])
+        XCTAssertTrue(svc.heldWindowIDs.isEmpty)
     }
 
     func testUnreadableHiddenWindowStopsBeingReQueriedAfterTheBudgetButStaysReserved() {
@@ -291,6 +607,26 @@ final class WindowDiscoveryServiceTests: XCTestCase {
         XCTAssertEqual(access.queries.filter { $0 == 13 }.count, 1 + 5)
         XCTAssertTrue(cache.hiddenWindowIDs.contains(13))
         XCTAssertTrue(cache.reservedHiddenWindowIDs.contains(13))
+    }
+
+    /// while the walk backs off from an app, a re-check of its hidden
+    /// window would time out too; it is skipped and spends none of the few
+    /// asks the re-check gets
+    func testAReCheckOfABackedOffAppSpendsNoAsk() {
+        let access = StubAccessibility()
+        access.stateAnswer = nil
+        let (svc, cache, _) = makeService(accessibility: access)
+        cache.knownWindowIDs = [14]
+        cache.windowOwners[14] = 8400
+
+        _ = compute(svc, snapshot: [], runningPIDs: [8400])
+        access.backingOff = [8400]
+        for _ in 0..<10 { _ = compute(svc, snapshot: [], runningPIDs: [8400]) }
+        XCTAssertEqual(access.queries.filter { $0 == 14 }.count, 1, "the one ask when it vanished")
+
+        access.backingOff = []
+        for _ in 0..<10 { _ = compute(svc, snapshot: [], runningPIDs: [8400]) }
+        XCTAssertEqual(access.queries.filter { $0 == 14 }.count, 1 + 5, "the budget was untouched meanwhile")
     }
 
     func testUnreadableHiddenWindowReservesUntilAReVerifyProvesItClosed() {
@@ -541,5 +877,68 @@ final class WindowDiscoveryServiceTests: XCTestCase {
 
         // new window: retile
         XCTAssertTrue(compute(svc, snapshot: [makeWindow(id: 1, pid: 1)]).needsRetile)
+    }
+}
+
+/// the walk's backoff for apps whose window list does not answer
+final class StallBackoffTests: XCTestCase {
+    private let t0 = Date(timeIntervalSinceReferenceDate: 1000)
+
+    func testAnUnknownAppIsAskedAndAFailureStartsTheBackoff() {
+        var backoff = StallBackoff()
+        XCTAssertFalse(backoff.isBackingOff(7, now: t0))
+        XCTAssertFalse(backoff.isDue(7, now: t0))
+
+        XCTAssertEqual(backoff.noteFailure(7, now: t0), 0.5)
+
+        XCTAssertTrue(backoff.isBackingOff(7, now: t0.addingTimeInterval(0.4)))
+        XCTAssertFalse(backoff.isDue(7, now: t0.addingTimeInterval(0.4)))
+        XCTAssertTrue(backoff.isDue(7, now: t0.addingTimeInterval(0.5)), "one probe is due once it is up")
+        XCTAssertFalse(backoff.isBackingOff(7, now: t0.addingTimeInterval(0.5)))
+    }
+
+    func testRepeatedFailuresDoubleUpToTheCap() {
+        var backoff = StallBackoff()
+        var now = t0
+        var waits: [TimeInterval] = []
+        for _ in 0..<6 {
+            let wait = backoff.noteFailure(7, now: now)
+            waits.append(wait)
+            now = now.addingTimeInterval(wait)
+        }
+        XCTAssertEqual(waits, [0.5, 1, 2, 4, 8, 8])
+    }
+
+    func testAnAnswerEndsTheBackoffAndTheNextFailureStartsSmall() {
+        var backoff = StallBackoff()
+        _ = backoff.noteFailure(7, now: t0)
+        _ = backoff.noteFailure(7, now: t0.addingTimeInterval(1))
+        backoff.noteSuccess(7)
+        XCTAssertFalse(backoff.isBackingOff(7, now: t0.addingTimeInterval(1)))
+        XCTAssertTrue(backoff.stalledPIDs.isEmpty)
+        XCTAssertEqual(backoff.noteFailure(7, now: t0.addingTimeInterval(2)), 0.5)
+    }
+
+    /// only a timeout backs off. an app that answers with any other error,
+    /// one still launching, is asked again on the next walk
+    func testOnlyATimeoutStartsTheBackoff() {
+        var backoff = StallBackoff()
+        for error in [AXError.failure, .apiDisabled, .notImplemented, .attributeUnsupported, .invalidUIElement] {
+            XCTAssertNil(backoff.noteListReadFailure(7, error: error, now: t0), "\(error.rawValue)")
+            XCTAssertFalse(backoff.isBackingOff(7, now: t0))
+            XCTAssertFalse(backoff.isDue(7, now: t0))
+        }
+        XCTAssertTrue(backoff.stalledPIDs.isEmpty)
+
+        XCTAssertEqual(backoff.noteListReadFailure(7, error: .cannotComplete, now: t0), 0.5)
+        XCTAssertTrue(backoff.isBackingOff(7, now: t0.addingTimeInterval(0.4)))
+    }
+
+    func testAnAppThatQuitIsForgotten() {
+        var backoff = StallBackoff()
+        _ = backoff.noteFailure(7, now: t0)
+        _ = backoff.noteFailure(8, now: t0)
+        backoff.retain([8])
+        XCTAssertEqual(backoff.stalledPIDs, [8])
     }
 }

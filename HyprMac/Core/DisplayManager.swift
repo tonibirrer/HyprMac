@@ -51,9 +51,12 @@ class DisplayManager {
     func refreshedFingerprint() -> String {
         refresh()
         var nextBounds: [String: CGRect] = [:]
+        // by name and frame, in a fixed order. the display id changes on
+        // some wakes and NSScreen.screens comes back in another order, and
+        // either used to read as a new topology: every workspace re-homed
+        // and every visible one retiled for a desk that had not changed
         let fingerprint = screens.map { screen in
-            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            let key = "\(id?.uint32Value ?? 0):\(screen.localizedName)@\(screen.frame)"
+            let key = "\(screen.localizedName)@\(screen.frame)"
             let visible = screen.visibleFrame
             let prior = fingerprintUsableBounds[key]
             let slack = TilingConfig.rectComparisonSlackPx
@@ -70,7 +73,7 @@ class DisplayManager {
             let stable = unchanged ? prior! : visible
             nextBounds[key] = stable
             return "\(key)/\(stable)"
-        }.joined(separator: "|")
+        }.sorted().joined(separator: "|")
         fingerprintUsableBounds = nextBounds
         return fingerprint
     }
@@ -136,6 +139,24 @@ class DisplayManager {
             }
         }
         return best ?? screens.first
+    }
+
+    /// The screen holding the largest part of `frame` (CG). A frame on no
+    /// screen at all falls back to the screen nearest its origin, so a window
+    /// parked in the hide corner counts for the screen it is parked on.
+    func screen(containingMostOf frame: CGRect) -> NSScreen? {
+        var best: NSScreen?
+        var bestArea: CGFloat = 0
+        for screen in screens {
+            let overlap = frame.intersection(cgFullRect(for: screen))
+            guard !overlap.isNull else { continue }
+            let area = overlap.width * overlap.height
+            if area > bestArea {
+                bestArea = area
+                best = screen
+            }
+        }
+        return best ?? screen(at: frame.origin)
     }
 
     /// Resolve which screen `window` lives on, using its center point

@@ -43,20 +43,25 @@ singleton except `UserConfig.shared` and `MenuBarState.shared`.
 |---|---|
 | `WindowManager` | Orchestrator. Wires services, drives lifecycle, owns mouse monitors and observers. |
 | `HotkeyManager` | Session-level CGEventTap on a dedicated thread. Translates Hypr-key chords into `Action` values, dispatched to main. |
-| `KeyRemapper` | hidutil-driven Caps Lock → F18 remap so the Hypr key produces clean keyDown/keyUp events. |
+| `KeyRemapper` | hidutil-driven Caps Lock → F18 remap so the Hypr key produces clean keyDown/keyUp events. Adds and removes only its own `UserKeyMapping` entry (see "Caps Lock remap"). |
 | `AccessibilityManager` | AX bridge. Enumerates windows, resolves the focused window, picks directional neighbors. |
 | `DisplayManager` | NSScreen tracking and CG ↔ NS coordinate conversion. |
 | `SpaceManager` | macOS native Spaces enumeration via private CGS APIs (read-only). |
 | `WorkspaceManager` | HyprMac's ten virtual workspaces, screen↔workspace mapping, home-screen affinity. |
 | `TilingEngine` | One BSP tree per `(workspace, screen)`, verified sizing, smart insert, keyboard swap, and candidate drag commit. |
-| `FloatingWindowController` | Float / tile toggle, cycle, raise-behind, auto-float predicate. |
-| `MouseTrackingManager` | Focus-follows-mouse, refocus-under-cursor, menu-tracking suppression. |
+| `FloatingWindowController` | Float / tile toggle, cycle, raise-behind (with `RaiseBehindThrottle`), the click re-raise, auto-float predicate. |
+| `MouseTrackingManager` | Focus-follows-mouse, refocus-under-cursor, menu and popup suppression. |
+| `TiledFocusRouter` | Focus for hover, Hypr+Arrow, Hypr keydown, the focus invariant and the raise restore. A tile a floater covers is focused through SkyLight alone, checked, and falls back to the usual path. |
+| `WindowStacking` | Pure rules over the CG window list: the frontmost app's open popup, pointer hit-test, floaters above or below a tile, and the tiles covering each floater. |
 | `TiledDragHandler` | Owns captured press/release state, cancellation, and verified cache updates. |
-| `TiledDragTransaction` | Builds isolated insertion, swap, or resize candidates and verifies frames before commit. |
+| `TiledDragTransaction` | Builds isolated insertion, swap, or resize candidates, within one tree or across two monitors' trees, and verifies frames before commit. |
+| `TiledDropPlanner` | Picks a tiled drop's target tile and edge. The drop and its live preview both call it, so they cannot disagree. |
+| `TiledDragPreviewSession` | Throttles the live drop preview: at most 60 updates a second, the last move held, a redraw only when the landing rect changes. |
+| `TiledDropPreviewPanel` | The click-through, floating-tier panel that draws the drop preview in the user's focus color. |
 | `FrameSizingAttempt` | Bounded AX writes and complete frame readback through an injected clock and IO surface. |
 | `FocusBorder` | Visual focus indicator. Persistent panels at `.floating` level with occlusion masking. |
 | `FocusBrackets` | Corner brackets shown around the focus target while the Hypr key is held. |
-| `DimmingOverlay` | Dim mask over non-focused tiled windows; one panel per display at `.floating - 1`. |
+| `DimmingOverlay` | Dim mask over non-focused tiled windows; one panel per display at `.floating - 1`. A floater's cutout covers only the part of it that is in front. |
 | `CursorManager` | Cursor warp via `CGWarpMouseCursorPosition` + reassociate dance. |
 | `AppLauncherManager` | Launch-or-focus path for the `launchApp` action. |
 | `CommandRunner` | Runs the `runCommand` action's command line directly through `Process` — tokenize, resolve the program, launch. Never a shell. |
@@ -78,7 +83,9 @@ These types decompose what would otherwise be a monolithic
   (`activation-switch`, `mouse-focus`, `workspace-transition`).
 - **`PollingScheduler`** owns a slow (10s) reconcile timer plus a
   coalescing token that funnels event-driven `schedule(after:)` requests
-  down to a single in-flight call. The timer is a safety net — it catches
+  down to a single in-flight call. A request for an earlier fire moves
+  that call up, so a hold's five-second expiry poll never delays an event
+  poll. The timer is a safety net — it catches
   apps that refuse AX observers, notifications the observer layer missed,
   and external moves nothing else reports; `AXNotificationService` events
   are the primary trigger. WindowManager suppresses polling while the mouse
@@ -143,6 +150,39 @@ PollingScheduler.timer (10s reconcile net)     ┘        (coalesced)
 
 Per-app AXObserver notifications are the primary discovery trigger; the
 10s timer only backstops missed events and observer-refusing apps.
+A window the walk could not read — its app failed the window-list read,
+or its frame read failed — is reported on
+`AccessibilityManager.unreadableWindowIDs` while the window server still
+shows it. Discovery holds such a window in every store: not gone, not
+hidden, not returned. The tile pass keeps its leaf and writes no frame to
+it, and the poll that reads it again retiles its key once. The walk sets
+a 0.25 s messaging timeout on the elements it reads, so a stalled app
+costs a quarter second and is held rather than judged. An app whose
+window list timed out is not asked again until a backoff is up, half a
+second doubling to eight (`StallBackoff`), and only one stalled app is
+asked per walk, so a walk pays at most one timeout however many apps
+are stalled; before, every walk asked every stalled app anew, on every
+poll, event, switch and move. The walk logs its duration and what it
+skipped at debug (`AX walk:`). A missing
+window its app still lists, neither minimized nor hidden with the app —
+another Space, a native full-screen excursion, a stale snapshot — is held
+the same way for five seconds (`WindowDiscoveryService.listedHoldSpan`)
+and hidden as before once it passes; a tile pass in between keeps its
+leaf, so the excursion leaves the layout untouched, and the poll that
+ends the hold is asked for when it runs out. `TilingEngine` owns the
+hold: `heldWindowIDsSource` names the windows the walk could not hand
+over, every pass asks it and holds the members its list does not carry,
+so a retile, a move onto the workspace, a scratchpad show, the recovery's
+passes and the drift re-apply all keep the held leaf, and no caller can
+forget it. A pass given no list (a removal such as a send to the
+scratchpad, a resize, a swap, a split toggle, a force insert) holds every
+member of its tree the source names, so it neither reads a hung app's
+window nor writes to one on another Space. A layout restore keeps a held
+member of the live tree as an incumbent instead of dropping its leaf.
+While the session is locked, the displays sleep, or the user session is
+switched out, `computeChanges` treats a missing window as no evidence and
+skips the cycle, and `pollWindowChanges` stops there;
+`WindowManager.systemInterruption` opens and closes that span.
 
 ## Ownership rules
 
@@ -292,10 +332,20 @@ another monitor and macOS's rescale-to-neighbor bug cannot fire.
 
 Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.
+Two screens on one x, a stacked desk, keep the order `NSScreen.screens`
+lists them in, which puts the primary display first, so a stacked desk
+keeps the homes it had. Retile All fills the screens in the same order.
 Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
 `moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
 *window* to the adjacent monitor's visible workspace instead.
+
+`Hypr+Shift+N` moves the focused window to workspace N and stays put,
+unless N is showing on another monitor, where focus follows the window.
+`Hypr+Ctrl+Shift+N` (`moveToWorkspaceAndFollow`) also switches to N with
+the window focused. Both go through `WorkspaceOrchestrator.moveToWorkspace`,
+and a follow warps the cursor to where the window is going rather than to
+its live frame. See "Move and follow" in `docs/keybinds-and-actions.md`.
 
 `WorkspaceOrchestrator.moveToNextEmptyWorkspace` implements Hypr+F. It resolves
 the actual AX-focused standard window and its physical display, then asks
@@ -327,7 +377,27 @@ visible-workspace mapping refreshes (`initializeMonitors`), BSP trees
 migrate to each workspace's current home
 (`TilingEngine.handleDisplayChange`), hidden-workspace windows
 re-park at the (possibly moved) global corner, and visible workspaces
-retile. Workspace assignments and the floating set are preserved —
+retile. Each display remembers the workspace it last showed, by name, and
+also by name and frame for two displays of one model. A display that
+comes back shows that workspace again when it is still one of its own;
+otherwise it falls back to its lowest home workspace. The fingerprint that
+gates the reconcile is the sorted list of display names and frames plus
+usable bounds. A display id that changes across a wake, or
+`NSScreen.screens` in another order, is the same desk. When the desk
+comes back with the fingerprint it had before the transition, the
+visible workspaces still retile once, since macOS moved windows while a
+display was away; over frames that already stand that pass only reads.
+
+Within twenty seconds of a sleep, wake, lock or unlock the settle beat is
+five seconds instead of two, since displays reattach one at a time. A
+reconcile that comes due while the session is still locked or the
+displays sleep waits and settles again; when the interruption ends, the
+beat restarts from there. Polls are held off for the whole beat, every
+time it is re-armed, and workspace and layout actions pressed meanwhile
+are dropped with a beep. A park write that fails asks for the repair poll for the
+first three failures in a row only; after that the ordinary poll retries.
+
+Workspace assignments and the floating set are preserved —
 full redistribution (`distributeWindowsAcrossWorkspaces`) runs only at
 first launch and on explicit "Retile All". Discovery polling is
 suppressed through the settle window so drift detection cannot
@@ -363,7 +433,9 @@ constrained vertical monitors.
 Max BSP depth is 3 (smallest slot = 1/8 of screen). Beyond that, smart
 insert finds no fitting leaf. The pass reports the window as refused on its
 `AdmissionResult`; nothing routes it elsewhere, and `AdmissionRecovery`
-gives it one bounded retry and then floats it where it stands.
+gives it one bounded retry and then floats it where it stands. A retry
+refused on some of its newcomers floats only those and runs the pass again
+for the rest, at most three times.
 
 Two-pass layout via `HyprWindow.setFrameWithReadback`:
 1. Pass 1 applies target frames and reads back actual sizes.
@@ -380,6 +452,58 @@ the app accepts a tighter resize by at least
 ratchet the floor down.
 
 See `docs/tiling-algorithm.md` for the full algorithm walkthrough.
+
+## Quick Look previews
+
+A Quick Look preview (select a file, press Space) is a `QLPreviewPanel`.
+It is one long-lived panel inside whichever app opened it (Finder,
+Messages, Mail), not a window of a Quick Look process. Discovery used to
+drop it along with every other non-standard subrole, so it was unmanaged:
+focus-follows-mouse buried it under the hovered tile, and Hypr+Shift+T
+could not find it.
+
+`WindowAdmissionFilter` (`Core/Discovery`) is the one place that decides
+which AX windows discovery keeps. It admits a Quick Look panel when all
+of these hold:
+
+- role `AXWindow` and subrole exactly `Quick Look`. That is what the panel
+  reported on macOS 15.7. Its role description (`window`), identifier,
+  title and document are generic or empty, so the subrole is the only
+  Quick Look signal;
+- not modal, and not in native full screen (`AXFullScreen`);
+- its own CG window, found through `_AXUIElementGetWindow` and never by
+  position, is visible on layer 0 or layer 3. The panel sits at the
+  floating level (layer 3) while its app is active.
+
+An admitted panel is always a floater (`FloatingAdmissionPolicy` reason
+`quick look preview`) and never enters a BSP tree:
+
+- **Opening** is a new floating window, assigned to the visible workspace
+  on the screen where it opened. Floaters use no tile slot, so a full
+  workspace does not route it anywhere. Startup and Retile All ask the same
+  policy, so they keep it floating too.
+- **Floating logic** treats it like any floater: Hypr+Shift+T cycles to it,
+  and raise-behind lifts it when a tile covers it. While its app is active
+  it sits on layer 3, above every tile, so nothing covers it then.
+- **Hypr+T** does not tile it. The toggle refuses up front with the red
+  shake ("Quick Look previews stay floating") and nothing is laid out.
+  Sending it to the scratchpad beeps, and moving it off a disabled monitor
+  keeps it floating.
+- **Arrowing to another file** resizes the panel to fit the item. That is
+  left alone: floaters get no drift re-apply.
+- **Closing** (Space, Esc, the close button) orders the panel out. The app
+  stops listing it, and the next preview comes back with the same id.
+  Discovery forgets it outright, floating flag and all, instead of keeping
+  a ghost, so the next preview is new. The same happens if it disappears
+  for any other reason: its app hidden or deactivated, or Quick Look's own
+  full-screen view.
+- **Full screen** is never managed. Native full screen is refused by the
+  rule. Quick Look's own full-screen view sets the panel's alpha to 0 and
+  draws on higher layers, so the panel leaves the snapshot until it
+  returns.
+
+macOS 27 behaviour is unconfirmed. `docs/debugging.md` lists the log lines
+that show what the panel reports there.
 
 ## Coordinate systems
 
@@ -428,6 +552,51 @@ event and need no update callback. See [settings polish](settings-polish.md).
 The on-disk JSON wire format for keybinds is frozen — see
 `docs/keybinds-and-actions.md` for the contract.
 
+## Caps Lock remap
+
+`hidutil`'s `UserKeyMapping` is one system-wide list. Users with their
+own system-wide mappings (from a LaunchAgent or a script) share it with
+HyprMac, so
+`KeyRemapper` never writes the whole list from scratch. It reads the list
+through IOKit (`IOHIDEventSystemClientCopyProperty`), changes only its own
+Caps Lock → F18 entry, and writes the result with `hidutil property --set`.
+The rules are the pure `KeyMappingMerge`, pinned by `KeyRemapperTests`:
+
+- Install adds the entry once. Every other entry keeps its place.
+  Repeated launches never add a second copy, and a list that already
+  matches is not written.
+- Remove (at quit, when the Hypr key changes away from Caps Lock, and
+  at launch when it is not Caps Lock) takes out only that entry. It never
+  writes `[]` over other entries.
+- A user entry whose source is Caps Lock (Caps Lock → Escape, say)
+  cannot coexist with ours. While Caps Lock is the Hypr key, ours takes
+  its place in the list, and the user's entry is held in the
+  `heldCapsLockKeyMappings` default. The hold is stored before the write
+  and cleared only after a successful one. Remove puts it back where ours
+  was. If something else has mapped Caps Lock by then, or ours is already
+  gone, the hold is dropped instead. Taking over, putting back and
+  dropping each log at `.notice`.
+- A list with an entry HyprMac can't reproduce exactly (not a plain
+  src/dst pair of whole numbers) is left alone. Nothing is written, and
+  the skip logs at `.error`. With Caps Lock as the Hypr key, that leaves
+  the Hypr key dead until the list is fixed.
+- An entry identical to ours counts as ours, whoever added it.
+
+It reads through IOKit instead of parsing `hidutil property --get`: the
+key is public (`kIOHIDUserKeyUsageMapKey`), the value comes back typed, and
+the `--get` output is a CoreFoundation description string with no stable
+format. A missing property (nothing set since boot) reads as an empty
+list. If that read ever came back empty while our entry was set, remove
+would write nothing and leave F18 in place; the old code wrote `[]`.
+
+The Debug and Release apps have separate defaults domains, so each holds
+its own displaced entry. Running one after the other while an entry is
+held can put back a mapping the user no longer has. Quit one variant
+before starting the other.
+
+Mappings set per keyboard with `hidutil --matching` are not in this list,
+and HyprMac does not read or change them.
+
 ## Permissions
 
 - **Accessibility** (System Settings → Privacy → Accessibility) —
@@ -439,8 +608,10 @@ The on-disk JSON wire format for keybinds is frozen — see
   event system, before the `hidutil` user mapping and before any
   CGEvent exists, so "No Action" (or any other choice) swallows the key
   before `KeyRemapper` or the event tap sees it. It is per keyboard.
-  The same holds for Control, Option, and Command when one of them is
-  the Hypr key. macOS exposes no supported way to read or change this,
+  The same holds for Option and Command on either side, and for
+  Control, which older configs may still use (see "Hypr key" in
+  `docs/keybinds-and-actions.md`). Shift, Tab, backtick, backslash and
+  F13–F20 are not in that pane. macOS exposes no supported way to read or change this,
   so HyprMac never claims it is verified: `HyprKeySystemGuidance`
   supplies the copy and the deep link shown in the permissions gate,
   the tour, and Settings → Keys.
@@ -464,6 +635,28 @@ this list is the index.
   automatically on app activation and discovery reconciliation. It leaves
   floating siblings of the focused tiled app alone, because restoring focus
   within that app can put the tile back above its sibling and cause a loop.
+  It raises only floaters a tile overlaps, stands down while the frontmost
+  app has a menu open, and cools a pair down when the raise does nothing
+  (macOS 27 ignores a cross-app AXRaise, seen live) or loops. A managed
+  floater counts on layer 0 or on the floating level (3), since AppKit
+  moves floating panels between the two as their app activates. Hover and Hypr+Arrow
+  focus avoid burying floaters in the first place through
+  `TiledFocusRouter`; workspace switches, window moves and the scratchpad
+  do not yet. A click on a tile still lifts it natively; the click re-raise
+  puts the floater back about 40 ms after mouse-up and hands focus back to
+  the tile without lifting it, so the covered part of the floater blinks
+  once per click. That works only for a floater of the tile's own app. A
+  floater whose app takes the front when raised is cooled down at once
+  after that click, and each such loop doubles the cooldown up to ten
+  minutes, so it blinks on one click and not on every one. A pair that
+  stays quiet for five minutes after its cooldown ends starts that
+  escalation over. No raise is scheduled off an app activation while a
+  press or a click is in flight. The refocus that follows a click honours
+  the quiet window after a keyboard action; the refocus a keyboard action
+  asks for itself does not, so a send-to-scratchpad does not leave focus
+  on the window it just parked. When a raise does nothing, the dim shows
+  the floater only where it is in front. See `docs/debugging.md` "Floaters, open menus and
+  no-raise focus".
 - **Squishy-sibling swap rejection** — when a swap squishes a
   sibling app that has no AX-reported or readback-confirmed minimum
   size (the canonical case in the user's setup is Sidenote), the

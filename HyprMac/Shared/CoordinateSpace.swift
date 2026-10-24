@@ -34,4 +34,14 @@ extension CGRect {
         abs(minX - other.minX) <= tolerance && abs(minY - other.minY) <= tolerance
             && abs(maxX - other.maxX) <= tolerance && abs(maxY - other.maxY) <= tolerance
     }
+
+    /// This rect shrunk to fit `bounds` and then moved the least distance
+    /// that puts all of it inside. Unchanged when it already fits.
+    func clamped(into bounds: CGRect) -> CGRect {
+        let width = min(self.width, bounds.width)
+        let height = min(self.height, bounds.height)
+        let x = max(bounds.minX, min(minX, bounds.maxX - width))
+        let y = max(bounds.minY, min(minY, bounds.maxY - height))
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
 }

@@ -44,7 +44,19 @@ class BSPNode {
     /// Forced split direction from `togglesplit`. `nil` lets dwindle
     /// pick from the rect aspect ratio. Survives until a sibling
     /// restructure (insert / remove on this node) clears it.
-    var splitOverride: SplitDirection?
+    var splitOverride: SplitDirection? {
+        // an assignment is the user's unless the caller says otherwise
+        // right after it
+        didSet { splitOverrideIsAutomatic = false }
+    }
+
+    /// `true` when `splitOverride` was pinned by smart insert at the split's
+    /// creation, so the axis chosen then survives every later ratio change,
+    /// rather than set by `togglesplit`. A migration to a screen of the
+    /// other orientation drops the automatic pins and keeps the user's.
+    /// Set after `splitOverride`, never before: assigning the override
+    /// clears it.
+    var splitOverrideIsAutomatic = false
 
     /// Column lock from the full-height window rule: this node is an
     /// ancestor of a full-height leaf, so it always splits left | right.
@@ -77,6 +89,10 @@ class BSPNode {
     /// had no override. Written and cleared with `savedSplitRatio`.
     var savedSplitOverride: SplitDirection?
 
+    /// Whether `savedSplitOverride` was smart insert's pin rather than the
+    /// user's, so the axis comes back as whichever it was.
+    var savedSplitOverrideIsAutomatic = false
+
     /// Ratio the node should adopt once it has children again. Set by
     /// `insert` on the node it just split, consumed by
     /// `applySavedRatios` after the reset pass. Kept separate from
@@ -88,6 +104,10 @@ class BSPNode {
     /// real value here (the old split had no override), so
     /// `pendingSplitRatio` is the gate for both.
     var pendingSplitOverride: SplitDirection?
+
+    /// Whose pin `pendingSplitOverride` is, carried from
+    /// `savedSplitOverrideIsAutomatic`.
+    var pendingSplitOverrideIsAutomatic = false
 
     /// `true` for terminal nodes — see file-level invariants.
     var isLeaf: Bool { window != nil || (left == nil && right == nil) }
@@ -126,6 +146,7 @@ class BSPNode {
         // savedSplitRatio alone says whether a restore is pending
         let restoredRatio = self.savedSplitRatio
         let restoredOverride = self.savedSplitOverride
+        let restoredOverrideIsAutomatic = self.savedSplitOverrideIsAutomatic
         let newWindowGoesLeft = restoredRatio != nil && self.savedChildWasLeft == true
 
         self.window = nil
@@ -133,11 +154,14 @@ class BSPNode {
         self.userSetRatio = false
         self.splitOverride = nil
         self.forcedColumn = false
+        self.splitOverrideIsAutomatic = false
         self.savedSplitRatio = nil
         self.savedChildWasLeft = nil
         self.savedSplitOverride = nil
+        self.savedSplitOverrideIsAutomatic = false
         self.pendingSplitRatio = nil
         self.pendingSplitOverride = nil
+        self.pendingSplitOverrideIsAutomatic = false
 
         if newWindowGoesLeft {
             self.left = BSPNode(window: newWindow)
@@ -153,6 +177,7 @@ class BSPNode {
         if let ratio = restoredRatio {
             self.pendingSplitRatio = ratio
             self.pendingSplitOverride = restoredOverride
+            self.pendingSplitOverrideIsAutomatic = restoredOverrideIsAutomatic
         }
     }
 
@@ -180,6 +205,7 @@ class BSPNode {
         let remembers = parent.userSetRatio && sibling?.isLeaf == true
         let lostRatio = parent.splitRatio
         let lostOverride = parent.splitOverride
+        let lostOverrideIsAutomatic = parent.splitOverrideIsAutomatic
 
         parent.window = sibling?.window
         parent.left = sibling?.left
@@ -188,18 +214,22 @@ class BSPNode {
         parent.userSetRatio = sibling?.userSetRatio ?? false
         parent.splitOverride = sibling?.splitOverride
         parent.forcedColumn = sibling?.forcedColumn ?? false
+        parent.splitOverrideIsAutomatic = sibling?.splitOverrideIsAutomatic ?? false
         parent.pendingSplitRatio = sibling?.pendingSplitRatio
         parent.pendingSplitOverride = sibling?.pendingSplitOverride
+        parent.pendingSplitOverrideIsAutomatic = sibling?.pendingSplitOverrideIsAutomatic ?? false
 
         if remembers {
             parent.savedSplitRatio = lostRatio
             parent.savedChildWasLeft = wasLeft
             parent.savedSplitOverride = lostOverride
+            parent.savedSplitOverrideIsAutomatic = lostOverrideIsAutomatic
         } else {
             // the promoted node keeps whatever it was already remembering
             parent.savedSplitRatio = sibling?.savedSplitRatio
             parent.savedChildWasLeft = sibling?.savedChildWasLeft
             parent.savedSplitOverride = sibling?.savedSplitOverride
+            parent.savedSplitOverrideIsAutomatic = sibling?.savedSplitOverrideIsAutomatic ?? false
         }
 
         parent.left?.parent = parent
@@ -224,12 +254,30 @@ class BSPNode {
         if !isLeaf, let ratio = pendingSplitRatio {
             self.splitRatio = ratio
             self.userSetRatio = true
-            self.splitOverride = pendingSplitOverride
+            // a boundary with no override of its own keeps the axis the
+            // split was just pinned to. a togglesplit axis comes back as the
+            // user's, so a turn keeps it
+            if let restored = pendingSplitOverride {
+                self.splitOverride = restored
+                self.splitOverrideIsAutomatic = pendingSplitOverrideIsAutomatic
+            }
             self.pendingSplitRatio = nil
             self.pendingSplitOverride = nil
+            self.pendingSplitOverrideIsAutomatic = false
         }
         left?.applySavedRatios()
         right?.applySavedRatios()
+    }
+
+    /// Drop every automatic axis pin in the subtree. Overrides from
+    /// `togglesplit` stay.
+    func clearAutomaticSplitOverrides() {
+        if splitOverrideIsAutomatic {
+            splitOverride = nil
+            splitOverrideIsAutomatic = false
+        }
+        left?.clearAutomaticSplitOverrides()
+        right?.clearAutomaticSplitOverrides()
     }
 
     /// Reset every internal node's `splitRatio` to the default, except

@@ -148,7 +148,7 @@ final class FullscreenSwitchTests: XCTestCase {
 
         orchestrator.allWindows = { [unowned self] in [self.tile] }
         orchestrator.screenUnderCursor = { [unowned self] in self.screen }
-        orchestrator.tileAllVisibleSpaces = { }
+        orchestrator.tileAllVisibleSpaces = { _ in }
         orchestrator.runAfter = { _, work in work() }
         orchestrator.presentFullscreenWindows = { [unowned self] ws in
             self.presented.append(ws)
@@ -219,7 +219,7 @@ final class FullscreenSwitchTests: XCTestCase {
 
 // MARK: - doubles
 
-private final class FullscreenTestScreen: NSScreen {
+private final class FullscreenTestScreen: SyntheticScreen {
     private let bounds: CGRect
     private let name: String
     init(x: CGFloat, name: String) {
@@ -230,11 +230,7 @@ private final class FullscreenTestScreen: NSScreen {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var frame: NSRect { bounds }
     override var visibleFrame: NSRect { bounds }
-    // detached test screen: AppKit traps on both of these on macOS 26
     override var localizedName: String { name }
-    override var deviceDescription: [NSDeviceDescriptionKey: Any] {
-        [NSDeviceDescriptionKey("NSScreenNumber"): NSNumber(value: 930_000 + Int(bounds.minX))]
-    }
 }
 
 private final class FullscreenTestWindow: HyprWindow {

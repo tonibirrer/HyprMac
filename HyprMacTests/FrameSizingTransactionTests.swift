@@ -16,6 +16,7 @@ final class FrameSizingTransactionTests: XCTestCase {
         var positionReadAdvances: [TimeInterval] = []
         var sizeReadAdvances: [TimeInterval] = []
         var callAdvance: TimeInterval = 0
+        var sizeWriteTimes: [TimeInterval] = []
 
         func io() -> FrameSizingIO {
             FrameSizingIO(
@@ -27,6 +28,7 @@ final class FrameSizingTransactionTests: XCTestCase {
                 },
                 writeSize: { [unowned self] id, size, _ in
                     operations.append("size:\(id)")
+                    sizeWriteTimes.append(time)
                     time += writeAdvances.isEmpty ? callAdvance : writeAdvances.removeFirst()
                     if !writeErrors.isEmpty { return writeErrors.removeFirst() }
                     frames[id]?.size = size
@@ -204,6 +206,104 @@ final class FrameSizingTransactionTests: XCTestCase {
             targets: [.init(windowID: 14, frame: candidate)], originalFrames: [14: original],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
         XCTAssertEqual(outcome.outcome, .rejectedRestored(reason: .geometryMismatch(14), actualFrames: [14: original]))
+    }
+
+    // MARK: - a layout that already stands
+
+    private func inPlaceFixture() -> (Fake, CGRect, CGRect, CGRect) {
+        let fake = Fake()
+        let left = CGRect(x: 8, y: 8, width: 492, height: 784)
+        let right = CGRect(x: 508, y: 8, width: 492, height: 784)
+        fake.frames[7] = left
+        fake.frames[8] = right
+        return (fake, left, right, CGRect(x: 0, y: 0, width: 1008, height: 800))
+    }
+
+    /// Most retiles are this: the other screen on a workspace switch, a
+    /// move's source twice, a poll re-applying a tree. Every one of them
+    /// sent three setters per window and waited a settle and a stable
+    /// readback of frames that never moved.
+    func testALayoutAlreadyInPlaceIsAcceptedFromTheCaptureWithoutAWriteOrAWait() throws {
+        let (fake, left, right, usable) = inPlaceFixture()
+        let result = try XCTUnwrap(FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: left, 8: right], usableFrame: usable, gap: 8, generation: 1))
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertEqual(result.actualFrames, [7: left, 8: right])
+        XCTAssertTrue(fake.operations.isEmpty, "the capture was the readback: \(fake.operations)")
+        XCTAssertEqual(fake.time, 0, "no settle is waited for")
+        XCTAssertTrue(result.progress.verifiedInPlace)
+        XCTAssertTrue(result.progress.readbackComplete)
+        XCTAssertTrue(FrameSizingProgressReport(candidate: result.progress).candidateVerified,
+                      "a layout that stood counts as written, so it publishes")
+    }
+
+    func testAnOriginalWithinTheVerdictsToleranceIsInPlaceToo() {
+        let (fake, left, right, usable) = inPlaceFixture()
+        // a point off in position, as the verdict would accept after a write
+        let sat = left.offsetBy(dx: 1, dy: 0)
+        let result = FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: sat, 8: right], usableFrame: usable, gap: 8, generation: 1)
+
+        XCTAssertEqual(result?.actualFrames, [7: sat, 8: right])
+    }
+
+    /// the cell of rounding the verdict allows after a write is not room
+    /// to stand in: a window two points short of its slot has not been
+    /// asked yet, and is written
+    func testAnOriginalTwoPointsOffIsNotInPlace() {
+        let (fake, left, right, usable) = inPlaceFixture()
+        let narrow = CGRect(x: left.minX, y: left.minY, width: left.width - 2, height: left.height)
+        XCTAssertNil(FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: narrow, 8: right], usableFrame: usable, gap: 8, generation: 1))
+        let shifted = left.offsetBy(dx: 2, dy: 0)
+        XCTAssertNil(FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: shifted, 8: right], usableFrame: usable, gap: 8, generation: 1))
+    }
+
+    func testOneWindowOffItsTargetIsNotInPlace() {
+        let (fake, left, right, usable) = inPlaceFixture()
+        let elsewhere = CGRect(x: 508, y: 8, width: 400, height: 784)
+        XCTAssertNil(FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: left, 8: elsewhere], usableFrame: usable, gap: 8, generation: 1))
+    }
+
+    func testInPlaceFramesThatFailTogetherAreNotTakenAsALayout() {
+        // both windows stand exactly on their targets, but the targets
+        // overlap: standing there proves nothing about the layout
+        let (fake, left, _, usable) = inPlaceFixture()
+        let overlapping = CGRect(x: 400, y: 8, width: 492, height: 784)
+        XCTAssertNil(FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: overlapping)],
+            originalFrames: [7: left, 8: overlapping], usableFrame: usable, gap: 8, generation: 1))
+    }
+
+    func testASupersededInPlaceLayoutIsNotAccepted() {
+        let (fake, left, right, usable) = inPlaceFixture()
+        fake.generation = 2
+        XCTAssertNil(FrameSizingAttempt(io: fake.io()).alreadyApplied(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: left, 8: right], usableFrame: usable, gap: 8, generation: 1))
+    }
+
+    /// The tiled drop is the transaction's one caller, and its originals are
+    /// the press-time capture: a drop that rebuilds the layout the drag
+    /// started from must still write the dragged window back, so the
+    /// transaction never takes the standing layout.
+    func testTheTransactionAlwaysWritesEvenWhenTheOriginalsMatchTheTargets() {
+        let (fake, left, right, usable) = inPlaceFixture()
+        let report = FrameSizingTransaction(attempt: FrameSizingAttempt(io: fake.io())).apply(
+            targets: [.init(windowID: 7, frame: left), .init(windowID: 8, frame: right)],
+            originalFrames: [7: left, 8: right], usableFrame: usable, gap: 8, generation: 1)
+
+        XCTAssertEqual(report.outcome, .accepted(actualFrames: [7: left, 8: right]))
+        XCTAssertTrue(fake.operations.contains("size:7") && fake.operations.contains("size:8"))
+        XCTAssertTrue(report.progress.candidateVerified)
     }
 
     func testSupersededAttemptNeverRollsBack() {
@@ -424,6 +524,41 @@ final class FrameSizingTransactionTests: XCTestCase {
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
         XCTAssertEqual(result.verdict, .unknown(.deadlineExceeded))
         XCTAssertGreaterThanOrEqual(fake.time, 0.1)
+    }
+
+    // a position-first write whose position never reads back on target used
+    // to poll out the whole deadline with no size written. the settle has a
+    // budget: past it the size goes out anyway and the readback judges
+    func testPositionSettleIsBoundedAndSizesBeforeTheDeadline() {
+        let fake = Fake()
+        let id: CGWindowID = 40
+        let target = CGRect(x: 8, y: 41, width: 1496, height: 841)
+        fake.frames[id] = CGRect(x: 2600, y: -450, width: 3424, height: 1391)
+        // the window keeps reading back 30 points below where it was sent
+        let landed = CGRect(x: 8, y: 71, width: 1496, height: 841)
+        fake.reads[id] = Array(repeating: (.success, Optional(landed)), count: 60)
+        var config = FrameSizingConfiguration()
+        config.positionSettleWindowIDs = [id]
+
+        let result = FrameSizingAttempt(io: fake.io(), configuration: config).apply(
+            targets: [.init(windowID: id, frame: target)],
+            usableFrame: CGRect(x: 0, y: 33, width: 1512, height: 900), gap: 8, generation: 1)
+
+        XCTAssertEqual(fake.operations.filter { $0.hasPrefix("size:") || $0.hasPrefix("position:") },
+                       ["position:40", "size:40", "size:40"])
+        let firstSize = fake.sizeWriteTimes.first ?? .infinity
+        XCTAssertLessThan(firstSize, config.deadline, "a size went out inside the deadline")
+        XCTAssertLessThanOrEqual(firstSize, config.positionSettleBudget + config.pollInterval)
+        XCTAssertEqual(result.verdict, .rejected(.geometryMismatch(id)),
+                       "the readback judged the landed frame")
+        XCTAssertEqual(result.progress.writesCompleted, [id])
+    }
+
+    func testPositionSettleBudgetGrowsWithTheScaleChangeDeadline() {
+        let ordinary = FrameSizingConfiguration()
+        XCTAssertLessThan(ordinary.positionSettleBudget, ordinary.deadline / 2)
+        XCTAssertGreaterThan(ordinary.withScaleChangeBudget.positionSettleBudget,
+                             ordinary.positionSettleBudget)
     }
 
     func testDefaultToleranceRejectsGapErosionBeyondOneCellAndAcceptsSafeShift() {
@@ -724,6 +859,44 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(verdict(gap: 0, firstWidth: 100), .accepted)
         XCTAssertEqual(verdict(gap: 0, firstWidth: 100.5), .accepted)
         XCTAssertEqual(verdict(gap: 0, firstWidth: 102), .rejected(.overlap(76, 77)))
+    }
+
+    // issue #19, claim 1: a keyboard resize on the DELL (gap 8, padding 8)
+    // was refused as gapViolation(115, 74) when each window was within a
+    // point of its own target. a pair the per-window check accepts at that
+    // precision must not fail the gap check.
+    func testAPointOffPerWindowNeverFailsTheGapCheckAtTheShippingGap() {
+        let attempt = FrameSizingAttempt(io: Fake().io())
+        let usable = CGRect(x: 0, y: 30, width: 3440, height: 1410)
+        let splits: [(left: CGRect, right: CGRect)] = [
+            (CGRect(x: 8, y: 38, width: 2050, height: 1394), CGRect(x: 2066, y: 38, width: 1366, height: 1394)),
+            (CGRect(x: 8, y: 38, width: 1708, height: 1394), CGRect(x: 1724, y: 38, width: 1708, height: 1394))
+        ]
+        func verdict(_ left: CGRect, _ right: CGRect, _ actualLeft: CGRect, _ actualRight: CGRect)
+            -> FrameSizingAttempt.Verdict {
+            attempt.validateFrames(
+                targets: [FrameSizingAttempt.Target(windowID: 115, frame: left),
+                          FrameSizingAttempt.Target(windowID: 74, frame: right)],
+                actualFrames: [115: actualLeft, 74: actualRight],
+                usableFrame: usable, gap: 8).verdict
+        }
+
+        // the two frames quoted in the issue
+        let (left, right) = splits[0]
+        XCTAssertEqual(verdict(left, right, CGRect(x: 8, y: 38, width: 2051, height: 1394), right), .accepted)
+        XCTAssertEqual(verdict(left, right, CGRect(x: 8, y: 38, width: 2051, height: 1394),
+                               CGRect(x: 2065, y: 38, width: 1366, height: 1394)), .accepted)
+
+        // every combination of a point off in x and width on both windows
+        let offsets: [CGFloat] = [-1, 0, 1]
+        for (left, right) in splits {
+            for lx in offsets { for lw in offsets { for rx in offsets { for rw in offsets {
+                let actualLeft = CGRect(x: left.minX + lx, y: left.minY, width: left.width + lw, height: left.height)
+                let actualRight = CGRect(x: right.minX + rx, y: right.minY, width: right.width + rw, height: right.height)
+                XCTAssertEqual(verdict(left, right, actualLeft, actualRight), .accepted,
+                               "left \(actualLeft) right \(actualRight)")
+            } } } }
+        }
     }
 
     func testHalfPointTargetsPassAggregateSafetyOnIntegerReadback() {
@@ -1186,6 +1359,10 @@ final class FrameSizingTransactionTests: XCTestCase {
         let second: CGWindowID = 59
         let originalA = CGRect(x: 0, y: 0, width: 496, height: 400)
         let originalB = CGRect(x: 504, y: 0, width: 496, height: 400)
+        // targets well off the originals, or the layout stands and nothing
+        // is written at all
+        let targetA = CGRect(x: 0, y: 0, width: 400, height: 400)
+        let targetB = CGRect(x: 504, y: 0, width: 400, height: 400)
         fake.frames = [first: originalA, second: originalB]
         let base = fake.io()
         var sizeCalls = 0
@@ -1204,7 +1381,7 @@ final class FrameSizingTransactionTests: XCTestCase {
         )
         let transaction = FrameSizingTransaction(attempt: FrameSizingAttempt(io: io))
         let outcome = transaction.apply(
-            targets: [.init(windowID: first, frame: originalA), .init(windowID: second, frame: originalB)],
+            targets: [.init(windowID: first, frame: targetA), .init(windowID: second, frame: targetB)],
             originalFrames: [first: originalA, second: originalB],
             usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
         XCTAssertEqual(outcome.outcome, .degraded(candidateReason: .writeFailed(first, .cannotComplete),

@@ -67,4 +67,25 @@ struct ModifierFlags: OptionSet, Codable, Equatable, Hashable {
     }
 }
 
+// list edits match a bind by value. `id` is the chord, and a saved config can
+// hold two binds on one chord, so an id lookup can land on the wrong bind.
+extension Array where Element == Keybind {
+    /// the bind already on `bind`'s chord, other than the one being edited
+    func conflict(with bind: Keybind, editing original: Keybind?) -> Keybind? {
+        first { $0.id == bind.id && $0 != original }
+    }
+
+    func replacingBind(_ original: Keybind, with updated: Keybind) -> [Keybind] {
+        guard let index = firstIndex(of: original) else { return self }
+        var result = self
+        result[index] = updated
+        return result
+    }
+
+    /// drops `bind` and any exact copies of it, nothing else on its chord
+    func removingBind(_ bind: Keybind) -> [Keybind] {
+        filter { $0 != bind }
+    }
+}
+
 // default keybind table lives in Models/DefaultKeybinds.swift
