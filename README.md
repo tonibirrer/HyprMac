@@ -64,8 +64,8 @@ permissions, and the recommended macOS settings.
 - For the default Caps Lock Hypr key: Caps Lock must stay set to **"⇪ Caps Lock"** in System
   Settings → Keyboard → Keyboard Shortcuts → Modifier Keys, not "No Action". The pane is per
   keyboard, so check each one you use. HyprMac remaps Caps Lock to F18 itself.
-- The same holds if Control, Option, or Command is your Hypr key: leave it on its default
-  there. Tab, backtick, backslash, F13–F20, and Shift are not in that pane and need nothing.
+- The same holds if Option or Command is your Hypr key: leave it on its default there.
+  Backslash and F13–F20 are not in that pane and need nothing.
 - macOS gives apps no way to read that setting, so HyprMac shows this as a reminder in
   onboarding and in Settings → Keys, with an Open Keyboard Settings button.
 
@@ -82,6 +82,13 @@ You'll feel at home. The differences are mostly macOS being macOS:
 - **Hypr + F:** native macOS fullscreen spawns its own Space and wrecks the layout, so HyprMac
   gives the window a dedicated empty workspace on its display instead.
 - **Focus follows mouse:** there if you want it, with an adjustable hover rate.
+- **Hypr key:** Caps Lock by default. Settings → Keys also offers backslash, F13–F20, and
+  Option or Command on either side. If you pick the left Option or Command key, that key plus
+  a key HyprMac uses goes to HyprMac, so type shortcuts like ⌘S or ⌘T with the right-hand
+  key. Shift and Control are not offered because many default shortcuts add them to Hypr. Tab
+  and backtick are not offered because Hypr+Tab, Hypr+Shift+Tab, and Hypr+` are default
+  shortcuts. A config that already uses one of these keys keeps working, and Settings → Keys
+  says why it is no longer recommended.
 - **Config:** everything, including the Hypr key itself, lives in Settings and is saved as JSON
   at `~/Library/Application Support/HyprMac/config.json`. The schema is in
   [Keybinds and actions](docs/keybinds-and-actions.md).
@@ -101,6 +108,7 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 | `Hypr + Ctrl + Shift + ←/→/↑/↓` | Resize focused window in direction |
 | `Hypr + 1–9` / `Hypr + 0` | Switch to workspace 1–9 / workspace 10 |
 | `Hypr + Shift + 1–9` / `Hypr + Shift + 0` | Move window to workspace 1–9 / workspace 10 |
+| `Hypr + Ctrl + Shift + 1–9` / `Hypr + Ctrl + Shift + 0` | Move window to workspace 1–9 / 10 and switch there with it |
 | `Hypr + Tab` / `Hypr + Shift + Tab` | Cycle occupied workspaces on this monitor |
 | `Hypr + F` | Move window to a dedicated workspace on its display |
 | `Hypr + T` | Toggle floating and tiled |

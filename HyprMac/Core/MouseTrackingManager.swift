@@ -1,6 +1,6 @@
-// Focus-follows-mouse plus menu-bar-tracking suppression and
+// Focus-follows-mouse plus menu and popup suppression and
 // refocus-under-cursor recovery. Throttled at the configured hover rate
-// with a short-TTL topmost-window cache so the global mouseMoved handler stays cheap.
+// with a short-TTL window-list cache so the global mouseMoved handler stays cheap.
 
 import Cocoa
 
@@ -11,9 +11,13 @@ import Cocoa
 /// (`isFFMEligible`) gates on the FFM toggle, mouse button state, menu
 /// tracking, dock activation, animation in flight, and the
 /// `mouse-focus` suppression key. After eligibility, a configurable throttle
-/// caps resolve work, and a topmost-window cache (TTL +
-/// spatial-tolerance) avoids redundant `CGWindowListCopyWindowInfo`
-/// queries when the cursor jitters.
+/// caps resolve work, and a short-TTL window-list cache avoids a
+/// `CGWindowListCopyWindowInfo` query on every event.
+///
+/// A popup-level window of the frontmost app (an open menu, including
+/// Chrome's bookmark folders) pauses hover focus everywhere, and a raised
+/// window of the frontmost app under the cursor is never hit-tested
+/// through. Either would otherwise focus the window below and close it.
 ///
 /// `refocusUnderCursor` is a separate path used when the previously
 /// focused window vanishes mid-flight — it re-derives focus from the
@@ -22,21 +26,23 @@ import Cocoa
 /// Threading: main-thread only.
 class MouseTrackingManager {
 
-    /// Tunables for the fallback throttle and topmost-window cache.
+    /// Tunables for the fallback throttle and the menu bar dead zone.
     private enum Tuning {
         // used until WindowManager injects the saved hover response rate
         static let throttleInterval: CFAbsoluteTime = 0.008
-        // dedupe burst of NSMouseMoved events on a single frame; short
-        // enough that windows reshuffling under a stationary cursor still
-        // re-resolve within ~80ms.
-        static let topmostCacheTTL: CFAbsoluteTime = 0.08
-        // cursor jitter within this radius reuses the cached hit-test result
-        // without re-querying CGWindowListCopyWindowInfo.
-        static let topmostCacheSpatialTolerance: CGFloat = 10
         // menu bar dead zone in CG (top-left) coords. focus changes inside
         // this band would compete with menu-bar interaction.
         static let menuBarDeadZonePx: CGFloat = 25
     }
+
+    // window-list cache age. dedupes bursts of NSMouseMoved events; short
+    // enough that windows reshuffling under a stationary cursor still
+    // re-resolve within ~80ms.
+    static let windowListMaxAge: CFAbsoluteTime = 0.08
+    // a menu-level window open this long is part of the app, not a menu.
+    // stop treating it as a popup so one odd app cannot freeze FFM or the
+    // other popup guards.
+    static let popupPauseLimit: CFAbsoluteTime = 30
 
     // state
     // set by HIToolbox begin/end notifications — true for both menu bar menus
@@ -67,7 +73,12 @@ class MouseTrackingManager {
     var primaryScreenHeight: () -> CGFloat = { 0 }
     var mouseLocationNS: () -> CGPoint = { NSEvent.mouseLocation }
     var now: () -> CFAbsoluteTime = { CFAbsoluteTimeGetCurrent() }
+    // test seam: replaces the window-list hit test (and its popup check)
     var resolveTopmostWindowID: ((CGPoint) -> CGWindowID?)?
+    // front-to-back on-screen windows. read through the TTL cache below.
+    var readWindowList: () -> [StackedWindow]? = { WindowStacking.onScreen() }
+    var frontmostPID: () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+    var ownPID: pid_t = getpid()
     var screenAt: (CGPoint) -> NSScreen? = { _ in nil }
     var floatingWindowIDs: () -> Set<CGWindowID> = { [] }
     var isWindowVisible: (CGWindowID) -> Bool = { _ in false }
@@ -85,9 +96,6 @@ class MouseTrackingManager {
     var onHideFocusBorder: () -> Void = {}
     // routed to SuppressionRegistry["mouse-focus"] by WindowManager
     var isMouseFocusSuppressed: () -> Bool = { false }
-    // true while the scratchpad layer is up — FFM must not reach through the
-    // scrim to hover-focus a background tile (would dismiss the quasimodal layer)
-    var isScratchpadVisible: () -> Bool = { false }
     // minimum spacing between eligible checks. skipped events are not replayed.
     // WindowManager derives this from the user-configured response rate.
     var hoverThrottleInterval: () -> CFAbsoluteTime = { Tuning.throttleInterval }
@@ -100,6 +108,12 @@ class MouseTrackingManager {
         let window: HyprWindow
         let reason: String
     }
+
+    // the popup that last paused hover focus, so the pause logs once
+    private var pausedByPopupID: CGWindowID = 0
+    // when each open popup was first seen, and which ones outlived the limit
+    private var popupFirstSeen: [CGWindowID: CFAbsoluteTime] = [:]
+    private var ignoredStalePopupIDs: Set<CGWindowID> = []
 
     /// Entry point for FFM. Called from the global `NSMouseMoved`
     /// monitor on every event; gates and throttles before doing real
@@ -139,9 +153,9 @@ class MouseTrackingManager {
     /// owned by `SuppressionRegistry["mouse-focus"]`.
     private func isFFMEligible() -> Bool {
         guard isFocusFollowsMouseEnabled() else { return false }
-        // scratchpad quasimodality freezes focus to summoned members; hovering
-        // the scrimmed background must not steal focus to a tile beneath it.
-        if isScratchpadVisible() { hyprLog(.debug, .mouse, "ffm-bail: scratchpad visible"); return false }
+        // with the scratchpad up, hover moves focus between its members like
+        // any workspace. the window closures only offer members then, so the
+        // scrimmed background never takes focus.
         if isMouseButtonDown() { hyprLog(.debug, .mouse, "ffm-bail: mouseButtonDown"); return false }
         if menuTracking {
             // watchdog: HIToolbox sometimes drops endMenuTrackingNotification on
@@ -185,25 +199,23 @@ class MouseTrackingManager {
     ///
     /// Returns `nil` for the common no-change cases: cursor over the already-focused
     /// window, cursor over an unmanaged normal-layer overlay (popover,
-    /// autocomplete panel), or no managed window at all.
+    /// autocomplete panel), an open popup of the frontmost app anywhere on
+    /// screen, a raised panel of the frontmost app under the cursor, or no
+    /// managed window at all.
     private func determineFocusTarget(at cgPoint: CGPoint) -> FocusTarget? {
         // snapshot closures once per move event
         let floating = floatingWindowIDs()
         let managed = tiledPositions()
 
-        // test hook: an injected resolver answers with a plain window id
-        let hit: HitTest = resolveTopmostWindowID
-            .map { $0(cgPoint).map(HitTest.window) ?? .none }
-            ?? topmostWindow(at: cgPoint)
-        if case .overlay = hit {
-            // the cursor is over a menu, popover, palette, the Dock or the
-            // menu bar — something above the normal window layer that is
-            // not ours. refocusing the tile underneath would dismiss it.
-            hyprLog(.debug, .mouse, "ffm-bail: cursor over overlay window")
+        let hit = hover(at: cgPoint)
+        switch hit {
+        case .blocked(let raised):
+            // over an open menu or a panel of the frontmost app. the window
+            // below is not the target, and focusing it would close the menu.
+            hyprLog(.debug, .mouse, "ffm-bail: over raised window \(raised.windowID) layer=\(raised.layer)")
             return nil
-        }
-        if case .window(let topmostID) = hit {
-            // cursor is over a visible floater — leave focus alone
+        case .window(let topmostID):
+            // focus the physical floater, including a sibling of the current tile
             if floating.contains(topmostID), isWindowVisible(topmostID) {
                 guard topmostID != lastFocusedID(), let target = cachedWindow(topmostID) else { return nil }
                 return FocusTarget(windowID: topmostID, window: target, reason: "ffm-topmost-floating")
@@ -222,6 +234,8 @@ class MouseTrackingManager {
             // here, such as a popover or autocomplete panel.
             hyprLog(.debug, .mouse, "ffm-bail: topmost \(topmostID) not in managed (managed.count=\(managed.count), cached=\(cachedWindow(topmostID) != nil), floating=\(floating.contains(topmostID)))")
             return nil
+        case .none:
+            break
         }
 
         // fast path: cursor still inside the last-focused window's rect.
@@ -263,6 +277,12 @@ class MouseTrackingManager {
     /// the next pass.
     func refocusUnderCursor() {
         mainThreadOnly()
+        // the synthetic click in focusForFFM would close an open menu
+        if let popup = openPopup(maxAge: 0) {
+            hyprLog(.notice, .mouse, "refocus under cursor skipped: popup wid=\(popup.windowID) "
+                    + "pid=\(popup.ownerPID) layer=\(popup.layer)")
+            return
+        }
         let mouseNS = mouseLocationNS()
         let cgY = primaryScreenHeight() - mouseNS.y
         let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
@@ -310,78 +330,83 @@ class MouseTrackingManager {
         recordFocus(0, "refocus-under-cursor-clear")
     }
 
-    /// Result of the CG hit-test under the cursor.
-    enum HitTest: Equatable {
-        /// A normal-layer window of another process.
-        case window(CGWindowID)
-        /// Something above the normal layer that is not ours covers the
-        /// point: a menu, popover, palette, the Dock, the menu bar.
-        case overlay
-        /// Nothing visible covers the point.
-        case none
+    /// Short-TTL cache of the window list. `CGWindowListCopyWindowInfo` is
+    /// expensive enough to dominate the FFM hot path without this. Mouse
+    /// presses invalidate it, since a click is what opens a menu.
+    private var windowListCache: (windows: [StackedWindow], time: CFAbsoluteTime)?
+
+    func invalidateWindowListCache() {
+        windowListCache = nil
     }
 
-    /// Short-TTL cache of the most recent hit-test result.
-    /// `CGWindowListCopyWindowInfo` is expensive enough to dominate the
-    /// FFM hot path without this.
-    private var topmostCache: (hit: HitTest, time: CFAbsoluteTime, point: CGPoint)?
-
-    /// A non-zero-layer window covering at least this share of its screen
-    /// is treated as a screen-wide overlay (dimmers, color filters,
-    /// screen-recording frames) and looked through, not as a popup that
-    /// blocks FFM. Popovers, menus and palettes are far smaller.
-    private static let screenWideOverlayFraction: CGFloat = 0.85
-
-    /// Front-to-back CG hit-test for the real window under `point`.
-    /// Skips this process's own windows (the focus border, dim panel,
-    /// settings/welcome) and screen-wide overlays. The first other
-    /// window that contains the point decides: layer 0 → `.window`,
-    /// anything else → `.overlay`. Looking *through* a popup to the tile
-    /// beneath it is exactly what dismissed menus and popovers under FFM.
-    func topmostWindow(at point: CGPoint) -> HitTest {
-        let now = self.now()
-        if let cache = topmostCache,
-           now - cache.time < Tuning.topmostCacheTTL,
-           abs(point.x - cache.point.x) < Tuning.topmostCacheSpatialTolerance,
-           abs(point.y - cache.point.y) < Tuning.topmostCacheSpatialTolerance {
-            return cache.hit
+    /// On-screen windows, front to back, no older than `maxAge`.
+    func stackedWindows(maxAge: CFAbsoluteTime = MouseTrackingManager.windowListMaxAge) -> [StackedWindow]? {
+        let now = now()
+        if let cache = windowListCache, now - cache.time < maxAge {
+            return cache.windows
         }
-
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return .none
-        }
-        let screenArea = screenAt(point).map { $0.frame.width * $0.frame.height } ?? .greatestFiniteMagnitude
-
-        let hit = Self.classifyHit(at: point, windowList: windowList, selfPID: getpid(), screenArea: screenArea)
-        topmostCache = (hit: hit, time: now, point: point)
-        return hit
+        guard let windows = readWindowList() else { return nil }
+        windowListCache = (windows, now)
+        return windows
     }
 
-    /// Pure classification over a CG window list (front-to-back), split
-    /// out so the rule is unit-testable without a live window server.
-    static func classifyHit(at point: CGPoint, windowList: [[String: Any]],
-                            selfPID: pid_t, screenArea: CGFloat) -> HitTest {
-        for info in windowList {
-            if let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid == selfPID {
-                continue
+    /// The frontmost app's open popup-level window, if any.
+    func openPopup(maxAge: CFAbsoluteTime = MouseTrackingManager.windowListMaxAge) -> StackedWindow? {
+        guard let windows = stackedWindows(maxAge: maxAge) else { return nil }
+        return livePopup(in: windows, frontmostPID: frontmostPID())
+    }
+
+    /// The frontmost app's open popup in `windows`, skipping any that has
+    /// been open longer than `popupPauseLimit`. Every popup guard asks
+    /// through here, so they agree on what counts.
+    func livePopup(in windows: [StackedWindow], frontmostPID front: pid_t?) -> StackedWindow? {
+        let popups = WindowStacking.openPopups(in: windows, frontmostPID: front, ownPID: ownPID)
+        let time = now()
+        let ids = Set(popups.map(\.windowID))
+        popupFirstSeen = popupFirstSeen.filter { ids.contains($0.key) }
+        ignoredStalePopupIDs.formIntersection(ids)
+        for popup in popups {
+            let firstSeen = popupFirstSeen[popup.windowID] ?? time
+            popupFirstSeen[popup.windowID] = firstSeen
+            if time - firstSeen < Self.popupPauseLimit { return popup }
+            if ignoredStalePopupIDs.insert(popup.windowID).inserted {
+                hyprLog(.notice, .mouse, "ignoring popup \(popup.windowID) pid=\(popup.ownerPID) "
+                        + "layer=\(popup.layer): open \(Int(Self.popupPauseLimit))s, treated as part of the app")
             }
-            guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-                  let x = bounds["X"], let y = bounds["Y"],
-                  let w = bounds["Width"], let h = bounds["Height"] else { continue }
-            let frame = CGRect(x: x, y: y, width: w, height: h)
-            guard frame.contains(point) else { continue }
-            let alpha = info[kCGWindowAlpha as String] as? CGFloat ?? 1.0
-            guard alpha > 0.01 else { continue }
-            let layer = info[kCGWindowLayer as String] as? Int ?? 0
-            if layer != 0 {
-                // screen-wide tinted overlays are not popups — keep looking
-                if frame.width * frame.height >= screenArea * screenWideOverlayFraction { continue }
-                return .overlay
-            }
-            let wid = (info[kCGWindowNumber as String] as? Int).map { CGWindowID($0) } ?? 0
-            return wid == 0 ? .none : .window(wid)
         }
-        return .none
+        return nil
+    }
+
+    /// Pointer hit test at `point` (CG coordinates) against the cached list.
+    func hitTest(at point: CGPoint, maxAge: CFAbsoluteTime = MouseTrackingManager.windowListMaxAge) -> WindowStacking.Hit {
+        guard let windows = stackedWindows(maxAge: maxAge) else { return .none }
+        return WindowStacking.hitTest(point, in: windows, frontmostPID: frontmostPID(), ownPID: ownPID,
+                                      managedFloaters: floatingWindowIDs())
+    }
+
+    /// What hover focus should see at `point`. An open popup of the
+    /// frontmost app blocks every point, not just the ones it covers:
+    /// the menu stays open while the pointer wanders, as it does natively.
+    private func hover(at point: CGPoint) -> WindowStacking.Hit {
+        if let resolve = resolveTopmostWindowID {
+            return resolve(point).map { .window($0) } ?? .none
+        }
+        guard let windows = stackedWindows() else { return .none }
+        let front = frontmostPID()
+        if let popup = livePopup(in: windows, frontmostPID: front) {
+            if popup.windowID != pausedByPopupID {
+                pausedByPopupID = popup.windowID
+                hyprLog(.notice, .mouse, "ffm paused: popup wid=\(popup.windowID) pid=\(popup.ownerPID) "
+                        + "layer=\(popup.layer) bounds=\(popup.bounds.map { "\($0)" } ?? "nil")")
+            }
+            return .blocked(popup)
+        }
+        if pausedByPopupID != 0 {
+            hyprLog(.notice, .mouse, "ffm resumed: popup \(pausedByPopupID) gone")
+            pausedByPopupID = 0
+        }
+        return WindowStacking.hitTest(point, in: windows, frontmostPID: front, ownPID: ownPID,
+                                      managedFloaters: floatingWindowIDs())
     }
 
     /// Called when a menu (app menu or right-click context menu) opens.

@@ -13,6 +13,7 @@ enum Action: Equatable {
     case swapDirection(Direction)
     case switchWorkspace(Int)
     case moveToWorkspace(Int)
+    case moveToWorkspaceAndFollow(Int)
     case moveWindowToMonitor(Direction)
     case toggleFloating
     case toggleSplit
@@ -70,6 +71,60 @@ idempotent and is persisted on the next normal settings save; no schema-version
 flag is added. An explicitly chosen binding identical to a legacy default cannot
 be distinguished from that default.
 
+## Move and follow
+
+`moveToWorkspaceAndFollow(N)` moves the focused window to workspace N and
+switches there with that window focused. It defaults to Hypr+Ctrl+Shift+1–9,
+and Hypr+Ctrl+Shift+0 for workspace 10. Before this action Hypr+Ctrl+Shift
+went only with the arrow keys (resize), so the digit chords were free. No
+offered Hypr key is Control or Shift, so the chord works under all of them.
+Hypr+Shift+N (`moveToWorkspace`) stays silent: it follows only when the
+destination is already showing on another monitor.
+
+It encodes under its own key, `{"moveToWorkspaceAndFollow":{"_0":N}}`,
+with the same payload as `moveToDesktop`. The key is frozen like the others.
+
+`WorkspaceOrchestrator.moveToWorkspace(N, follow: true)` runs the same checks
+as the silent move and never switches when the move does not happen: a
+refusal beeps and shakes, and no focused window or a window already on N
+does nothing. Both moves ignore a number outside 1–10 with a beep; a hand
+edit is the only way to get one. After that:
+
+- **Destination showing on another monitor:** the same as the silent move.
+  The window is placed there, focused, and the cursor follows. No switch HUD.
+- **Destination hidden:** the window leaves the source tree without a
+  relayout and is not parked. `switchWorkspace(N, preferredWindowID:)` then
+  hides the old workspace on the destination's monitor, lays out every
+  visible workspace in one pass, and focuses the moved window. When the
+  destination is on the source's monitor, the source is hidden as it
+  stood. When it is on the other monitor, the source stays up and closes
+  the gap in that same pass.
+- **Floaters and Quick Look previews** stay floating, except a floater
+  coming off a disabled monitor, which tiles as it does with the silent
+  move. A floater bound for the other monitor is carried there first.
+
+The cursor goes to where the window is going: its slot in the destination
+tree, else the frame a floater was carried to, else its live frame. It
+takes the first of those that lies on the destination screen, and falls
+back to the middle of that screen. A `follow warp:` line at `.notice` says
+which one it used. The live frame can still read the
+source screen when the first layout attempt fails, and `ensureFocus` picks
+from the screen under the cursor. So a follow that trusted it handed the
+next Hypr press to a tile on the wrong monitor. The silent move's follow to
+a showing workspace, and a window picked in the overview, use the same rule.
+
+`mergeNewDefaults` injects the ten binds onto free chords only. A chord the
+user already bound keeps the user's bind; that number then has no follow bind
+until the user adds one in Settings, and the skip logs at `.notice`. A follow
+action the user already bound to another chord is not injected again.
+
+Downgrade: a build with per-keybind tolerance (v0.12.0 and later) that
+reads a config holding these binds drops only them, then its next save
+writes the file without them. This build re-injects the defaults on its
+next launch; a customized follow chord is lost. A build older than v0.12.0
+resets the whole config instead, as "Per-element tolerance" describes. No `ConfigMigration` step is involved, as with
+`runCommand`, `moveToNextEmptyWorkspace`, `saveLayout` and `restoreLayout`.
+
 ## Save and restore layout
 
 `saveLayout` and `restoreLayout` default to Hypr+Ctrl+S and Hypr+Ctrl+R
@@ -98,6 +153,7 @@ the value:
 
 ```json
 { "switchDesktop": { "_0": 3 } }
+{ "moveToWorkspaceAndFollow": { "_0": 3 } }
 { "focusDirection": { "_0": "left" } }
 { "launchApp": { "bundleID": "com.apple.Terminal" } }
 { "runCommand": { "label": "Screenshot", "command": "/usr/sbin/screencapture -i ~/Desktop/shot.png" } }
@@ -135,6 +191,9 @@ new move-window semantics with no config change.
 This pattern generalizes — any future case rename should add an
 alias entry rather than break the wire format.
 
+A case added later is frozen at the key it first shipped with, such as
+`moveToNextEmptyWorkspace` or `moveToWorkspaceAndFollow`.
+
 ## `AnyKey`
 
 `Action.swift` declares a small file-private `AnyKey: CodingKey`
@@ -159,7 +218,17 @@ Malformed payloads are handled defensively rather than crashing.
   "Per-element tolerance" below.
 - **Optional `SavedConfig` fields**: missing fields decode as `nil`
   and the runtime applies the matching default from
-  `UserConfigDefaults`.
+  `UserConfigDefaults`. So does a value this build can't read: a case a
+  newer build added, a changed type, a typo. That field is treated as
+  missing and logs at `.notice`, and every other field decodes normally.
+  `ConfigMigrationTests` pins each field. Two older exceptions do not
+  log: an unreadable `overlayAppearance` decodes as `.system`, and an
+  unreadable `focusBracketStyle` decodes as `.rounded`, because the key's
+  presence marks the new bracket schema.
+- **Core fields**: the `keybinds` array, `gapSize`, `outerPadding` and
+  `enabled` stay strict, since every build since v0.4.2 writes them with
+  these types. `version` stays strict too, because it will pick which
+  migrations run.
 
 ## Per-element tolerance
 
@@ -271,6 +340,12 @@ accordion monitor — with several monitors enabled the press is recorded
 and takes effect on the next single-screen collapse.
 
 Both are available while tiling is paused and ignore key autorepeat.
+The workspace number keys carry three families: Hypr+N switches,
+Hypr+Shift+N moves the window, and Hypr+Ctrl+Shift+N moves it and
+follows. `testEveryDefaultUsesUniqueChord` keeps every default on its own
+chord. The Hypr+K overlay and Settings → Keys fold each complete family
+into one row (`KeybindOverlayGrouping.workspaceRun`); a family with a
+customized key is listed bind by bind.
 
 ## Run a command
 
@@ -312,6 +387,49 @@ There is no default binding. The action ignores key autorepeat, so
 holding the chord runs the program once, and — like Launch App — it
 is unavailable while tiling is paused.
 
+## Hypr key
+
+`hyprKey` in `config.json` holds a `HyprKey` raw value. The Settings →
+Keys picker offers `HyprKey.pickerChoices`: `capsLock` (the default),
+`backslash`, `f13` through `f20`, `leftOption`, `rightOption`,
+`leftCommand` and `rightCommand`.
+
+`tab`, `grave`, `leftShift`, `rightShift`, `leftControl` and
+`rightControl` are no longer offered. Tab and backtick are the keys of
+default binds (Hypr+Tab and Hypr+Shift+Tab cycle workspaces, Hypr+`
+focuses the menu bar), so either one as the Hypr key blocks them.
+Default binds add Shift (Hypr+Shift+…) and Control (Hypr+Ctrl+…) on top
+of Hypr, so either one as the Hypr key makes those binds unreachable or
+awkward.
+
+No default bind adds Option or Command on top of Hypr, and Apple
+keyboards have both on each side, so both sides are offered. With a
+left-hand key as Hypr, that key plus any key HyprMac binds goes to
+HyprMac instead of the app: ⌘S, ⌘T, ⌘W and ⌘1–9, or ⌥← and ⌥→. Unbound
+chords pass through unchanged. `HyprKey.leftModifierNote` says this under
+the picker and points to the right-hand key for those shortcuts.
+
+The dropped cases stay in the enum with their raw values, so a config
+that already names a dropped key keeps it and keeps working.
+`HyprKey.pickerRows(for:)` appends that key to the picker so the
+selection still has a matching row, and `HyprKey.notRecommendedNote`
+explains in one sentence why it is no longer recommended. The row goes
+away once the user picks another key. There is no migration.
+
+An unknown `hyprKey` value, such as a key a newer build added, decodes
+as `nil` with a `.notice` log. This build then uses the default Hypr key,
+Caps Lock, and keeps every other setting. With iCloud sync on, its next
+save writes `capsLock` over the unknown value, and the newer machine
+picks that up. Before this, an unknown value failed the whole decode,
+`ConfigStore.loadSavedConfig` returned nil, and every setting reset.
+
+Never remove a `HyprKey` case or change a raw value: its users would
+silently move to Caps Lock. `HyprKeyPickerTests` pins the offered list,
+the kept row, both notes, the default binds the notes name, decoding of
+every dropped value, and the fallback for an unknown one. Modifier Keys guidance
+(`HyprKeySystemGuidance`) covers Caps Lock, Option and Command, plus
+Control for older configs.
+
 ## Hex color storage
 
 `UserConfig.focusBorderColorHex` and `floatingBorderColorHex` are
@@ -328,25 +446,34 @@ Config lives at `~/Library/Application Support/HyprMacExperiments/config.json`
 (delete to reset to defaults). Keybind entries look like:
 
 ```json
-{ "keyCode": 123, "modifiers": { "rawValue": 1 }, "action": { "focusDirection": { "_0": "left" } } }
+{ "keyCode": 123, "modifiers": 1, "action": { "focusDirection": { "_0": "left" } } }
 ```
 
 Restart HyprMac after editing. Example — bind Hypr+B to launch Safari:
 
 ```json
-{ "keyCode": 11, "modifiers": { "rawValue": 1 }, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }
+{ "keyCode": 11, "modifiers": 1, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }
+```
+
+Example — bind Hypr+Ctrl+Shift+3 to move the window to workspace 3 and follow it:
+
+```json
+{ "keyCode": 20, "modifiers": 11, "action": { "moveToWorkspaceAndFollow": { "_0": 3 } } }
 ```
 
 Example — bind Hypr+5 to an interactive screenshot:
 
 ```json
-{ "keyCode": 23, "modifiers": { "rawValue": 1 }, "action": { "runCommand": { "label": "Screenshot", "command": "/usr/sbin/screencapture -i ~/Desktop/shot.png" } } }
+{ "keyCode": 23, "modifiers": 1, "action": { "runCommand": { "label": "Screenshot", "command": "/usr/sbin/screencapture -i ~/Desktop/shot.png" } } }
 ```
 
-**Modifier rawValues** (bitwise OR to combine — see
-`Models/Keybind.swift`): `1` Hypr, `2` Shift, `4` Option, `8`
-Control, `16` Command. Hypr+Shift = `3`, Hypr+Ctrl = `9`,
-Hypr+Ctrl+Shift = `11`.
+**Modifier values**: `modifiers` is a bare number, the bitwise OR of
+the modifiers in the chord (see `Models/Keybind.swift`): `1` Hypr, `2`
+Shift, `4` Option, `8` Control, `16` Command. Hypr+Shift = `3`,
+Hypr+Ctrl = `9`, Hypr+Ctrl+Shift = `11`. An object such as
+`{ "rawValue": 1 }` does not decode, and HyprMac drops that keybind.
+`KeybindDecoderToleranceTests.testDocumentedJSONExamplesDecode` decodes
+every JSON example in this file.
 
 **Key codes** (decimal, Carbon `kVK_*`):
 

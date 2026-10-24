@@ -3,17 +3,22 @@ import XCTest
 import Carbon
 
 final class WelcomeContentTests: XCTestCase {
-    func testWhatsNewDescribesOnlyThe0150Changes() {
+    func testWhatsNewDescribesOnlyThe0160Changes() {
         let features = WhatsNewFeatures.current
 
         XCTAssertEqual(features.map(\.title), [
-            "Saved Layouts",
-            "A Balanced Keybind List"
+            "Steadier Tiling",
+            "A Searchable Keybind List",
+            "Move and Follow",
+            "A Scratchpad That Tiles",
+            "Floaters Stay on Top"
         ])
-        XCTAssertEqual(features[0].credit, "@joops")
-        XCTAssertTrue(features[0].description.contains("Hypr+Ctrl+S"))
-        XCTAssertNil(features[1].credit)
-        XCTAssertFalse(features.map(\.title).contains("A New Look"))
+        XCTAssertTrue(features.allSatisfy { $0.credit == nil })
+        XCTAssertTrue(features[1].description.contains("Hypr+K"))
+        XCTAssertTrue(features[2].description.contains("Hypr+Ctrl+Shift+N"))
+        XCTAssertEqual(features.filter { $0.tint == .magenta }.map(\.title),
+                       ["A Scratchpad That Tiles", "Floaters Stay on Top"])
+        XCTAssertFalse(features.map(\.title).contains("A Balanced Keybind List"))
         XCTAssertEqual(WelcomeContent.productURL.absoluteString, "https://hyprmac.app/")
     }
 
@@ -92,6 +97,40 @@ final class WelcomeContentTests: XCTestCase {
 
         XCTAssertTrue(KeybindOverlayGrouping.usesCanonicalDirectionKey(canonical, direction: .left))
         XCTAssertFalse(KeybindOverlayGrouping.usesCanonicalDirectionKey(customized, direction: .left))
+    }
+
+    func testOverlayFoldsEachWorkspaceFamilyIntoItsOwnRow() throws {
+        let binds = Keybind.defaults
+        let seeds: [(KeybindOverlayGrouping.WorkspaceFamily, Action, String)] = [
+            (.switchTo, .switchWorkspace(1), "Switch to workspace N"),
+            (.move, .moveToWorkspace(1), "Move window to workspace N"),
+            (.moveAndFollow, .moveToWorkspaceAndFollow(1), "Move window to workspace N and follow"),
+        ]
+        var claimed = Set<Int>()
+        for (family, action, title) in seeds {
+            let seed = try XCTUnwrap(binds.first { $0.action == action })
+            let run = try XCTUnwrap(KeybindOverlayGrouping.workspaceRun(seededBy: seed, in: binds))
+            XCTAssertEqual(run.family, family)
+            XCTAssertEqual(run.family.title, title)
+            let numbers = run.indices.compactMap {
+                KeybindOverlayGrouping.workspaceFamily(of: binds[$0].action)?.number
+            }
+            XCTAssertEqual(numbers.sorted(), Array(Constants.workspaceRange), title)
+            XCTAssertTrue(claimed.isDisjoint(with: run.indices), "\(title) folds only its own binds")
+            claimed.formUnion(run.indices)
+        }
+    }
+
+    func testACustomizedFollowBindBreaksOnlyItsOwnRow() throws {
+        var binds = Keybind.defaults
+        let index = try XCTUnwrap(binds.firstIndex { $0.action == .moveToWorkspaceAndFollow(4) })
+        binds[index] = Keybind(keyCode: UInt16(kVK_ANSI_Q), modifiers: [.hypr, .control, .shift],
+                               action: .moveToWorkspaceAndFollow(4))
+
+        let follow = try XCTUnwrap(binds.first { $0.action == .moveToWorkspaceAndFollow(1) })
+        let move = try XCTUnwrap(binds.first { $0.action == .moveToWorkspace(1) })
+        XCTAssertNil(KeybindOverlayGrouping.workspaceRun(seededBy: follow, in: binds))
+        XCTAssertEqual(KeybindOverlayGrouping.workspaceRun(seededBy: move, in: binds)?.indices.count, 10)
     }
 
     func testOverlaySummarizesOnlyTheCompleteWorkspaceRange() {

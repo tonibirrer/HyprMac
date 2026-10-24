@@ -21,6 +21,9 @@ enum Action: Equatable {
     case swapDirection(Direction)
     case switchWorkspace(Int)
     case moveToWorkspace(Int)
+    /// Move the focused window to workspace N, then switch to N with that
+    /// window focused. A refused move does not switch.
+    case moveToWorkspaceAndFollow(Int)
     /// Move the focused window to the adjacent monitor's visible
     /// workspace. Only `.left` / `.right` are meaningful. Encodes
     /// under the legacy `"moveWorkspaceToMonitor"` wire key — the
@@ -94,6 +97,7 @@ extension Action: Codable {
         case swapDirection
         case switchWorkspace        = "switchDesktop"
         case moveToWorkspace        = "moveToDesktop"
+        case moveToWorkspaceAndFollow
         case moveWindowToMonitor    = "moveWorkspaceToMonitor"
         case toggleFloating
         case toggleSplit
@@ -162,6 +166,8 @@ extension Action: Codable {
             self = .switchWorkspace(try inner.decode(Int.self, forKey: ._0))
         case .moveToWorkspace:
             self = .moveToWorkspace(try inner.decode(Int.self, forKey: ._0))
+        case .moveToWorkspaceAndFollow:
+            self = .moveToWorkspaceAndFollow(try inner.decode(Int.self, forKey: ._0))
         case .cycleWorkspace:
             self = .cycleWorkspace(try inner.decode(Int.self, forKey: ._0))
         case .launchApp:
@@ -221,6 +227,9 @@ extension Action: Codable {
             try p.encode(n, forKey: ._0)
         case .moveToWorkspace(let n):
             var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToWorkspace)
+            try p.encode(n, forKey: ._0)
+        case .moveToWorkspaceAndFollow(let n):
+            var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToWorkspaceAndFollow)
             try p.encode(n, forKey: ._0)
         case .cycleWorkspace(let n):
             var p = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .cycleWorkspace)
