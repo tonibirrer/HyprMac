@@ -3,7 +3,7 @@
 // and is served over IPC so status bars (sketchybar) can color-match.
 // Switching to a workspace swaps its monitor's wallpaper; workspaces
 // without an image keep whatever is currently set. "Sticky" opts the
-// workspace into showing sticky-ruled apps (Window Rules panel).
+// workspace into showing sticky-ruled apps (App Rules panel).
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -14,7 +14,7 @@ struct WallpapersPanel: View {
 
     var body: some View {
         HyprPanel("Workspaces",
-                  footer: "The accent color tints the focus border on that workspace and is exposed over IPC for status bars. The wallpaper swaps in when the workspace is shown; workspaces without one keep the current desktop image. \"Sticky\" opts the workspace into showing sticky apps from Window Rules — they follow you between opted-in workspaces on their monitor.") {
+                  footer: "The accent color tints the focus border on that workspace and is exposed over IPC for status bars. The wallpaper swaps in when the workspace is shown; workspaces without one keep the current desktop image. \"Sticky\" opts the workspace into showing sticky apps from App Rules — they follow you between opted-in workspaces on their monitor.") {
             ForEach(Constants.workspaceRange, id: \.self) { ws in
                 wallpaperRow(ws, isLast: ws == Constants.workspaceCount)
             }
@@ -66,7 +66,7 @@ struct WallpapersPanel: View {
             ))
             .toggleStyle(.checkbox)
             .font(.hyprBody)
-            .help("Show sticky apps (Window Rules → Sticky) on this workspace")
+            .help("Show sticky apps (App Rules → Sticky) on this workspace")
             Button("Choose…") { pickImage(for: ws) }
                 .controlSize(.small)
             if path != nil {
