@@ -187,6 +187,42 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(actions, [.moveToWorkspaceAndFollow(3), .moveToWorkspace(3)])
     }
 
+    // a native modifier Hypr key is judged by the keyDown's own flags, not
+    // by combinedSessionState, which reads Control as up here and used to
+    // drop real chords as "stale".
+    func testNativeModifierHyprChordSurvivesWhenKeyDownCarriesTheFlag() {
+        let manager = HotkeyManager()
+        manager.updateKeybinds(Keybind.defaults)
+        manager.updateHyprKey(.leftControl)
+        let dispatched = expectation(description: "Hypr+1 dispatched")
+        var actions: [Action] = []
+        manager.onAction = { actions.append($0); dispatched.fulfill() }
+
+        let hypr = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Control), keyDown: true)!
+        hypr.flags = .maskControl
+        XCTAssertNil(manager.handleEvent(.flagsChanged, hypr))
+        let one = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_1), keyDown: true)!
+        one.flags = .maskControl
+        XCTAssertNil(manager.handleEvent(.keyDown, one))
+
+        wait(for: [dispatched], timeout: 1)
+        XCTAssertEqual(actions, [.switchWorkspace(1)])
+    }
+
+    // a dropped keyUp (sleep, lock) still clears: the keyDown lacks the flag.
+    func testNativeModifierHyprClearsWhenKeyDownLacksTheFlag() {
+        let manager = HotkeyManager()
+        manager.updateKeybinds(Keybind.defaults)
+        manager.updateHyprKey(.leftControl)
+
+        let hypr = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Control), keyDown: true)!
+        hypr.flags = .maskControl
+        XCTAssertNil(manager.handleEvent(.flagsChanged, hypr))
+        let one = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_ANSI_1), keyDown: true)!
+        one.flags = []
+        XCTAssertNotNil(manager.handleEvent(.keyDown, one), "plain 1 must pass through, not fire Hypr+1")
+    }
+
     // an upgrade injects the ten follow binds onto free chords only. a chord
     // the user already bound keeps the user's bind, and that one number has
     // no follow bind until the user adds it in Settings.
