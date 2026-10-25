@@ -210,8 +210,9 @@ Settings → General → "Workspace names" edits it:
 
 A set name replaces the number in the switch HUD, the menu bar panel
 (buttons, tooltips), the workspace pickers in Settings and the
-"is full" flash. The menu bar glyphs, the overview cards, the keybind list
-and log lines keep the number. All readers go through
+"is full" flash. Overview cards show it after the number (the digit
+keys still switch by number) and its search matches it. The menu bar
+glyphs, the keybind list and log lines keep the number. All readers go through
 `UserConfig.workspaceDisplayName`; a missing or blank name falls back to
 the number. Keys other than "1"…"10" and empty names are dropped on load,
 and an unreadable value costs only the names. An older build ignores the

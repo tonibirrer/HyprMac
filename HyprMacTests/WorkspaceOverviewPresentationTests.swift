@@ -41,11 +41,30 @@ final class WorkspaceOverviewPresentationTests: XCTestCase {
                               windows: [window(22, "Terminal", "com.apple.Terminal")])
         ]
 
-        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "studio").map(\.id), [1])
-        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "terminal").map(\.id), [2])
-        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "TextEdit").map(\.id), [1])
-        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "2").map(\.id), [2])
-        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "  ").map(\.id), [1, 2])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "studio", names: [:]).map(\.id), [1])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "terminal", names: [:]).map(\.id), [2])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "TextEdit", names: [:]).map(\.id), [1])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "2", names: [:]).map(\.id), [2])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "  ", names: [:]).map(\.id), [1, 2])
+    }
+
+    func testFilterMatchesACustomWorkspaceName() {
+        let snapshots = [
+            WorkspaceSnapshot(id: 1, monitorID: 10, monitorName: "Studio Display", isActive: true, windows: []),
+            WorkspaceSnapshot(id: 4, monitorID: 10, monitorName: "Studio Display", isActive: false, windows: [])
+        ]
+        let names = ["4": "term", "1": "  "]
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "TER", names: names).map(\.id), [4])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "term", names: [:]).map(\.id), [])
+        // the number still matches when a name is set
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(snapshots, query: "4", names: names).map(\.id), [4])
+    }
+
+    func testCardShowsTheNameAfterTheNumberOnlyWhenSet() {
+        XCTAssertEqual(WorkspaceOverviewPresentation.cardName(4, names: ["4": "term"]), "term")
+        XCTAssertNil(WorkspaceOverviewPresentation.cardName(4, names: [:]))
+        XCTAssertNil(WorkspaceOverviewPresentation.cardName(4, names: ["4": "   "]))
+        XCTAssertNil(WorkspaceOverviewPresentation.cardName(5, names: ["4": "term"]))
     }
 
     func testSearchFindsAppNameWhenNeitherTitleNorBundleContainsIt() {
@@ -181,7 +200,7 @@ final class WorkspaceOverviewPresentationTests: XCTestCase {
         XCTAssertEqual(publishes, 2)
         XCTAssertEqual(model.snapshots.first?.windows.map(\.id), [11, 12])
         XCTAssertEqual(model.scratchpad.map(\.id), [13])
-        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(model.snapshots, query: "terminal").map(\.id), [1])
+        XCTAssertEqual(WorkspaceOverviewPresentation.visibleWorkspaces(model.snapshots, query: "terminal", names: [:]).map(\.id), [1])
     }
 
     func testClosedOverviewSkipsSnapshotWork() {
