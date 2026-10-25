@@ -244,6 +244,8 @@ struct SavedConfig: Codable {
     var restoreLayoutOnLaunch: Bool? = nil
     var windowRules: [WindowRule]? = nil
     var workspaceNames: [String: String]? = nil
+    var statusExportEnabled: Bool? = nil
+    var statusHookCommand: String? = nil
 }
 
 // MARK: - per-keybind decode tolerance
@@ -273,6 +275,7 @@ extension SavedConfig {
         case restoreLayoutOnLaunch
         case windowRules
         case workspaceNames
+        case statusExportEnabled, statusHookCommand
     }
 
     init(from decoder: Decoder) throws {
@@ -342,6 +345,8 @@ extension SavedConfig {
         self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
         self.windowRules = Self.tolerantWindowRules(c)
         self.workspaceNames = Self.tolerantWorkspaceNames(c)
+        self.statusExportEnabled = Self.tolerant(c, .statusExportEnabled)
+        self.statusHookCommand = Self.tolerant(c, .statusHookCommand)
     }
 
     // keys "1"…"10" with a non-empty name; anything else is dropped, so a

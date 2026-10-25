@@ -147,6 +147,16 @@ class UserConfig: ObservableObject {
         didSet { guard !isReloading else { return }; save() }
     }
 
+    // status bar export: state.json, the change hook and hyprmac:// URLs.
+    // read on every change, so nothing live needs re-applying
+    @Published var statusExportEnabled: Bool {
+        didSet { guard !isReloading else { return }; save() }
+    }
+    // run after each state.json write, like a runCommand keybind (no shell)
+    @Published var statusHookCommand: String? {
+        didSet { guard !isReloading else { return }; save() }
+    }
+
     // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
         didSet {
@@ -213,6 +223,8 @@ class UserConfig: ObservableObject {
             self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = saved.windowRules ?? []
             self.workspaceNames = saved.workspaceNames ?? [:]
+            self.statusExportEnabled = saved.statusExportEnabled ?? false
+            self.statusHookCommand = saved.statusHookCommand
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -241,6 +253,8 @@ class UserConfig: ObservableObject {
             self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = []
             self.workspaceNames = [:]
+            self.statusExportEnabled = false
+            self.statusHookCommand = nil
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -343,7 +357,10 @@ class UserConfig: ObservableObject {
             scratchpadRegionInset: scratchpadRegionInset,
             restoreLayoutOnLaunch: restoreLayoutOnLaunch,
             windowRules: windowRules.isEmpty ? nil : windowRules,
-            workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames)
+            workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames,
+            // off and empty write no key, so a config that never opts in is unchanged
+            statusExportEnabled: statusExportEnabled ? true : nil,
+            statusHookCommand: statusHookCommand?.isEmpty == false ? statusHookCommand : nil)
     }
 
     func resetToDefaults() {
@@ -376,6 +393,8 @@ class UserConfig: ObservableObject {
         restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = []
         workspaceNames = [:]
+        statusExportEnabled = false
+        statusHookCommand = nil
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -472,6 +491,8 @@ class UserConfig: ObservableObject {
         restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = saved.windowRules ?? []
         workspaceNames = saved.workspaceNames ?? [:]
+        statusExportEnabled = saved.statusExportEnabled ?? false
+        statusHookCommand = saved.statusHookCommand
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {

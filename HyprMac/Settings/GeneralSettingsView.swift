@@ -3,7 +3,8 @@
 import SwiftUI
 
 /// "General" tab. Enable toggle, accessibility status,
-/// focus-follows-mouse, never-tile list, workspace names, workspace pins, System panel
+/// focus-follows-mouse, never-tile list, workspace names, workspace pins,
+/// status bar export, System panel
 /// (menu bar indicator, iCloud sync, launch-at-login), and a footer with
 /// replay-the-tour + reset.
 struct GeneralSettingsView: View {
@@ -19,6 +20,7 @@ struct GeneralSettingsView: View {
             neverTilePanel
             workspaceNamesPanel
             workspacePinsPanel
+            statusBarPanel
             systemPanel
             layoutsPanel
             footerPanel
@@ -164,6 +166,28 @@ struct GeneralSettingsView: View {
     private func workspaceNameBinding(_ workspace: Int) -> Binding<String> {
         Binding(get: { config.workspaceNames[String(workspace)] ?? "" },
                 set: { config.workspaceNames[String(workspace)] = $0.isEmpty ? nil : $0 })
+    }
+
+    // MARK: status bar
+
+    private var statusBarPanel: some View {
+        HyprPanel("Status bar",
+                  footer: "For bars like sketchybar. Every change writes state.json to HyprMac's "
+                        + "Application Support folder, then runs the command.") {
+            HyprRow("Export state for status bars", icon: "menubar.rectangle") {
+                Toggle("", isOn: $config.statusExportEnabled)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+            }
+            HyprRow("Run on change", icon: "terminal", divider: false) {
+                TextField("sketchybar --trigger hyprmac_change", text: Binding(
+                    get: { config.statusHookCommand ?? "" },
+                    set: { config.statusHookCommand = $0.isEmpty ? nil : $0 }))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+                    .disabled(!config.statusExportEnabled)
+            }
+        }
     }
 
     // MARK: workspace pins

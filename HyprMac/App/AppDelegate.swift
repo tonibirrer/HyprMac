@@ -17,6 +17,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionPollTimer: Timer?
     private var diagnosticOnly = false
 
+    /// `hyprmac://` links from a status bar. A raw Apple Event handler, so
+    /// SwiftUI never sees the URL and opens no window for it.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(handleGetURL(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let text = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              let url = URL(string: text),
+              let command = StatusURLCommand.parse(url) else { return }
+        windowManager?.handleStatusURL(command)
+    }
+
     /// AX permission gate plus the rest of startup. Trusted →
     /// applies the Hypr key remap and starts the manager. Not
     /// trusted → shows the permissions gate and polls until the
