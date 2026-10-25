@@ -1607,6 +1607,12 @@ class TilingEngine {
         let first = !positionFirstIDs.isEmpty
             ? reconcile(poller.applyWorkspaceReveal(firstLayouts,
                                                     positionFirstWindowIDs: positionFirstIDs,
+                                                    stagingOrigins: Self.stagingOrigins(
+                                                        originals: originalFrames,
+                                                        targets: firstLayouts.filter {
+                                                            positionFirstIDs.contains($0.0.windowID)
+                                                        }.map { ($0.0.windowID, $0.1) },
+                                                        destination: rect),
                                                     usableFrame: rect, gap: gapSize,
                                                     generation: generation,
                                                     originalFrames: originalFrames),
@@ -1950,6 +1956,30 @@ class TilingEngine {
         return ids
     }
 
+    /// Where each position-first window moves before it is sized: its
+    /// target origin pulled in just far enough that its old size stands
+    /// inside `destination`. Only windows that would hang off it, and whose
+    /// old size fits it at all, get one.
+    /// A Ghostty window parked at the hide corner and moved to a bottom slot
+    /// with its old 1708x950 hung below every screen and ignored both size
+    /// writes, while the two parked beside it, whose old sizes stood on the
+    /// screen, took theirs (issue #43).
+    static func stagingOrigins(originals: [CGWindowID: CGRect],
+                               targets: [(CGWindowID, CGRect)],
+                               destination: CGRect) -> [CGWindowID: CGPoint] {
+        var origins: [CGWindowID: CGPoint] = [:]
+        for (windowID, target) in targets {
+            guard let original = originals[windowID],
+                  original.width <= destination.width,
+                  original.height <= destination.height else { continue }
+            let staged = CGPoint(
+                x: max(destination.minX, min(target.minX, destination.maxX - original.width)),
+                y: max(destination.minY, min(target.minY, destination.maxY - original.height)))
+            if staged != target.origin { origins[windowID] = staged }
+        }
+        return origins
+    }
+
     private func crossScreenWriteOrder(from original: CGRect,
                                        targetSize: CGSize) -> CrossScreenWriteOrder {
         // a hide-corner sliver counts for the screen it is parked on, so
@@ -1979,7 +2009,8 @@ class TilingEngine {
             if minSizes.recordObserved(obs.window, target: obs.target, actual: obs.actual,
                                        widthConflict: obs.widthConflict,
                                        heightConflict: obs.heightConflict,
-                                       phase: result.progress.phase) {
+                                       phase: result.progress.phase,
+                                       sharedWithApp: !obs.positionFirst) {
                 observedMinimumGeneration[obs.window.windowID] = generation
             }
         }

@@ -163,6 +163,12 @@ struct FrameSizingConfiguration {
     /// most `positionSettleBudget`, before it is sized. Every other window
     /// sizes first.
     var positionSettleWindowIDs: Set<CGWindowID> = []
+    /// Position-first windows whose old size, put at their target origin,
+    /// would hang off the destination screen. Each moves here first, where
+    /// that old size stands on the screen, is sized, then moves to its
+    /// target. Issue #43: a parked Ghostty window moved to a bottom slot hung
+    /// below every screen and ignored both size writes.
+    var stagingOrigins: [CGWindowID: CGPoint] = [:]
     /// Restoration only. A rollback asks every window to go back where it
     /// was, so the question is per-window correspondence, not whether the
     /// result is a valid tiled arrangement. Originals that overlapped each
@@ -684,10 +690,17 @@ struct FrameSizingAttempt {
 
         probe("before")
         let settlePositionBeforeSizing = configuration.positionSettleWindowIDs.contains(target.windowID)
+        let staging = settlePositionBeforeSizing ? configuration.stagingOrigins[target.windowID] : nil
+        // where the position-first write sends the window, and where its
+        // settle waits for it
+        let firstOrigin = staging ?? target.frame.origin
         let writes: [(String, () -> AXError)] = settlePositionBeforeSizing
             ? [
-                ("position", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) }),
-                ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }),
+                ("position", { io.writePosition(target.windowID, firstOrigin, configuration.perCallTimeout) }),
+                ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
+            ] + (staging == nil ? [] : [
+                ("position2", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) })
+            ]) + [
                 ("size2", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
             ]
             : [
@@ -761,8 +774,8 @@ struct FrameSizingAttempt {
                         }
                         samples += 1
                         last = position
-                        let onTarget = abs(position.x - target.frame.minX) <= configuration.positionTolerance
-                            && abs(position.y - target.frame.minY) <= configuration.positionTolerance
+                        let onTarget = abs(position.x - firstOrigin.x) <= configuration.positionTolerance
+                            && abs(position.y - firstOrigin.y) <= configuration.positionTolerance
                         if onTarget, let prior = anchor,
                            abs(position.x - prior.x) <= configuration.stableTolerance,
                            abs(position.y - prior.y) <= configuration.stableTolerance {
@@ -788,7 +801,7 @@ struct FrameSizingAttempt {
                         hyprLog(.notice, .tiling, "position settle cut short: wid=\(target.windowID) "
                                 + "phase=\(phase.rawValue) after=\(Self.ms(waited)) samples=\(samples) "
                                 + "last=\(landed) "
-                                + "target=(\(traced(target.frame.minX)),\(traced(target.frame.minY))) "
+                                + "target=(\(traced(firstOrigin.x)),\(traced(firstOrigin.y))) "
                                 + "— writing size anyway")
                     }
                 }
