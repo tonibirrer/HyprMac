@@ -546,7 +546,8 @@ matching `NSScreen.localizedName`, excluded from tiling entirely),
 the layer instead of floating; no-fit windows float regardless),
 `scratchpadRegionInset` (per-edge inset fraction of the scratchpad's
 tiled region, 0–0.15; 0.06 default keeps the scrimmed border visible,
-0 is edge-to-edge).
+0 is edge-to-edge), `statusExportEnabled` and `statusHookCommand` (status
+bar export, see [status-bar.md](status-bar.md)).
 
 Find any app's bundle ID:
 `mdls -name kMDItemCFBundleIdentifier /Applications/AppName.app`

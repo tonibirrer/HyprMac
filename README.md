@@ -186,6 +186,7 @@ cp -r build/Build/Products/Debug/HyprMac.app /Applications/
 - [Architecture](docs/architecture.md): subsystems, ownership rules, threading
 - [Tiling algorithm](docs/tiling-algorithm.md): BSP dwindle, smart insert, two-pass layout
 - [Keybinds and actions](docs/keybinds-and-actions.md): the `Action` enum and its JSON schema
+- [Status bars](docs/status-bar.md): `state.json`, the change hook and `hyprmac://` links for sketchybar
 - [Debugging](docs/debugging.md): Console filters, verbose logging, common recipes
 - [Release pipeline](docs/release.md): how a release is built, signed, and published
 
