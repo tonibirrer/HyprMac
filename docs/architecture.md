@@ -328,7 +328,10 @@ workspaces park their windows at a single global hide position: 1 px
 inside the bottom-right corner of the **rightmost** monitor (a 1 px
 sliver remains visible; macOS limitation). The rightmost edge has no
 neighbor, so the parked window's off-screen extension never overlaps
-another monitor and macOS's rescale-to-neighbor bug cannot fire.
+another monitor and macOS's rescale-to-neighbor bug cannot fire. When
+monitors share the rightmost edge, the lowest one holds the corner: a
+monitor below it would catch the extension, and macOS would pull the
+window onto it under its menu bar, shrunk to its height.
 
 Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.

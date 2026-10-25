@@ -328,8 +328,15 @@ class WorkspaceManager {
     /// monitor — so macOS WindowServer doesn't trigger the
     /// rescale-to-neighbor bug that breaks per-monitor corner-park on
     /// middle monitors in horizontal multi-monitor layouts.
+    ///
+    /// Screens that share the right edge resolve to the lowest one. A screen
+    /// below the corner would catch the window's extension, and macOS then
+    /// pulls the window onto it under its menu bar, shrunk to fit (#54).
     func hidePosition() -> CGPoint {
-        guard let rightmost = displayManager.screens.max(by: { $0.frame.maxX < $1.frame.maxX }) else {
+        guard let rightmost = displayManager.screens.max(by: {
+            let a = displayManager.cgFullRect(for: $0), b = displayManager.cgFullRect(for: $1)
+            return (a.maxX, a.maxY) < (b.maxX, b.maxY)
+        }) else {
             return .zero
         }
         let cg = displayManager.cgRect(for: rightmost)

@@ -31,6 +31,18 @@ final class NextEmptyWorkspaceTests: XCTestCase {
         XCTAssertNil(manager.nextEmptyWorkspace(after: 1, on: screen))
     }
 
+    // #54: the built-in sits under the ultrawide and shares its right edge.
+    // parked in the ultrawide's corner, a window hangs over the built-in and
+    // macOS pulls it onto it below the menu bar, shrunk to its height.
+    func testHideCornerIsTheLowestOfTheRightmostScreens() {
+        let ultrawide = TransferScreen(x: 0, width: 3440, height: 1440)
+        let builtIn = TransferScreen(x: 1928, y: -982, width: 1512, height: 982)
+        let dell = TransferScreen(x: -1920, y: 360, width: 1920, height: 1080)
+        let manager = WorkspaceManager(displayManager: DisplayManager(
+            screenSource: { [ultrawide, builtIn, dell] }))
+        XCTAssertEqual(manager.hidePosition(), CGPoint(x: 3439, y: 2421))
+    }
+
     func testCleanSingleDisplaySelectsWorkspaceTwo() {
         let screen = TransferScreen(x: 0)
         let manager = WorkspaceManager(displayManager: DisplayManager(screenSource: { [screen] }))
@@ -503,8 +515,8 @@ final class FullscreenWorkspaceOrchestratorTests: XCTestCase {
 
 private final class TransferScreen: SyntheticScreen {
     private let bounds: CGRect
-    init(x: CGFloat, width: CGFloat = 1600, height: CGFloat = 1000) {
-        bounds = CGRect(x: x, y: 0, width: width, height: height)
+    init(x: CGFloat, y: CGFloat = 0, width: CGFloat = 1600, height: CGFloat = 1000) {
+        bounds = CGRect(x: x, y: y, width: width, height: height)
         super.init()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
