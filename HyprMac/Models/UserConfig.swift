@@ -59,6 +59,9 @@ class UserConfig: ObservableObject {
     @Published var disabledMonitors: Set<String> {
         didSet { persistRuntimeChange() }
     }
+    @Published var topPaddingPerMonitor: [String: CGFloat] {
+        didSet { persistRuntimeChange() }
+    }
     @Published var showFocusBorder: Bool {
         didSet { persistRuntimeChange() }
     }
@@ -240,15 +243,15 @@ class UserConfig: ObservableObject {
         let resolved = ConfigMigration.resolveMonitorConfig(local: monitorConfig, embedded: savedConfig)
         self.maxSplitsPerMonitor = resolved.maxSplits
         self.disabledMonitors = resolved.disabled
+        // local-only from the start, so the synced config has nothing to migrate
+        self.topPaddingPerMonitor = monitorConfig?.topPaddingPerMonitor ?? [:]
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
         }
 
         if resolved.needsLocalWrite {
-            store.writeSavedMonitorConfig(SavedMonitorConfig(
-                maxSplitsPerMonitor: resolved.maxSplits,
-                disabledMonitors: Array(resolved.disabled)))
+            store.writeSavedMonitorConfig(makeSavedMonitorConfig())
         }
 
         store.onFileChanged = { [weak self] in self?.reloadFromDisk() }
@@ -292,9 +295,14 @@ class UserConfig: ObservableObject {
 
     func save() {
         store.writeSavedConfig(makeSavedConfig())
-        store.writeSavedMonitorConfig(SavedMonitorConfig(
+        store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+    }
+
+    private func makeSavedMonitorConfig() -> SavedMonitorConfig {
+        SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,
-            disabledMonitors: Array(disabledMonitors)))
+            disabledMonitors: Array(disabledMonitors),
+            topPaddingPerMonitor: topPaddingPerMonitor.isEmpty ? nil : topPaddingPerMonitor)
     }
 
     private func persistRuntimeChange() {
@@ -350,6 +358,7 @@ class UserConfig: ObservableObject {
         overlayAppearance = UserConfigDefaults.overlayAppearance
         maxSplitsPerMonitor = [:]
         disabledMonitors = []
+        topPaddingPerMonitor = [:]
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -466,6 +475,7 @@ class UserConfig: ObservableObject {
         if let mc = store.loadSavedMonitorConfig() {
             maxSplitsPerMonitor = mc.maxSplitsPerMonitor ?? [:]
             disabledMonitors = Set(mc.disabledMonitors ?? [])
+            topPaddingPerMonitor = mc.topPaddingPerMonitor ?? [:]
         }
         // else keep current values — don't overwrite with synced defaults
 

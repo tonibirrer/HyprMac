@@ -55,6 +55,7 @@
 		249B0AE228874626C66745EF /* DimmingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84FD66866CE44F180CAA03C7 /* DimmingOverlay.swift */; };
 		24D5736396329E669D0D7615 /* DirectionPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 301C7EDAAD234FC3DDCBAADC /* DirectionPicker.swift */; };
 		265C8C7215823D21571E2A00 /* WindowRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66D21946C610CB845DEC5502 /* WindowRule.swift */; };
+		2784B4136C86315091CF19E8 /* TopPaddingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B14B053B3FA21845699091 /* TopPaddingTests.swift */; };
 		27A937379F4BEF149A4F626F /* DestroyRecheckTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 728568405C25B4DD6E5EDD9B /* DestroyRecheckTests.swift */; };
 		27F175436F430C8EC82672E1 /* MinimaRevalidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52AE2F150AC11707C98A4D91 /* MinimaRevalidation.swift */; };
 		288DF280F30783F0CBE7B38F /* AppLauncherManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A36D359F723D63F2E6036D15 /* AppLauncherManager.swift */; };
@@ -333,6 +334,7 @@
 		1AA39AE261654BF110E66771 /* WindowStateCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowStateCache.swift; sourceTree = "<group>"; };
 		1BB92BD985DAC4292DE1C57F /* CursorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorManager.swift; sourceTree = "<group>"; };
 		1F4BE620A1670E1D89160707 /* KeybindCategory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindCategory.swift; sourceTree = "<group>"; };
+		20B14B053B3FA21845699091 /* TopPaddingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopPaddingTests.swift; sourceTree = "<group>"; };
 		23220FDBA7BCF857E8EBC0F0 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		23F311BB92C52C2C1C3195E9 /* TiledDriftMonitorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDriftMonitorTests.swift; sourceTree = "<group>"; };
 		24E5597A91D2868D1D6DA3AD /* RetileAllPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetileAllPlannerTests.swift; sourceTree = "<group>"; };
@@ -783,6 +785,7 @@
 				58A1ECEE0D6160C61FD6636C /* TilingEngineTiledDragTests.swift */,
 				0675BA00E19351F741399A5F /* TilingEngineVerifiedLayoutTests.swift */,
 				DC08AAC03ABC15E772214598 /* ToggleSplitFallthroughRegressionTests.swift */,
+				20B14B053B3FA21845699091 /* TopPaddingTests.swift */,
 				558BA33696C6D6012B47A661 /* WelcomeContentTests.swift */,
 				857FCC6A226AFEECD7A199FC /* WindowDiscoveryServiceTests.swift */,
 				E9EF96B688DCAEC0C6EB7A10 /* WindowRuleTests.swift */,
@@ -1271,6 +1274,7 @@
 				8362AE4C2D8B788EA32CC107 /* TilingEngineTiledDragTests.swift in Sources */,
 				AA9C9BF445BEAD51D2779BE8 /* TilingEngineVerifiedLayoutTests.swift in Sources */,
 				860959AD6A92DB57753D655E /* ToggleSplitFallthroughRegressionTests.swift in Sources */,
+				2784B4136C86315091CF19E8 /* TopPaddingTests.swift in Sources */,
 				5170A5CEDBB17316A9C54862 /* WelcomeContentTests.swift in Sources */,
 				00B50053F139D098B090709F /* WindowDiscoveryServiceTests.swift in Sources */,
 				E3C9EA041BCCF3D861E305F1 /* WindowRuleTests.swift in Sources */,

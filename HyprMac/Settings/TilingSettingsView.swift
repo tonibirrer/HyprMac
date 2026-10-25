@@ -1,5 +1,5 @@
 // "Tiling" tab. Window gaps, focus color, dim intensity,
-// per-monitor enable + max-splits configuration plus a live dwindle
+// per-monitor enable, max-splits and top padding plus a live dwindle
 // preview.
 
 import SwiftUI
@@ -338,6 +338,16 @@ struct TilingSettingsView: View {
                             }
                         }
                     ),
+                    topPadding: Binding(
+                        get: { config.topPaddingPerMonitor[screen.localizedName].map(Double.init) },
+                        set: { newVal in
+                            if let newVal {
+                                config.topPaddingPerMonitor[screen.localizedName] = CGFloat(max(newVal, 0))
+                            } else {
+                                config.topPaddingPerMonitor.removeValue(forKey: screen.localizedName)
+                            }
+                        }
+                    ),
                     gap: config.gapSize,
                     padding: config.outerPadding,
                     isLast: idx == screens.count - 1
@@ -353,6 +363,8 @@ private struct MonitorSplitsRow: View {
     let screen: NSScreen
     @Binding var tilingEnabled: Bool
     @Binding var maxSplits: Int
+    // nil = the shared outer padding
+    @Binding var topPadding: Double?
     let gap: CGFloat
     let padding: CGFloat
     let isLast: Bool
@@ -377,6 +389,20 @@ private struct MonitorSplitsRow: View {
 
                 if tilingEnabled {
                     MaxSplitsPicker(value: $maxSplits)
+
+                    HStack(spacing: HyprSpacing.xs) {
+                        TextField("Top padding", value: $topPadding, format: .number,
+                                  prompt: Text(String(format: "%.0f", padding)))
+                            .labelsHidden()
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56)
+                        Text("top padding")
+                            .font(.hyprCaption)
+                            .foregroundStyle(Color.hyprTextSecondary)
+                        Text("Empty uses outer padding.")
+                            .font(.hyprCaption)
+                            .foregroundStyle(Color.hyprTextTertiary)
+                    }
 
                     let aspect = res.width / res.height
                     DwindlePreview(

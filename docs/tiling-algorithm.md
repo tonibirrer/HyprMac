@@ -162,6 +162,19 @@ keyed by `NSScreen.localizedName`. The settings UI exposes this so a
 user can ratchet a wide monitor up to 4 splits (16 slots) or a
 vertical monitor down to 2 (4 slots).
 
+`TilingEngine.topPaddingPerMonitor` overrides `outerPadding` for the
+top edge only, keyed the same way, for a monitor with a custom bar
+(sketchybar) or a notch. A monitor without an entry pads all four edges
+with `outerPadding`. `TilingEngine.tilingRect` moves the top of the
+usable frame by `topPadding - outerPadding`, so the symmetric inset in
+`BSPTree` lands the top at `topPadding`, and `layoutRect(for:screen:)`
+hands that rect to every path: tiling, smart-insert capacity, drop and
+insertion previews, verified sizing, and `intendedTileRects`, which the
+drift monitor compares against. A rollback still reaches the whole
+usable frame (`restorationRect(for:)`), so a window standing above a
+raised top edge goes back where it was. The scratchpad layer keeps its
+own inset region and ignores the override.
+
 ## Two-pass layout
 
 macOS apps with hard min-size constraints (Spotify, Messages, Xcode)
@@ -191,7 +204,8 @@ frame is retained. Restoration uses one point in both size directions.
 Aggregate safety does not borrow that tolerance. It runs on a separate
 one-point slack, which is room for a readback that lands a fraction off a
 half-point target. Containment holds the origin to one point and the far
-edges to the slack, measured against the unpadded screen rect, so a
+edges to the slack, measured against the unpadded tiling rect (the usable
+frame with any top padding override applied), so a
 rounded-up window grows into its own outer padding and stops there. Two
 frames that overlap by more than the slack on both axes are rejected however
 well each matched its own target. Gap erosion is capped at

@@ -30,6 +30,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         padding: CGFloat = 8,
         splits: [String: Int] = [:],
         disabled: Set<String> = [],
+        topPadding: [String: CGFloat] = [:],
         overlayAppearance: OverlayAppearance = .system,
         showBorder: Bool = true,
         focusColor: String? = nil,
@@ -48,6 +49,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             enabled: true, keybinds: [], hyprKey: .capsLock,
             gapSize: gap, outerPadding: padding,
             maxSplitsPerMonitor: splits, disabledMonitors: disabled,
+            topPaddingPerMonitor: topPadding,
             overlayAppearance: overlayAppearance,
             showFocusBorder: showBorder, focusBorderColorHex: focusColor,
             floatingBorderColorHex: floatingColor,
@@ -70,6 +72,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         coordinator.onLayoutGeometry = { _, _ in effects += 1 }
         coordinator.onMaximumSplits = { _ in effects += 1 }
         coordinator.onDisabledMonitors = { _ in effects += 1 }
+        coordinator.onTopPadding = { _ in effects += 1 }
         coordinator.onChrome = { _, _ in effects += 1 }
         coordinator.onScratchpadRegion = { _ in effects += 1 }
         coordinator.onScratchpadEntryMode = { _ in effects += 1 }
@@ -77,6 +80,24 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         coordinator.receive(original)
 
         XCTAssertEqual(effects, 0)
+    }
+
+    func testTopPaddingChangeReachesOnlyItsRoute() {
+        let coordinator = ConfigUpdateCoordinator(initial: state())
+        var topPadding: [[String: CGFloat]] = []
+        var other = 0
+        coordinator.onTopPadding = { topPadding.append($0) }
+        coordinator.onLayoutGeometry = { _, _ in other += 1 }
+        coordinator.onMaximumSplits = { _ in other += 1 }
+        coordinator.onDisabledMonitors = { _ in other += 1 }
+        coordinator.onChrome = { _, _ in other += 1 }
+
+        coordinator.receive(state(topPadding: ["Main": 36]))
+        coordinator.receive(state(topPadding: ["Main": 36]))
+        coordinator.receive(state())
+
+        XCTAssertEqual(topPadding, [["Main": 36], [:]])
+        XCTAssertEqual(other, 0)
     }
 
     func testEveryVisualChangeUsesOnlyChromeRoute() {

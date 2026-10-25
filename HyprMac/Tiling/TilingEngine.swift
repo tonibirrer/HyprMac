@@ -243,6 +243,24 @@ class TilingEngine {
         maxSplitsPerMonitor[screen.localizedName] ?? TilingConfig.defaultMaxDepth
     }
 
+    /// Per-screen top padding overrides, keyed by `NSScreen.localizedName`.
+    /// A screen without one pads its top edge with `outerPadding`.
+    var topPaddingPerMonitor: [String: CGFloat] = [:] {
+        didSet { if topPaddingPerMonitor != oldValue { invalidatePendingLayout() } }
+    }
+
+    /// The rect BSP layout insets by `outerPadding` on every edge. A top
+    /// override moves only the top edge (CG, y down), so the padded top
+    /// lands at `usable.minY + topPadding` and the other edges keep
+    /// `outerPadding`. Clamped to half the height against a hand-edited
+    /// value that would invert the rect.
+    static func tilingRect(_ usable: CGRect, outerPadding: CGFloat, topPadding: CGFloat?) -> CGRect {
+        guard let topPadding else { return usable }
+        let shift = min(max(topPadding, 0), usable.height / 2) - outerPadding
+        return CGRect(x: usable.minX, y: usable.minY + shift,
+                      width: usable.width, height: usable.height - shift)
+    }
+
     /// Minimum child dimension (px) below which smart insert
     /// backtracks to a shallower leaf.
     var minSlotDimension: CGFloat = TilingConfig.minSlotDimension {
@@ -1196,7 +1214,7 @@ class TilingEngine {
                 let (keep, donor) = existing.allWindows.count >= tree.allWindows.count
                     ? (existing, tree) : (tree, existing)
                 let keepIDs = Set(keep.allWindows.map { $0.windowID })
-                let rect = displayManager.cgRect(for: newScreen)
+                let rect = layoutRect(for: newKey, screen: newScreen)
                 var merged = 0
                 for w in donor.allWindows where !keepIDs.contains(w.windowID) {
                     if smartInsertFitting(w, into: keep,
@@ -1530,7 +1548,7 @@ class TilingEngine {
         // a held member is in the tree but not in this pass: nothing is read
         // from it or written to it
         let windows = tree.allWindows.filter { !heldWindowIDs.contains($0.windowID) }
-        let restorationFrame = suppliedRestorationFrame ?? rect
+        let restorationFrame = suppliedRestorationFrame ?? restorationRect(for: rect)
         let originalFrames: [CGWindowID: CGRect]
         // a prepared pass may have captured a member held since
         if let suppliedOriginalFrames = suppliedOriginalFrames?.filter({ !heldWindowIDs.contains($0.key) }) {
@@ -2255,7 +2273,7 @@ class TilingEngine {
         _ = consumePendingInserted(for: key, in: t)
         let outcome = applyTrackedLayout(t, in: rect, generation: generation, key: key,
                                          inserted: m.insertedWindows.map(\.windowID).filter { !incumbents.contains($0) },
-                                         restorationUsableFrame: extraReach.map { rect.union($0) },
+                                         restorationUsableFrame: extraReach.map { restorationRect(for: rect).union($0) },
                                          topologyRecoveryMaxDepth: admissionTopologyRecovery
                                              && live == nil && incumbents.isEmpty
                                              && m.insertedWindows.count
@@ -2557,14 +2575,27 @@ class TilingEngine {
     }
 
     /// The rect every layout of `key` uses: the inset region a scratchpad
-    /// tree was last tiled into, else the screen's usable frame. Swaps,
+    /// tree was last tiled into, else the screen's usable frame with its
+    /// top padding override applied (`tilingRect`). Swaps,
     /// resizes, split toggles and retiles in the layer read it here, so
     /// they stay inside the region instead of spreading over the monitor.
     private func layoutRect(for key: TilingKey, screen: NSScreen) -> CGRect {
         if key.workspace == Self.scratchpadWorkspace, let region = scratchpadRegions[key] {
             return region
         }
-        return displayManager.cgRect(for: screen)
+        return Self.tilingRect(displayManager.cgRect(for: screen), outerPadding: outerPadding,
+                               topPadding: topPaddingPerMonitor[screen.localizedName])
+    }
+
+    /// A top padding override moves `rect`'s top edge off the usable frame,
+    /// but a window standing in that strip before the change still rolls
+    /// back there. Any other rect (a scratchpad region) is its own reach.
+    private func restorationRect(for rect: CGRect) -> CGRect {
+        guard let screen = displayManager.screens.first(where: {
+            Self.tilingRect(displayManager.cgRect(for: $0), outerPadding: outerPadding,
+                            topPadding: topPaddingPerMonitor[$0.localizedName]) == rect
+        }) else { return rect }
+        return rect.union(displayManager.cgRect(for: screen))
     }
 
     /// Intended layout rects for the scratchpad layer's ws-0 tree, laid out in

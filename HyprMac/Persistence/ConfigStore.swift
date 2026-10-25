@@ -409,4 +409,6 @@ private struct FailableWindowRule: Decodable {
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
+    // a monitor without an entry pads its top edge with outerPadding
+    var topPaddingPerMonitor: [String: CGFloat]? = nil
 }

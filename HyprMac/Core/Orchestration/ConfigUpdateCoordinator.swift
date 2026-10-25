@@ -10,6 +10,7 @@ struct RuntimeConfigState: Equatable {
     let outerPadding: CGFloat
     let maxSplitsPerMonitor: [String: Int]
     let disabledMonitors: Set<String>
+    let topPaddingPerMonitor: [String: CGFloat]
     let overlayAppearance: OverlayAppearance
     let showFocusBorder: Bool
     let focusBorderColorHex: String?
@@ -30,6 +31,7 @@ struct RuntimeConfigState: Equatable {
         enabled: Bool, keybinds: [Keybind], hyprKey: HyprKey,
         gapSize: CGFloat, outerPadding: CGFloat,
         maxSplitsPerMonitor: [String: Int], disabledMonitors: Set<String>,
+        topPaddingPerMonitor: [String: CGFloat] = [:],
         overlayAppearance: OverlayAppearance = UserConfigDefaults.overlayAppearance,
         showFocusBorder: Bool, focusBorderColorHex: String?, floatingBorderColorHex: String?,
         focusBracketStyle: FocusBracketStyle, focusBracketColorHex: String?,
@@ -47,6 +49,7 @@ struct RuntimeConfigState: Equatable {
         self.outerPadding = outerPadding
         self.maxSplitsPerMonitor = maxSplitsPerMonitor
         self.disabledMonitors = disabledMonitors
+        self.topPaddingPerMonitor = topPaddingPerMonitor
         self.overlayAppearance = overlayAppearance
         self.showFocusBorder = showFocusBorder
         self.focusBorderColorHex = focusBorderColorHex
@@ -70,6 +73,7 @@ struct RuntimeConfigState: Equatable {
             gapSize: config.gapSize, outerPadding: config.outerPadding,
             maxSplitsPerMonitor: config.maxSplitsPerMonitor,
             disabledMonitors: config.disabledMonitors,
+            topPaddingPerMonitor: config.topPaddingPerMonitor,
             overlayAppearance: config.overlayAppearance,
             showFocusBorder: config.showFocusBorder,
             focusBorderColorHex: config.focusBorderColorHex,
@@ -120,6 +124,7 @@ final class ConfigUpdateCoordinator {
     var onLayoutGeometry: (CGFloat, CGFloat) -> Void = { _, _ in }
     var onMaximumSplits: ([String: Int]) -> Void = { _ in }
     var onDisabledMonitors: (Set<String>) -> Void = { _ in }
+    var onTopPadding: ([String: CGFloat]) -> Void = { _ in }
     var onChrome: (RuntimeConfigState, ChromeConfigChanges) -> Void = { _, _ in }
     var onScratchpadRegion: (CGFloat) -> Void = { _ in }
     var onScratchpadEntryMode: (Bool) -> Void = { _ in }
@@ -155,6 +160,9 @@ final class ConfigUpdateCoordinator {
         }
         if next.disabledMonitors != previous.disabledMonitors {
             onDisabledMonitors(next.disabledMonitors)
+        }
+        if next.topPaddingPerMonitor != previous.topPaddingPerMonitor {
+            onTopPadding(next.topPaddingPerMonitor)
         }
 
         var chrome: ChromeConfigChanges = []

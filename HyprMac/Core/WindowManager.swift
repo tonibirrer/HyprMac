@@ -634,6 +634,11 @@ class WindowManager {
             if self.isRunning { self.handleDisabledMonitorChange() }
             hyprLog(.debug, .lifecycle, "disabled monitors updated: \(disabled)")
         }
+        coordinator.onTopPadding = { [weak self] padding in
+            guard let self else { return }
+            self.tilingEngine.topPaddingPerMonitor = padding
+            if self.isRunning { self.animatedRetile() }
+        }
         coordinator.onChrome = { [weak self] state, changes in
             self?.applyChromeConfig(state, changes: changes)
         }
@@ -745,6 +750,7 @@ class WindowManager {
         tilingEngine.gapSize = config.gapSize
         tilingEngine.outerPadding = config.outerPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
+        tilingEngine.topPaddingPerMonitor = config.topPaddingPerMonitor
         scratchpad.tiledRegionInset = config.scratchpadRegionInset
         scratchpad.tileNewMembers = config.scratchpadTileByDefault
         focusBorder.isEnabled = config.showFocusBorder
