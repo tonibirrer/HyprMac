@@ -52,8 +52,7 @@ final class TopPaddingTests: XCTestCase {
 
     // MARK: - engine
 
-    private func engineAndScreen() -> (TilingEngine, NSScreen) {
-        let screen = TopPaddingTestScreen()
+    private func engineAndScreen(_ screen: NSScreen = TopPaddingTestScreen()) -> (TilingEngine, NSScreen) {
         let screens: [NSScreen] = [screen]
         let engine = TilingEngine(displayManager: DisplayManager(screenSource: { screens }),
                                   frameSizingIOFactory: acceptingFrameSizingIOFactory())
@@ -87,6 +86,29 @@ final class TopPaddingTests: XCTestCase {
         XCTAssertTrue(engine.tileWindows([window], onWorkspace: 1, screen: screen).published)
         XCTAssertEqual(engine.intendedTileRects()[window.windowID],
                        CGRect(x: 8, y: 8, width: 2384, height: 1584))
+    }
+
+    // the live setup from 2026-10-25: a 3440x1440 external with the menu
+    // bar hidden, outerPadding 8, top override 37. the bottom keeps its 8
+    func testWideExternalSingleWindowKeepsTheBottomPadding() {
+        let (engine, screen) = engineAndScreen(WideTestScreen())
+        engine.topPaddingPerMonitor = [screen.localizedName: 37]
+        let window = makeWindow(id: 1)
+
+        XCTAssertTrue(engine.tileWindows([window], onWorkspace: 1, screen: screen).published)
+        XCTAssertEqual(engine.intendedTileRects()[window.windowID],
+                       CGRect(x: 8, y: 37, width: 3424, height: 1395))
+    }
+
+    func testWideExternalSplitKeepsTheBottomPadding() {
+        let (engine, screen) = engineAndScreen(WideTestScreen())
+        engine.topPaddingPerMonitor = [screen.localizedName: 37]
+        let left = makeWindow(id: 1), right = makeWindow(id: 2)
+
+        XCTAssertTrue(engine.tileWindows([left, right], onWorkspace: 1, screen: screen).published)
+        let rects = engine.intendedTileRects()
+        XCTAssertEqual(rects[left.windowID], CGRect(x: 8, y: 37, width: 1708, height: 1395))
+        XCTAssertEqual(rects[right.windowID], CGRect(x: 1724, y: 37, width: 1708, height: 1395))
     }
 
     // raising the top padding moves the tiling rect below a window that
@@ -148,5 +170,10 @@ final class TopPaddingTests: XCTestCase {
 
 private final class TopPaddingTestScreen: SyntheticScreen {
     override var frame: NSRect { NSRect(x: 0, y: 0, width: 2400, height: 1600) }
+    override var visibleFrame: NSRect { frame }
+}
+
+private final class WideTestScreen: SyntheticScreen {
+    override var frame: NSRect { NSRect(x: 0, y: 0, width: 3440, height: 1440) }
     override var visibleFrame: NSRect { frame }
 }
