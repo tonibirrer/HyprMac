@@ -361,8 +361,9 @@ while internal workspace 0 remains the scratchpad.
 
 The transfer captures source frames, verifies a private one-window candidate,
 then verifies position-only source-window parking before publishing destination membership.
-Parking accepts the macOS titlebar clamp only when every physical display sees
-at most the normal one-pixel right-edge sliver and the window size is preserved.
+Parking accepts the macOS titlebar clamp when every physical display sees
+at most the normal one-pixel right-edge sliver. A window taller than the corner
+screen comes back cut to that screen's height. The next show retiles it.
 Generation, display, and membership checks guard the commit. Ordinary failures
 restore captured geometry through verified AX writes. Superseded or changed
 display state must not receive stale-coordinate restoration. The mover is
