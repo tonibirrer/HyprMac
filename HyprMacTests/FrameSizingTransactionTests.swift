@@ -89,6 +89,30 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(fake.operations, ["timeout:7", "size:7", "timeout:7", "position:7", "timeout:7", "size:7", "timeout:7", "position-read:7", "timeout:7", "size-read:7", "timeout:7", "position-read:7", "timeout:7", "size-read:7"])
     }
 
+    func testTraceFrameReadsBeforeAndAfterEverySetterWithoutChangingTheVerdict() {
+        let id: CGWindowID = 43
+        let target = CGRect(x: 8, y: 8, width: 492, height: 784)
+        func run(traced: Bool) -> (FrameSizingAttempt.Result, Int) {
+            let fake = Fake()
+            fake.frames[id] = CGRect(x: 20, y: 20, width: 800, height: 700)
+            var probes = 0
+            var io = fake.io()
+            if traced {
+                io.traceFrame = { probes += 1; return fake.frames[$0] }
+            }
+            let result = FrameSizingAttempt(io: io).apply(
+                targets: [.init(windowID: id, frame: target)],
+                usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
+            return (result, probes)
+        }
+        let (plain, none) = run(traced: false)
+        let (probed, count) = run(traced: true)
+        XCTAssertEqual(none, 0)
+        XCTAssertEqual(count, 4, "before, size, position, size2")
+        XCTAssertEqual(probed.verdict, plain.verdict)
+        XCTAssertEqual(probed.actualFrames, plain.actualFrames)
+    }
+
     func testDelayedAcceptancePollsWithinDeadline() {
         let fake = Fake()
         let id: CGWindowID = 8

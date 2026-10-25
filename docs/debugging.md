@@ -289,6 +289,18 @@ within a third of the deadline is sized anyway, and says so:
 position settle cut short: wid=<id> phase=candidate after=<n>ms samples=<n> last=(x,y) target=(x,y) — writing size anyway
 ```
 
+While the file log is on (Debug builds, or Release with verbose logging), each
+window's frame is also read before its writes and after every setter. A
+refused attempt then logs one line per window its failure names (issue #43):
+
+```
+frame write trace: wid=9256 phase=candidate gen=12 reason=outsideUsableFrame(9256) target=(-956,10,946,1060) frames=[before→(-1920,0,1920,1080),size→(…),position→(…),size2→(…)] read=(-956,10,946,1080) positionFirst=false
+```
+
+A setter whose own frame is already off says the app or macOS clamped it
+there; frames on target after `size2` with an off `read` say the app undid
+the write afterwards.
+
 The admission recovery's narrowing lines, all `[notice] [tiling]`:
 
 - `admission retry tiles what fits: refused=[…] ws<N> — the known minima
