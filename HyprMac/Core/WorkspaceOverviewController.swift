@@ -98,10 +98,11 @@ enum WorkspaceOverviewPresentation {
         return min(maximum, max(320, grid + headerAndInsets + scratchpad))
     }
 
-    /// Everything the workspace-switch HUD says. Caption and number only —
-    /// the monitor name belongs to the overview, not to the switch flash.
-    static func switchHUDText(workspace: Int) -> (caption: String, number: String) {
-        ("WORKSPACE", "\(workspace)")
+    /// Everything the workspace-switch HUD says. Caption and number (or the
+    /// custom name) only — the monitor name belongs to the overview, not to
+    /// the switch flash.
+    static func switchHUDText(workspace: Int, names: [String: String]) -> (caption: String, number: String) {
+        ("WORKSPACE", UserConfig.workspaceDisplayName(workspace, names: names, fallback: "\(workspace)"))
     }
 }
 
@@ -327,13 +328,16 @@ private struct WorkspaceSwitchHUD: View {
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
     let workspace: Int
     private var text: (caption: String, number: String) {
-        WorkspaceOverviewPresentation.switchHUDText(workspace: workspace)
+        WorkspaceOverviewPresentation.switchHUDText(workspace: workspace,
+                                                    names: UserConfig.shared.workspaceNames)
     }
     var body: some View {
         VStack(spacing: 5) {
             Text(text.caption).font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .tracking(2).foregroundStyle(Color.hyprMagenta)
+            // a custom name has no length limit; keep the panel on screen
             Text(text.number).font(.system(size: 40, weight: .bold, design: .rounded))
+                .lineLimit(1).frame(maxWidth: 480)
                 .foregroundStyle(.primary)
         }
         .padding(.horizontal, 26).padding(.vertical, 15)

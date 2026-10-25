@@ -114,10 +114,14 @@ final class WorkspaceOverviewPresentationTests: XCTestCase {
     }
 
     func testSwitchHUDNamesTheWorkspaceAndNothingElse() {
-        let text = WorkspaceOverviewPresentation.switchHUDText(workspace: 7)
+        let text = WorkspaceOverviewPresentation.switchHUDText(workspace: 7, names: [:])
         XCTAssertEqual(text.caption, "WORKSPACE")
         XCTAssertEqual(text.number, "7")
-        XCTAssertEqual(WorkspaceOverviewPresentation.switchHUDText(workspace: 10).number, "10")
+        XCTAssertEqual(WorkspaceOverviewPresentation.switchHUDText(workspace: 10, names: [:]).number, "10")
+        // a custom name replaces the number; the caption stays
+        let named = WorkspaceOverviewPresentation.switchHUDText(workspace: 4, names: ["4": "term"])
+        XCTAssertEqual(named.caption, "WORKSPACE")
+        XCTAssertEqual(named.number, "term")
         // no monitor name on the switch HUD in any topology — monitor names
         // stay in the overview grid and its type-to-filter.
         let fields = Mirror(reflecting: text).children.map { $0.label ?? "" }

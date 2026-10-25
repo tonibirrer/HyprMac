@@ -243,6 +243,7 @@ struct SavedConfig: Codable {
     // trailing optional — existing `SavedConfig(...)` call sites keep compiling.
     var restoreLayoutOnLaunch: Bool? = nil
     var windowRules: [WindowRule]? = nil
+    var workspaceNames: [String: String]? = nil
 }
 
 // MARK: - per-keybind decode tolerance
@@ -271,6 +272,7 @@ extension SavedConfig {
         case scratchpadTileByDefault, scratchpadRegionInset
         case restoreLayoutOnLaunch
         case windowRules
+        case workspaceNames
     }
 
     init(from decoder: Decoder) throws {
@@ -339,6 +341,16 @@ extension SavedConfig {
         self.scratchpadRegionInset = Self.tolerant(c, .scratchpadRegionInset)
         self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
         self.windowRules = Self.tolerantWindowRules(c)
+        self.workspaceNames = Self.tolerantWorkspaceNames(c)
+    }
+
+    // keys "1"…"10" with a non-empty name; anything else is dropped, so a
+    // hand edit can't leave a stray key that nothing ever shows
+    private static func tolerantWorkspaceNames(_ c: KeyedDecodingContainer<CodingKeys>) -> [String: String]? {
+        let valid = Set(Constants.workspaceRange.map(String.init))
+        let names: [String: String]? = tolerant(c, .workspaceNames)
+        let kept = names?.filter { valid.contains($0.key) && !$0.value.isEmpty }
+        return kept?.isEmpty == false ? kept : nil
     }
 
     // same per-element tolerance as keybinds: the rules are hand-editable

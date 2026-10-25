@@ -199,6 +199,24 @@ Downgrade: an older build sharing `config.json` over iCloud ignores
 pins are lost on every machine. Keep machines that share a config on a
 build with window rules. No `ConfigMigration` step is involved.
 
+## Workspace names
+
+`workspaceNames` in `config.json` gives workspaces 1–10 an optional name.
+Settings → General → "Workspace names" edits it:
+
+```
+"workspaceNames": { "4": "term" }
+```
+
+A set name replaces the number in the switch HUD, the menu bar panel
+(buttons, tooltips), the workspace pickers in Settings and the
+"is full" flash. The menu bar glyphs, the overview cards, the keybind list
+and log lines keep the number. All readers go through
+`UserConfig.workspaceDisplayName`; a missing or blank name falls back to
+the number. Keys other than "1"…"10" and empty names are dropped on load,
+and an unreadable value costs only the names. An older build ignores the
+key and drops it on its next save. No `ConfigMigration` step is involved.
+
 ## JSON wire format
 
 The `Codable` implementation in `Models/Action.swift` preserves the

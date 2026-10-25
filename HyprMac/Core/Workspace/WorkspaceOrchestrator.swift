@@ -520,7 +520,8 @@ final class WorkspaceOrchestrator {
                     NSSound.beep()
                     if let frame = focused.frame {
                         focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
-                                               message: "Workspace \(number) is full")
+                                               message: UserConfig.workspaceDisplayName(
+                                                number, names: UserConfig.shared.workspaceNames) + " is full")
                     }
                     return
                 }

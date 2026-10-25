@@ -159,7 +159,8 @@ final class ConfigMigrationTests: XCTestCase {
         windowCornerRadius: 13,
         scratchpadTileByDefault: false, scratchpadRegionInset: 0.03,
         restoreLayoutOnLaunch: true,
-        windowRules: [WindowRule(bundleID: "com.apple.Terminal", workspace: 2)])
+        windowRules: [WindowRule(bundleID: "com.apple.Terminal", workspace: 2)],
+        workspaceNames: ["4": "term"])
 
     private let tolerantFields = [
         "focusFollowsMouse", "hyprKey", "excludedBundleIDs", "showMenuBarIndicator",
@@ -168,7 +169,7 @@ final class ConfigMigrationTests: XCTestCase {
         "focusBracketRadius", "focusBracketThickness", "focusBracketLength",
         "dimInactiveWindows", "dimIntensity", "mouseHoverPollHz", "chromeFadeDurationSec",
         "windowCornerRadius", "scratchpadTileByDefault", "scratchpadRegionInset",
-        "restoreLayoutOnLaunch", "windowRules",
+        "restoreLayoutOnLaunch", "windowRules", "workspaceNames",
     ]
 
     private func jsonObject(_ saved: SavedConfig) throws -> [String: Any] {
@@ -215,6 +216,8 @@ final class ConfigMigrationTests: XCTestCase {
             ("dimIntensity", "0.2"),
             ("showFocusBorder", "yes"),
             ("focusBorderColorHex", 0x007AFF),
+            ("workspaceNames", ["4": 4]),
+            ("workspaceNames", ["11": "x", "4": ""]),
         ]
         for (key, bad) in cases {
             var object = original

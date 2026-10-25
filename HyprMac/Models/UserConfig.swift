@@ -141,6 +141,12 @@ class UserConfig: ObservableObject {
         didSet { guard !isReloading else { return }; save() }
     }
 
+    // custom names for workspaces 1–10, keyed "1"…"10". display only:
+    // every reader looks it up through `workspaceDisplayName`
+    @Published var workspaceNames: [String: String] {
+        didSet { guard !isReloading else { return }; save() }
+    }
+
     // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
         didSet {
@@ -206,6 +212,7 @@ class UserConfig: ObservableObject {
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
             self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = saved.windowRules ?? []
+            self.workspaceNames = saved.workspaceNames ?? [:]
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -233,6 +240,7 @@ class UserConfig: ObservableObject {
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
             self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = []
+            self.workspaceNames = [:]
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -334,7 +342,8 @@ class UserConfig: ObservableObject {
             scratchpadTileByDefault: scratchpadTileByDefault,
             scratchpadRegionInset: scratchpadRegionInset,
             restoreLayoutOnLaunch: restoreLayoutOnLaunch,
-            windowRules: windowRules.isEmpty ? nil : windowRules)
+            windowRules: windowRules.isEmpty ? nil : windowRules,
+            workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames)
     }
 
     func resetToDefaults() {
@@ -366,6 +375,7 @@ class UserConfig: ObservableObject {
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
         restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = []
+        workspaceNames = [:]
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -461,6 +471,7 @@ class UserConfig: ObservableObject {
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
         restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = saved.windowRules ?? []
+        workspaceNames = saved.workspaceNames ?? [:]
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -508,6 +519,16 @@ extension SavedConfig {
             scratchpadTileByDefault: UserConfigDefaults.scratchpadTileByDefault,
             scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset,
             restoreLayoutOnLaunch: UserConfigDefaults.restoreLayoutOnLaunch)
+    }
+}
+
+extension UserConfig {
+    /// The custom name of `workspace`, or `fallback` ("Workspace N" by
+    /// default) when it has none. A blank name counts as none.
+    static func workspaceDisplayName(_ workspace: Int, names: [String: String],
+                                     fallback: String? = nil) -> String {
+        let name = names[String(workspace)]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? fallback ?? "Workspace \(workspace)" : name
     }
 }
 
