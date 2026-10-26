@@ -12,6 +12,10 @@ struct GeneralSettingsView: View {
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
     @StateObject private var loginItem = LoginItemController()
+    // the hook runs on every change, so a half-typed command must not reach
+    // config. commit on return or when the field loses focus.
+    @State private var hookDraft: String?
+    @FocusState private var hookFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: HyprSpacing.lg) {
@@ -181,13 +185,25 @@ struct GeneralSettingsView: View {
             }
             HyprRow("Run on change", icon: "terminal", divider: false) {
                 TextField("sketchybar --trigger hyprmac_change", text: Binding(
-                    get: { config.statusHookCommand ?? "" },
-                    set: { config.statusHookCommand = $0.isEmpty ? nil : $0 }))
+                    get: { hookDraft ?? config.statusHookCommand ?? "" },
+                    set: { hookDraft = $0 }))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 260)
                     .disabled(!config.statusExportEnabled)
+                    .focused($hookFieldFocused)
+                    .onSubmit(commitHookDraft)
+                    .onChange(of: hookFieldFocused) { focused in
+                        if !focused { commitHookDraft() }
+                    }
+                    .onDisappear(perform: commitHookDraft)
             }
         }
+    }
+
+    private func commitHookDraft() {
+        guard let draft = hookDraft else { return }
+        hookDraft = nil
+        config.statusHookCommand = draft.isEmpty ? nil : draft
     }
 
     // MARK: workspace pins
