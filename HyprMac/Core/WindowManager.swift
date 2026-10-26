@@ -639,6 +639,13 @@ class WindowManager {
             self.tilingEngine.outerPaddingPerMonitor = padding
             if self.isRunning { self.animatedRetile() }
         }
+        coordinator.onWorkspaceMonitors = { [weak self] mapping in
+            guard let self else { return }
+            self.workspaceManager.workspaceMonitors = mapping
+            // homes moved, not windows: the same reconcile a monitor
+            // plug or unplug runs carries the trees to them
+            if self.isRunning { self.reconcileAfterDisplayChange() }
+        }
         coordinator.onChrome = { [weak self] state, changes in
             self?.applyChromeConfig(state, changes: changes)
         }
@@ -768,6 +775,7 @@ class WindowManager {
             floatingColor: config.resolvedFloatingBorderColor.cgColor)
         dimmingOverlay.fadeDurationSec = config.chromeFadeDurationSec
         workspaceManager.disabledMonitors = config.disabledMonitors
+        workspaceManager.workspaceMonitors = config.workspaceMonitors
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
 

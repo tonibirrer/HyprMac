@@ -11,6 +11,7 @@ struct RuntimeConfigState: Equatable {
     let maxSplitsPerMonitor: [String: Int]
     let disabledMonitors: Set<String>
     let outerPaddingPerMonitor: [String: EdgePadding]
+    let workspaceMonitors: [String: [Int]]
     let overlayAppearance: OverlayAppearance
     let showFocusBorder: Bool
     let focusBorderColorHex: String?
@@ -32,6 +33,7 @@ struct RuntimeConfigState: Equatable {
         gapSize: CGFloat, outerPadding: CGFloat,
         maxSplitsPerMonitor: [String: Int], disabledMonitors: Set<String>,
         outerPaddingPerMonitor: [String: EdgePadding] = [:],
+        workspaceMonitors: [String: [Int]] = [:],
         overlayAppearance: OverlayAppearance = UserConfigDefaults.overlayAppearance,
         showFocusBorder: Bool, focusBorderColorHex: String?, floatingBorderColorHex: String?,
         focusBracketStyle: FocusBracketStyle, focusBracketColorHex: String?,
@@ -50,6 +52,7 @@ struct RuntimeConfigState: Equatable {
         self.maxSplitsPerMonitor = maxSplitsPerMonitor
         self.disabledMonitors = disabledMonitors
         self.outerPaddingPerMonitor = outerPaddingPerMonitor
+        self.workspaceMonitors = workspaceMonitors
         self.overlayAppearance = overlayAppearance
         self.showFocusBorder = showFocusBorder
         self.focusBorderColorHex = focusBorderColorHex
@@ -74,6 +77,7 @@ struct RuntimeConfigState: Equatable {
             maxSplitsPerMonitor: config.maxSplitsPerMonitor,
             disabledMonitors: config.disabledMonitors,
             outerPaddingPerMonitor: config.outerPaddingPerMonitor,
+            workspaceMonitors: config.workspaceMonitors,
             overlayAppearance: config.overlayAppearance,
             showFocusBorder: config.showFocusBorder,
             focusBorderColorHex: config.focusBorderColorHex,
@@ -125,6 +129,7 @@ final class ConfigUpdateCoordinator {
     var onMaximumSplits: ([String: Int]) -> Void = { _ in }
     var onDisabledMonitors: (Set<String>) -> Void = { _ in }
     var onOuterPaddingOverride: ([String: EdgePadding]) -> Void = { _ in }
+    var onWorkspaceMonitors: ([String: [Int]]) -> Void = { _ in }
     var onChrome: (RuntimeConfigState, ChromeConfigChanges) -> Void = { _, _ in }
     var onScratchpadRegion: (CGFloat) -> Void = { _ in }
     var onScratchpadEntryMode: (Bool) -> Void = { _ in }
@@ -163,6 +168,9 @@ final class ConfigUpdateCoordinator {
         }
         if next.outerPaddingPerMonitor != previous.outerPaddingPerMonitor {
             onOuterPaddingOverride(next.outerPaddingPerMonitor)
+        }
+        if next.workspaceMonitors != previous.workspaceMonitors {
+            onWorkspaceMonitors(next.workspaceMonitors)
         }
 
         var chrome: ChromeConfigChanges = []

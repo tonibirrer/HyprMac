@@ -31,6 +31,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         splits: [String: Int] = [:],
         disabled: Set<String> = [],
         paddingOverrides: [String: EdgePadding] = [:],
+        workspaceMonitors: [String: [Int]] = [:],
         overlayAppearance: OverlayAppearance = .system,
         showBorder: Bool = true,
         focusColor: String? = nil,
@@ -50,6 +51,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             gapSize: gap, outerPadding: padding,
             maxSplitsPerMonitor: splits, disabledMonitors: disabled,
             outerPaddingPerMonitor: paddingOverrides,
+            workspaceMonitors: workspaceMonitors,
             overlayAppearance: overlayAppearance,
             showFocusBorder: showBorder, focusBorderColorHex: focusColor,
             floatingBorderColorHex: floatingColor,
@@ -73,6 +75,7 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         coordinator.onMaximumSplits = { _ in effects += 1 }
         coordinator.onDisabledMonitors = { _ in effects += 1 }
         coordinator.onOuterPaddingOverride = { _ in effects += 1 }
+        coordinator.onWorkspaceMonitors = { _ in effects += 1 }
         coordinator.onChrome = { _, _ in effects += 1 }
         coordinator.onScratchpadRegion = { _ in effects += 1 }
         coordinator.onScratchpadEntryMode = { _ in effects += 1 }
@@ -101,6 +104,62 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual(overrides, [["Main": EdgePadding(top: 36)],
                                    ["Main": EdgePadding(top: 36, left: 12)], [:]])
         XCTAssertEqual(other, 0)
+    }
+
+    func testWorkspaceMappingChangeReachesOnlyItsRoute() {
+        let coordinator = ConfigUpdateCoordinator(initial: state())
+        var mappings: [[String: [Int]]] = []
+        var other = 0
+        coordinator.onWorkspaceMonitors = { mappings.append($0) }
+        coordinator.onLayoutGeometry = { _, _ in other += 1 }
+        coordinator.onMaximumSplits = { _ in other += 1 }
+        coordinator.onDisabledMonitors = { _ in other += 1 }
+        coordinator.onOuterPaddingOverride = { _ in other += 1 }
+        coordinator.onChrome = { _, _ in other += 1 }
+
+        coordinator.receive(state(workspaceMonitors: ["Left": [1, 2, 3]]))
+        coordinator.receive(state(workspaceMonitors: ["Left": [1, 2, 3]]))
+        coordinator.receive(state(workspaceMonitors: ["Left": [1, 2], "Right": [3]]))
+        coordinator.receive(state())
+
+        XCTAssertEqual(mappings, [["Left": [1, 2, 3]], ["Left": [1, 2], "Right": [3]], [:]])
+        XCTAssertEqual(other, 0)
+    }
+
+    // a Settings toggle is one assignment, so one reconcile, and the file
+    // holds the mapping until no monitor has a workspace left
+    func testSettingsWorkspaceToggleReachesTheRouteOnceAndPersists() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let config = UserConfig()
+        config.workspaceMonitors = [:]
+        let coordinator = ConfigUpdateCoordinator(initial: RuntimeConfigState(config))
+        var mappings: [[String: [Int]]] = []
+        var disabled = 0
+        coordinator.onWorkspaceMonitors = { mappings.append($0) }
+        coordinator.onDisabledMonitors = { _ in disabled += 1 }
+        coordinator.observe(config)
+
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([1, 2, 3], for: "Left", in: config.workspaceMonitors)
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([3, 4], for: "Right", in: config.workspaceMonitors)
+
+        XCTAssertEqual(mappings, [["Left": [1, 2, 3]], ["Left": [1, 2], "Right": [3, 4]]])
+        XCTAssertEqual(disabled, 0)
+        let saved = try JSONDecoder().decode(SavedMonitorConfig.self,
+                                             from: Data(contentsOf: ConfigStore.monitorConfigPath))
+        XCTAssertEqual(saved.workspaceMonitors, ["Left": [1, 2], "Right": [3, 4]])
+
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([], for: "Left", in: config.workspaceMonitors)
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([], for: "Right", in: config.workspaceMonitors)
+        XCTAssertEqual(mappings.last, [:])
+        let cleared = try JSONDecoder().decode(SavedMonitorConfig.self,
+                                               from: Data(contentsOf: ConfigStore.monitorConfigPath))
+        XCTAssertNil(cleared.workspaceMonitors)
     }
 
     func testEveryVisualChangeUsesOnlyChromeRoute() {
