@@ -377,7 +377,11 @@ Two on-disk files:
   per-machine settings. Local only, never synced.
   `maxSplitsPerMonitor` and `disabledMonitors` live here. These
   used to live in `config.json`, but per-machine settings round-tripping
-  through iCloud Drive clobbered each machine's setup.
+  through iCloud Drive clobbered each machine's setup. The status bar
+  export keys `statusExportEnabled` and `statusHookCommand` live here
+  too, set by hand with no Settings UI (see [status-bar.md](status-bar.md)).
+  The file watcher follows only `config.json`, so quit HyprMac before
+  editing this file and reopen it after.
 
 `ConfigMigration.resolveMonitorConfig` handles the migration: if
 the local file is absent and the synced config has the old fields,
@@ -546,8 +550,7 @@ matching `NSScreen.localizedName`, excluded from tiling entirely),
 the layer instead of floating; no-fit windows float regardless),
 `scratchpadRegionInset` (per-edge inset fraction of the scratchpad's
 tiled region, 0–0.15; 0.06 default keeps the scrimmed border visible,
-0 is edge-to-edge), `statusExportEnabled` and `statusHookCommand` (status
-bar export, see [status-bar.md](status-bar.md)).
+0 is edge-to-edge).
 
 Find any app's bundle ID:
 `mdls -name kMDItemCFBundleIdentifier /Applications/AppName.app`

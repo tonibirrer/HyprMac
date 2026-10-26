@@ -244,8 +244,6 @@ struct SavedConfig: Codable {
     var restoreLayoutOnLaunch: Bool? = nil
     var windowRules: [WindowRule]? = nil
     var workspaceNames: [String: String]? = nil
-    var statusExportEnabled: Bool? = nil
-    var statusHookCommand: String? = nil
 }
 
 // MARK: - per-keybind decode tolerance
@@ -275,7 +273,6 @@ extension SavedConfig {
         case restoreLayoutOnLaunch
         case windowRules
         case workspaceNames
-        case statusExportEnabled, statusHookCommand
     }
 
     init(from decoder: Decoder) throws {
@@ -345,8 +342,6 @@ extension SavedConfig {
         self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
         self.windowRules = Self.tolerantWindowRules(c)
         self.workspaceNames = Self.tolerantWorkspaceNames(c)
-        self.statusExportEnabled = Self.tolerant(c, .statusExportEnabled)
-        self.statusHookCommand = Self.tolerant(c, .statusHookCommand)
     }
 
     // keys "1"…"10" with a non-empty name; anything else is dropped, so a
@@ -426,4 +421,34 @@ private struct FailableWindowRule: Decodable {
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
+    // status bar export, see docs/status-bar.md. per machine since the bar
+    // and its hook are set up per Mac. no Settings UI, hand-edited
+    var statusExportEnabled: Bool? = nil
+    var statusHookCommand: String? = nil
+}
+
+// per-field tolerant like SavedConfig: a hand-edited bad value costs only
+// its field. strict decoding failed the whole file, and the next save then
+// wrote every monitor setting away.
+extension SavedMonitorConfig {
+    private enum CodingKeys: String, CodingKey {
+        case maxSplitsPerMonitor, disabledMonitors, statusExportEnabled, statusHookCommand
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func tolerant<T: Decodable>(_ key: CodingKeys) -> T? {
+            do {
+                return try c.decodeIfPresent(T.self, forKey: key)
+            } catch {
+                hyprLog(.notice, .config,
+                        "monitor-config.json has a \(key.stringValue) value this build can't read; using the default")
+                return nil
+            }
+        }
+        self.init(maxSplitsPerMonitor: tolerant(.maxSplitsPerMonitor),
+                  disabledMonitors: tolerant(.disabledMonitors),
+                  statusExportEnabled: tolerant(.statusExportEnabled),
+                  statusHookCommand: tolerant(.statusHookCommand))
+    }
 }

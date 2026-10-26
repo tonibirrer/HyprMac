@@ -148,7 +148,8 @@ class UserConfig: ObservableObject {
     }
 
     // status bar export: state.json, the change hook and hyprmac:// URLs.
-    // read on every change, so nothing live needs re-applying
+    // read on every change, so nothing live needs re-applying. kept in
+    // monitor-config.json (per machine), set by hand, no Settings UI
     @Published var statusExportEnabled: Bool {
         didSet { guard !isReloading else { return }; save() }
     }
@@ -192,6 +193,11 @@ class UserConfig: ObservableObject {
 
         let monitorConfig = store.loadSavedMonitorConfig()
         let savedConfig = store.loadSavedConfig()
+        // local-only from the start, so the synced config has nothing to migrate.
+        // set before the other stored properties: once init is complete, the
+        // optional hook command goes through its setter and didSet saves
+        self.statusExportEnabled = monitorConfig?.statusExportEnabled ?? false
+        self.statusHookCommand = monitorConfig?.statusHookCommand
 
         if let saved = savedConfig {
             self.keybinds = Self.mergeNewDefaults(saved: saved.keybinds)
@@ -223,8 +229,6 @@ class UserConfig: ObservableObject {
             self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = saved.windowRules ?? []
             self.workspaceNames = saved.workspaceNames ?? [:]
-            self.statusExportEnabled = saved.statusExportEnabled ?? false
-            self.statusHookCommand = saved.statusHookCommand
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -253,8 +257,6 @@ class UserConfig: ObservableObject {
             self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = []
             self.workspaceNames = [:]
-            self.statusExportEnabled = false
-            self.statusHookCommand = nil
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -268,9 +270,7 @@ class UserConfig: ObservableObject {
         }
 
         if resolved.needsLocalWrite {
-            store.writeSavedMonitorConfig(SavedMonitorConfig(
-                maxSplitsPerMonitor: resolved.maxSplits,
-                disabledMonitors: Array(resolved.disabled)))
+            store.writeSavedMonitorConfig(makeSavedMonitorConfig())
         }
 
         store.onFileChanged = { [weak self] in self?.reloadFromDisk() }
@@ -314,9 +314,16 @@ class UserConfig: ObservableObject {
 
     func save() {
         store.writeSavedConfig(makeSavedConfig())
-        store.writeSavedMonitorConfig(SavedMonitorConfig(
+        store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+    }
+
+    private func makeSavedMonitorConfig() -> SavedMonitorConfig {
+        SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,
-            disabledMonitors: Array(disabledMonitors)))
+            disabledMonitors: Array(disabledMonitors),
+            // off and empty write no key, so a machine that never opts in is unchanged
+            statusExportEnabled: statusExportEnabled ? true : nil,
+            statusHookCommand: statusHookCommand?.isEmpty == false ? statusHookCommand : nil)
     }
 
     private func persistRuntimeChange() {
@@ -357,10 +364,7 @@ class UserConfig: ObservableObject {
             scratchpadRegionInset: scratchpadRegionInset,
             restoreLayoutOnLaunch: restoreLayoutOnLaunch,
             windowRules: windowRules.isEmpty ? nil : windowRules,
-            workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames,
-            // off and empty write no key, so a config that never opts in is unchanged
-            statusExportEnabled: statusExportEnabled ? true : nil,
-            statusHookCommand: statusHookCommand?.isEmpty == false ? statusHookCommand : nil)
+            workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames)
     }
 
     func resetToDefaults() {
@@ -491,13 +495,13 @@ class UserConfig: ObservableObject {
         restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = saved.windowRules ?? []
         workspaceNames = saved.workspaceNames ?? [:]
-        statusExportEnabled = saved.statusExportEnabled ?? false
-        statusHookCommand = saved.statusHookCommand
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
             maxSplitsPerMonitor = mc.maxSplitsPerMonitor ?? [:]
             disabledMonitors = Set(mc.disabledMonitors ?? [])
+            statusExportEnabled = mc.statusExportEnabled ?? false
+            statusHookCommand = mc.statusHookCommand
         }
         // else keep current values — don't overwrite with synced defaults
 

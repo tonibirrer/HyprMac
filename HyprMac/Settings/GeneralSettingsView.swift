@@ -3,8 +3,7 @@
 import SwiftUI
 
 /// "General" tab. Enable toggle, accessibility status,
-/// focus-follows-mouse, never-tile list, workspace names, workspace pins,
-/// status bar export, System panel
+/// focus-follows-mouse, never-tile list, workspace names, workspace pins, System panel
 /// (menu bar indicator, iCloud sync, launch-at-login), and a footer with
 /// replay-the-tour + reset.
 struct GeneralSettingsView: View {
@@ -12,10 +11,6 @@ struct GeneralSettingsView: View {
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
     @StateObject private var loginItem = LoginItemController()
-    // the hook runs on every change, so a half-typed command must not reach
-    // config. commit on return or when the field loses focus.
-    @State private var hookDraft: String?
-    @FocusState private var hookFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: HyprSpacing.lg) {
@@ -24,7 +19,6 @@ struct GeneralSettingsView: View {
             neverTilePanel
             workspaceNamesPanel
             workspacePinsPanel
-            statusBarPanel
             systemPanel
             layoutsPanel
             footerPanel
@@ -170,40 +164,6 @@ struct GeneralSettingsView: View {
     private func workspaceNameBinding(_ workspace: Int) -> Binding<String> {
         Binding(get: { config.workspaceNames[String(workspace)] ?? "" },
                 set: { config.workspaceNames[String(workspace)] = $0.isEmpty ? nil : $0 })
-    }
-
-    // MARK: status bar
-
-    private var statusBarPanel: some View {
-        HyprPanel("Status bar",
-                  footer: "For bars like sketchybar. Every change writes state.json to HyprMac's "
-                        + "Application Support folder, then runs the command.") {
-            HyprRow("Export state for status bars", icon: "menubar.rectangle") {
-                Toggle("", isOn: $config.statusExportEnabled)
-                    .toggleStyle(HyprToggleStyle())
-                    .labelsHidden()
-            }
-            HyprRow("Run on change", icon: "terminal", divider: false) {
-                TextField("sketchybar --trigger hyprmac_change", text: Binding(
-                    get: { hookDraft ?? config.statusHookCommand ?? "" },
-                    set: { hookDraft = $0 }))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
-                    .disabled(!config.statusExportEnabled)
-                    .focused($hookFieldFocused)
-                    .onSubmit(commitHookDraft)
-                    .onChange(of: hookFieldFocused) { focused in
-                        if !focused { commitHookDraft() }
-                    }
-                    .onDisappear(perform: commitHookDraft)
-            }
-        }
-    }
-
-    private func commitHookDraft() {
-        guard let draft = hookDraft else { return }
-        hookDraft = nil
-        config.statusHookCommand = draft.isEmpty ? nil : draft
     }
 
     // MARK: workspace pins

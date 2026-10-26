@@ -3,18 +3,38 @@
 HyprMac can hand its workspace state to a status bar such as
 [sketchybar](https://github.com/FelixKratz/SketchyBar): a JSON file written on
 every change, a command run after each write, and `hyprmac://` links a bar's
-click handler opens. It is off by default. Turn it on in Settings → General →
-"Status bar", or in `config.json`:
+click handler opens. It is off by default.
+
+It is a power-user setting with no switch in Settings. It is set per Mac in
+`~/Library/Application Support/HyprMac/monitor-config.json`, the local file
+that never syncs over iCloud. Add the two keys to the object already in that
+file and keep its other keys:
 
 ```json
-"statusExportEnabled": true,
-"statusHookCommand": "sketchybar --trigger hyprmac_change"
+{
+  "maxSplitsPerMonitor": {},
+  "disabledMonitors": [],
+  "statusExportEnabled": true,
+  "statusHookCommand": "sketchybar --trigger hyprmac_change"
+}
 ```
 
-With the toggle off nothing below happens: no file, no hook, and the links
-are ignored. Both keys are left out of `config.json` while off and empty, and
-an unreadable value costs only that key. An older build ignores them and drops
-them on its next save. No `ConfigMigration` step is involved.
+If the file is not there yet, an object with just the two keys works.
+
+Quit HyprMac before the edit and open it again afterwards. HyprMac reads
+`monitor-config.json` at launch. Its file watcher follows only `config.json`,
+so an edit to this file while HyprMac runs is not picked up. The next
+change HyprMac saves (any Settings change) writes its in-memory copy over the
+file and drops the edit. To turn the export off, set `statusExportEnabled` to
+`false` or remove it, the same way. Reset to Defaults in Settings also turns
+it off and clears the command.
+
+With `statusExportEnabled` off or missing, nothing below happens: no file, no
+hook, and the links are ignored. HyprMac leaves `statusExportEnabled` out of
+the file while it is off, and `statusHookCommand` out while it is empty. An
+unreadable value costs only that key; the rest of the file still loads. An
+older build ignores both keys and drops them the next time it saves the file.
+Neither key goes in `config.json`, which can sync to other Macs.
 
 ## State file
 
@@ -120,4 +140,4 @@ sketchybar --set "$NAME" label="${name:-$ws}" \
   drawing="$([ "$focused" = true ] || [ "$count" -gt 0 ] && echo on || echo off)"
 ```
 
-Then set the hook to `sketchybar --trigger hyprmac_change`.
+Then set `statusHookCommand` to `sketchybar --trigger hyprmac_change` as shown at the top.

@@ -5,39 +5,70 @@ final class StatusExportTests: XCTestCase {
 
     // MARK: - settings
 
-    private func decode(_ json: String) throws -> SavedConfig {
-        try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+    // per machine in monitor-config.json, never in the synced config.json
+    private func decode(_ json: String) throws -> SavedMonitorConfig {
+        try JSONDecoder().decode(SavedMonitorConfig.self, from: Data(json.utf8))
     }
 
-    func testSettingsRoundTripThroughSavedConfig() throws {
+    private func jsonObject<T: Encodable>(_ value: T) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any])
+    }
+
+    func testSettingsRoundTripThroughSavedMonitorConfig() throws {
         let saved = try decode("""
-        {"keybinds":[],"gapSize":8,"outerPadding":8,"enabled":true,
+        {"maxSplitsPerMonitor":{"DELL":2},"disabledMonitors":["LG"],
          "statusExportEnabled":true,"statusHookCommand":"sketchybar --trigger hyprmac_change"}
         """)
         XCTAssertEqual(saved.statusExportEnabled, true)
         XCTAssertEqual(saved.statusHookCommand, "sketchybar --trigger hyprmac_change")
-        let reloaded = try JSONDecoder().decode(SavedConfig.self, from: JSONEncoder().encode(saved))
+        let reloaded = try JSONDecoder().decode(SavedMonitorConfig.self, from: JSONEncoder().encode(saved))
         XCTAssertEqual(reloaded.statusExportEnabled, true)
         XCTAssertEqual(reloaded.statusHookCommand, saved.statusHookCommand)
+        XCTAssertEqual(reloaded.maxSplitsPerMonitor, ["DELL": 2])
+        XCTAssertEqual(reloaded.disabledMonitors, ["LG"])
     }
 
     func testMissingSettingsDecodeAsOffAndWriteNoKey() throws {
-        let saved = try decode(#"{"keybinds":[],"gapSize":8,"outerPadding":8,"enabled":true}"#)
+        let saved = try decode(#"{"maxSplitsPerMonitor":{"DELL":2},"disabledMonitors":[]}"#)
         XCTAssertNil(saved.statusExportEnabled)
         XCTAssertNil(saved.statusHookCommand)
-        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
+        let object = try jsonObject(saved)
         XCTAssertNil(object["statusExportEnabled"])
         XCTAssertNil(object["statusHookCommand"])
     }
 
     func testUnreadableSettingsCostOnlyThemselves() throws {
         let saved = try decode("""
-        {"keybinds":[],"gapSize":14,"outerPadding":8,"enabled":true,
+        {"maxSplitsPerMonitor":{"DELL":2},"disabledMonitors":["LG"],
          "statusExportEnabled":"yes","statusHookCommand":["sketchybar"]}
         """)
         XCTAssertNil(saved.statusExportEnabled)
         XCTAssertNil(saved.statusHookCommand)
-        XCTAssertEqual(saved.gapSize, 14)
+        XCTAssertEqual(saved.maxSplitsPerMonitor, ["DELL": 2])
+        XCTAssertEqual(saved.disabledMonitors, ["LG"])
+
+        // and the other way round: a bad monitor field keeps the export on
+        let other = try decode("""
+        {"maxSplitsPerMonitor":{"DELL":"two"},"disabledMonitors":"LG",
+         "statusExportEnabled":true,"statusHookCommand":"sketchybar --trigger hyprmac_change"}
+        """)
+        XCTAssertNil(other.maxSplitsPerMonitor)
+        XCTAssertNil(other.disabledMonitors)
+        XCTAssertEqual(other.statusExportEnabled, true)
+        XCTAssertEqual(other.statusHookCommand, "sketchybar --trigger hyprmac_change")
+    }
+
+    // config.json can sync over iCloud, so the keys must not ride along
+    func testSyncedConfigCarriesNoStatusKeys() throws {
+        XCTAssertNil(SavedConfig.CodingKeys(stringValue: "statusExportEnabled"))
+        XCTAssertNil(SavedConfig.CodingKeys(stringValue: "statusHookCommand"))
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data("""
+        {"keybinds":[],"gapSize":8,"outerPadding":8,"enabled":true,
+         "statusExportEnabled":true,"statusHookCommand":"sketchybar --trigger hyprmac_change"}
+        """.utf8))
+        let object = try jsonObject(saved)
+        XCTAssertNil(object["statusExportEnabled"])
+        XCTAssertNil(object["statusHookCommand"])
     }
 
     // MARK: - snapshot builder
