@@ -109,6 +109,17 @@ final class StatusExportTests: XCTestCase {
         XCTAssertFalse(json.contains("title"))
     }
 
+    // two monitors of the same model can share a name. only the one showing
+    // the focused workspace is focused.
+    func testSameNamedMonitorsAreNotBothFocused() throws {
+        var twins = input()
+        twins.screens = [.init(name: "DELL", visibleWorkspace: 4), .init(name: "DELL", visibleWorkspace: 2)]
+        twins.focusedWindowID = 20
+        let snapshot = StatusSnapshot.build(twins)
+        XCTAssertEqual(snapshot.focusedWorkspace, 2)
+        XCTAssertEqual(snapshot.monitors.map(\.focused), [false, true])
+    }
+
     // a focused window on a hidden workspace (a switch to an empty one) or a
     // ghost is not focus: the cursor's screen is
     func testFocusFallsBackToCursorScreen() throws {

@@ -99,7 +99,9 @@ struct StatusSnapshot: Codable, Equatable {
             focusedWorkspace: focusScreen?.visibleWorkspace,
             focusedMonitor: focusScreen?.name,
             monitors: input.screens.map {
-                Monitor(name: $0.name, visibleWorkspace: $0.visibleWorkspace, focused: $0.name == focusScreen?.name)
+                // each screen shows its own workspace; names can repeat
+                Monitor(name: $0.name, visibleWorkspace: $0.visibleWorkspace,
+                        focused: $0.visibleWorkspace == focusScreen?.visibleWorkspace)
             },
             workspaces: workspaces,
             scratchpad: live(input.scratchpad).map { window($0, detailed: false) },
