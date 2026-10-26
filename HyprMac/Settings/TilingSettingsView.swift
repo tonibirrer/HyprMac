@@ -1,6 +1,6 @@
 // "Tiling" tab. Window gaps, focus color, dim intensity,
-// per-monitor enable, max-splits and edge padding plus a live dwindle
-// preview.
+// per-monitor enable, max-splits, edge padding and workspaces plus a live
+// dwindle preview.
 
 import SwiftUI
 
@@ -313,9 +313,26 @@ struct TilingSettingsView: View {
 
     // MARK: monitors
 
+    // the mapping would leave an enabled monitor with nothing to show
+    private var workspaceMappingIgnored: Bool {
+        let enabled = WorkspaceManager.leftToRight(screens)
+            .filter { !config.disabledMonitors.contains($0.localizedName) }
+        return WorkspaceHomeResolver.resolve(enabledNames: enabled.map(\.localizedName),
+                                             mapping: config.workspaceMonitors).mappingIgnored
+    }
+
     private var monitorsPanel: some View {
         HyprPanel("Per-Monitor Settings",
-                  footer: "Edge padding overrides the outer padding on one side of a monitor, for a bar or a Dock on that side. Leave a side empty to use the outer padding.") {
+                  footer: "Edge padding overrides the outer padding on one side of a monitor, for a bar or a Dock on that side. Leave a side empty to use the outer padding. "
+                  + "Workspaces you don't put on a monitor keep their default home.") {
+            if workspaceMappingIgnored {
+                Text("A monitor would have no workspace, so the default workspace homes apply on this layout.")
+                    .font(.hyprCaption)
+                    .foregroundStyle(Color.hyprTextSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, HyprSpacing.md)
+                    .padding(.top, HyprSpacing.md)
+            }
             ForEach(Array(screens.enumerated()), id: \.element.localizedName) { idx, screen in
                 MonitorSplitsRow(
                     screen: screen,
@@ -345,6 +362,13 @@ struct TilingSettingsView: View {
                             config.outerPaddingPerMonitor[screen.localizedName] = newVal.isEmpty ? nil : newVal
                         }
                     ),
+                    workspaces: Binding(
+                        get: { Set(config.workspaceMonitors[screen.localizedName] ?? []) },
+                        set: { newVal in
+                            config.workspaceMonitors = WorkspaceHomeResolver.setting(
+                                newVal, for: screen.localizedName, in: config.workspaceMonitors)
+                        }
+                    ),
                     gap: config.gapSize,
                     padding: config.outerPadding,
                     isLast: idx == screens.count - 1
@@ -362,6 +386,8 @@ private struct MonitorSplitsRow: View {
     @Binding var maxSplits: Int
     // a nil side = the shared outer padding
     @Binding var edgePadding: EdgePadding
+    // the workspaces put on this monitor; empty = default homes
+    @Binding var workspaces: Set<Int>
     let gap: CGFloat
     let padding: CGFloat
     let isLast: Bool
@@ -393,6 +419,8 @@ private struct MonitorSplitsRow: View {
                         paddingField("Bottom", \.bottom)
                         paddingField("Right", \.right)
                     }
+
+                    WorkspaceTogglePicker(selection: $workspaces)
 
                     let aspect = res.width / res.height
                     DwindlePreview(
@@ -437,6 +465,42 @@ private struct MonitorSplitsRow: View {
                 .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 48)
+        }
+    }
+}
+
+// MARK: - workspace toggles (1–10)
+
+private struct WorkspaceTogglePicker: View {
+    @Binding var selection: Set<Int>
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(Constants.workspaceRange, id: \.self) { n in
+                let on = selection.contains(n)
+                Button {
+                    if on { selection.remove(n) } else { selection.insert(n) }
+                } label: {
+                    Text("\(n)")
+                        .font(.hyprMonoXs)
+                        .frame(width: 22, height: 18)
+                        .background(
+                            RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
+                                .fill(on ? Color.hyprCyan.opacity(0.18) : Color.hyprSurfaceElevated)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
+                                .strokeBorder(on ? Color.hyprCyan.opacity(0.55) : Color.hyprSeparator,
+                                              lineWidth: 0.5)
+                        )
+                        .foregroundStyle(on ? Color.hyprCyan : Color.hyprTextSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Text("workspaces")
+                .font(.hyprCaption)
+                .foregroundStyle(Color.hyprTextSecondary)
+                .padding(.leading, HyprSpacing.xs)
         }
     }
 }
