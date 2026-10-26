@@ -335,6 +335,24 @@ Every workspace is **statically anchored** to a home screen:
 Two screens on one x, a stacked desk, keep the order `NSScreen.screens`
 lists them in, which puts the primary display first, so a stacked desk
 keeps the homes it had. Retile All fills the screens in the same order.
+
+The user can put workspaces on monitors by name (`workspaceMonitors` in
+`monitor-config.json`, Settings → Layout → Workspaces). One pure function,
+`WorkspaceHomeResolver.resolve`, decides every home from the enabled
+screens and that mapping, and `WorkspaceManager.homeScreenForWorkspace` and
+`workspacesAnchoredTo` are its only callers; every other consumer (Hypr+F,
+cycling, `initializeMonitors`, the overview, the menu bar, the switch HUD,
+moves, window rules, layout restore, Retile All) goes through those two. A
+workspace mapped to a connected, enabled monitor lives there. Every other
+one, unmapped or mapped to a monitor that is missing or disabled, keeps its
+formula home, so every workspace always has a home and an empty mapping is
+the formula exactly. A number under two monitors goes to the name that
+sorts first. Numbers outside 1–10 are ignored. Two displays that share a
+name take the mapping on the leftmost of them. If the mapping would leave an
+enabled monitor with no workspace, it is ignored for that layout and the
+formula decides everything; Settings says so in one line. A mapping change
+runs the same `reconcileAfterDisplayChange` as a monitor plug or unplug, so
+trees move to their new homes and window membership never changes.
 Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
 `moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
