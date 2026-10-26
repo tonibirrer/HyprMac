@@ -1,15 +1,18 @@
 // Virtual workspace bookkeeping. Workspaces are statically anchored to
 // monitors via `(N - 1) % enabledMonitorCount` — with 3 monitors,
-// ws 1, 4, 7 → Mon1; ws 2, 5, 8 → Mon2; ws 3, 6, 9 → Mon3.
+// ws 1, 4, 7 → Mon1; ws 2, 5, 8 → Mon2; ws 3, 6, 9 → Mon3 — unless the
+// user maps them to monitors by name (`workspaceMonitors`).
 
 import Cocoa
 
 /// Single source of truth for HyprMac's virtual workspaces.
 ///
 /// **Static anchoring**: every workspace has a deterministic home
-/// monitor computed as `enabledScreens[(N - 1) % enabledScreens.count]`.
-/// Switching to ws N always lands on its home monitor. Workspaces
-/// cannot move between monitors.
+/// monitor, decided by `WorkspaceHomeResolver` from the enabled screens
+/// and `workspaceMonitors`. With no mapping that is
+/// `enabledScreens[(N - 1) % enabledScreens.count]`. Switching to ws N
+/// always lands on its home monitor. Workspaces cannot move between
+/// monitors.
 ///
 /// Owns:
 /// - `monitorWorkspace`: which workspace is currently visible on each
@@ -81,6 +84,18 @@ class WorkspaceManager {
     /// Disabled monitors host floating windows only.
     var disabledMonitors: Set<String> = []
 
+    /// Monitor name → the workspaces the user put on it, from
+    /// monitor-config.json. Empty means the formula decides every home.
+    var workspaceMonitors: [String: [Int]] = [:] {
+        didSet {
+            guard workspaceMonitors != oldValue else { return }
+            let duplicates = WorkspaceHomeResolver.owners(workspaceMonitors, workspaceCount: workspaceCount).duplicates
+            if !duplicates.isEmpty {
+                hyprLog(.notice, .lifecycle, "workspace mapping lists ws\(duplicates) under more than one monitor — the name that sorts first keeps each")
+            }
+        }
+    }
+
     let workspaceCount = Constants.workspaceCount
 
     /// True while the scratchpad layer is summoned. Workspace 0 is the
@@ -110,12 +125,16 @@ class WorkspaceManager {
     // stacked desk, keep the order NSScreen.screens lists them in, which
     // puts the primary display first: the homes a stacked desk has today
     // stay its homes, and a sort on y would have swapped them on upgrade
-    private func screensLeftToRight() -> [NSScreen] {
-        displayManager.screens.enumerated().sorted { lhs, rhs in
+    static func leftToRight(_ screens: [NSScreen]) -> [NSScreen] {
+        screens.enumerated().sorted { lhs, rhs in
             lhs.element.frame.origin.x != rhs.element.frame.origin.x
                 ? lhs.element.frame.origin.x < rhs.element.frame.origin.x
                 : lhs.offset < rhs.offset
         }.map(\.element)
+    }
+
+    private func screensLeftToRight() -> [NSScreen] {
+        Self.leftToRight(displayManager.screens)
     }
 
     /// Enabled screens left-to-right. Drives `homeScreenForWorkspace`.
@@ -123,15 +142,23 @@ class WorkspaceManager {
         screensLeftToRight().filter { !isMonitorDisabled($0) }
     }
 
-    /// Workspaces whose static home is `screen`. Useful for choosing a
-    /// monitor's default visible workspace and for capacity checks that
-    /// need to know which workspaces "live here."
-    func workspacesAnchoredTo(_ screen: NSScreen) -> [Int] {
+    // every anchoring answer comes from here
+    private func resolvedHomes() -> (enabled: [NSScreen], resolution: WorkspaceHomeResolver.Resolution) {
         let enabled = enabledScreensLeftToRight()
+        let resolution = WorkspaceHomeResolver.resolve(
+            enabledNames: enabled.map(\.localizedName), mapping: workspaceMonitors,
+            workspaceCount: workspaceCount)
+        return (enabled, resolution)
+    }
+
+    /// Workspaces whose static home is `screen`, in numeric order. Useful
+    /// for choosing a monitor's default visible workspace and for capacity
+    /// checks that need to know which workspaces "live here."
+    func workspacesAnchoredTo(_ screen: NSScreen) -> [Int] {
+        let (enabled, resolution) = resolvedHomes()
         let requestedID = screenID(for: screen)
         guard let idx = enabled.firstIndex(where: { screenID(for: $0) == requestedID }) else { return [] }
-        let count = enabled.count
-        return Array(stride(from: idx + 1, through: workspaceCount, by: count))
+        return (1...workspaceCount).filter { resolution.homes[$0 - 1] == idx }
     }
 
     /// The next empty workspace owned by `screen`, in anchored numeric order.
@@ -157,11 +184,14 @@ class WorkspaceManager {
     /// whose static home is that monitor. If the existing mapping
     /// satisfies that invariant it is preserved; otherwise the monitor
     /// falls back to its lowest-numbered home workspace (its
-    /// left-to-right index + 1). Disabled and removed monitors lose
-    /// their entries.
+    /// left-to-right index + 1 when nothing is mapped). Disabled and
+    /// removed monitors lose their entries.
     func initializeMonitors() {
         let allScreens = screensLeftToRight()
         let enabled = allScreens.filter { !isMonitorDisabled($0) }
+        if resolvedHomes().resolution.mappingIgnored {
+            hyprLog(.notice, .lifecycle, "init: workspace mapping would leave a monitor with no workspace — using the default homes for this layout")
+        }
 
         // remove workspace assignments for disabled monitors
         for screen in allScreens where isMonitorDisabled(screen) {
@@ -226,15 +256,16 @@ class WorkspaceManager {
         return displayManager.screens.first { screenID(for: $0) == sid }
     }
 
-    /// Static home screen for `workspace`. Pure function of `workspace`
-    /// and the current enabled-screens layout. Indexed by
-    /// `(workspace - 1) % enabledScreens.count`. Returns `nil` only
-    /// when no enabled screens exist.
+    /// Static home screen for `workspace`. Pure function of `workspace`,
+    /// the current enabled-screens layout and `workspaceMonitors`, through
+    /// `WorkspaceHomeResolver`; with no mapping it is
+    /// `enabledScreens[(workspace - 1) % enabledScreens.count]`. Returns
+    /// `nil` only when no enabled screens exist.
     func homeScreenForWorkspace(_ workspace: Int) -> NSScreen? {
         guard Constants.workspaceRange.contains(workspace) else { return nil }
-        let enabled = enabledScreensLeftToRight()
+        let (enabled, resolution) = resolvedHomes()
         guard !enabled.isEmpty else { return nil }
-        return enabled[(workspace - 1) % enabled.count]
+        return enabled[resolution.homes[workspace - 1]]
     }
 
     /// `true` when `workspace` is currently shown on any screen.

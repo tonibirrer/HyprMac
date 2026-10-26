@@ -443,6 +443,8 @@ struct SavedMonitorConfig: Codable {
     let disabledMonitors: [String]?
     // a monitor without an entry pads every edge with outerPadding
     var outerPaddingPerMonitor: [String: EdgePadding]? = nil
+    // monitor name → workspaces that live there. nil = the formula homes
+    var workspaceMonitors: [String: [Int]]? = nil
 }
 
 // per-field tolerant like SavedConfig: a hand-edited bad value costs only
@@ -450,7 +452,7 @@ struct SavedMonitorConfig: Codable {
 // wrote every monitor setting away.
 extension SavedMonitorConfig {
     private enum CodingKeys: String, CodingKey {
-        case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor
+        case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor, workspaceMonitors
     }
 
     // unreleased top-only shape from PR #51. read once, never written back
@@ -477,6 +479,7 @@ extension SavedMonitorConfig {
         }
         self.init(maxSplitsPerMonitor: tolerant(c, .maxSplitsPerMonitor),
                   disabledMonitors: tolerant(c, .disabledMonitors),
-                  outerPaddingPerMonitor: padding)
+                  outerPaddingPerMonitor: padding,
+                  workspaceMonitors: tolerant(c, .workspaceMonitors))
     }
 }
