@@ -1,5 +1,5 @@
 // "Tiling" tab. Window gaps, focus color, dim intensity,
-// per-monitor enable, max-splits and top padding plus a live dwindle
+// per-monitor enable, max-splits and edge padding plus a live dwindle
 // preview.
 
 import SwiftUI
@@ -314,7 +314,8 @@ struct TilingSettingsView: View {
     // MARK: monitors
 
     private var monitorsPanel: some View {
-        HyprPanel("Per-Monitor Settings") {
+        HyprPanel("Per-Monitor Settings",
+                  footer: "Edge padding overrides the outer padding on one side of a monitor, for a bar or a Dock on that side. Leave a side empty to use the outer padding.") {
             ForEach(Array(screens.enumerated()), id: \.element.localizedName) { idx, screen in
                 MonitorSplitsRow(
                     screen: screen,
@@ -338,14 +339,10 @@ struct TilingSettingsView: View {
                             }
                         }
                     ),
-                    topPadding: Binding(
-                        get: { config.topPaddingPerMonitor[screen.localizedName].map(Double.init) },
+                    edgePadding: Binding(
+                        get: { config.outerPaddingPerMonitor[screen.localizedName] ?? EdgePadding() },
                         set: { newVal in
-                            if let newVal {
-                                config.topPaddingPerMonitor[screen.localizedName] = CGFloat(max(newVal, 0))
-                            } else {
-                                config.topPaddingPerMonitor.removeValue(forKey: screen.localizedName)
-                            }
+                            config.outerPaddingPerMonitor[screen.localizedName] = newVal.isEmpty ? nil : newVal
                         }
                     ),
                     gap: config.gapSize,
@@ -363,8 +360,8 @@ private struct MonitorSplitsRow: View {
     let screen: NSScreen
     @Binding var tilingEnabled: Bool
     @Binding var maxSplits: Int
-    // nil = the shared outer padding
-    @Binding var topPadding: Double?
+    // a nil side = the shared outer padding
+    @Binding var edgePadding: EdgePadding
     let gap: CGFloat
     let padding: CGFloat
     let isLast: Bool
@@ -390,18 +387,11 @@ private struct MonitorSplitsRow: View {
                 if tilingEnabled {
                     MaxSplitsPicker(value: $maxSplits)
 
-                    HStack(spacing: HyprSpacing.xs) {
-                        TextField("Top padding", value: $topPadding, format: .number,
-                                  prompt: Text(String(format: "%.0f", padding)))
-                            .labelsHidden()
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 56)
-                        Text("top padding")
-                            .font(.hyprCaption)
-                            .foregroundStyle(Color.hyprTextSecondary)
-                        Text("Empty uses outer padding.")
-                            .font(.hyprCaption)
-                            .foregroundStyle(Color.hyprTextTertiary)
+                    HStack(spacing: HyprSpacing.sm) {
+                        paddingField("Top", \.top)
+                        paddingField("Left", \.left)
+                        paddingField("Bottom", \.bottom)
+                        paddingField("Right", \.right)
                     }
 
                     let aspect = res.width / res.height
@@ -431,6 +421,22 @@ private struct MonitorSplitsRow: View {
                     .frame(height: 0.5)
                     .padding(.horizontal, HyprSpacing.md)
             }
+        }
+    }
+
+    // empty = the shared outer padding; negatives clamp to 0
+    private func paddingField(_ label: String, _ side: WritableKeyPath<EdgePadding, CGFloat?>) -> some View {
+        HStack(spacing: HyprSpacing.xs) {
+            Text(label)
+                .font(.hyprCaption)
+                .foregroundStyle(Color.hyprTextSecondary)
+            TextField(label, value: Binding(
+                get: { edgePadding[keyPath: side].map(Double.init) },
+                set: { edgePadding[keyPath: side] = $0.map { CGFloat(max($0, 0)) } }
+            ), format: .number, prompt: Text(String(format: "%.0f", padding)))
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 48)
         }
     }
 }

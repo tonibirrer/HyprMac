@@ -357,7 +357,7 @@ Two on-disk files:
 - `~/Library/Application Support/HyprMac/monitor-config.json` —
   per-machine settings. Local only, never synced.
   `maxSplitsPerMonitor`, `disabledMonitors` and
-  `topPaddingPerMonitor` live here. The first two
+  `outerPaddingPerMonitor` live here. The first two
   used to live in `config.json`, but per-machine settings round-tripping
   through iCloud Drive clobbered each machine's setup.
 
@@ -524,10 +524,13 @@ every JSON example in this file.
 tile — auto-float on discovery, and Hypr+T refuses to tile them),
 `windowRules` (per-app workspace pins, see "Window rules"), `disabledMonitors` (monitor names
 matching `NSScreen.localizedName`, excluded from tiling entirely),
-`topPaddingPerMonitor` (in `monitor-config.json`: top-edge padding per
-monitor name, e.g. `{"Built-in Retina Display": 4, "DELL U3225QE": 40}`;
-a monitor without an entry uses `outerPadding`, and left, right and
-bottom always do),
+`outerPaddingPerMonitor` (in `monitor-config.json`: per-side outer
+padding per monitor name, e.g.
+`{"DELL U3225QE": {"top": 37, "left": 8}, "Built-in Retina Display": {"right": 60}}`;
+`top`, `left`, `bottom` and `right` are each optional, and a missing side
+or monitor uses `outerPadding`. An unreleased build wrote a top-only
+`topPaddingPerMonitor` map; it still loads as top overrides when
+`outerPaddingPerMonitor` is absent, and the next save drops it),
 `scratchpadTileByDefault` (windows sent to the scratchpad tile into
 the layer instead of floating; no-fit windows float regardless),
 `scratchpadRegionInset` (per-edge inset fraction of the scratchpad's

@@ -405,12 +405,44 @@ private struct FailableWindowRule: Decodable {
     }
 }
 
+// per-side outer padding override for one monitor. a nil side uses the
+// shared outerPadding
+struct EdgePadding: Codable, Equatable {
+    var top: CGFloat? = nil
+    var left: CGFloat? = nil
+    var bottom: CGFloat? = nil
+    var right: CGFloat? = nil
+
+    var isEmpty: Bool { top == nil && left == nil && bottom == nil && right == nil }
+}
+
+// tolerant per side: a hand-edited bad value costs only that side
+extension EdgePadding {
+    private enum CodingKeys: String, CodingKey {
+        case top, left, bottom, right
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func side(_ key: CodingKeys) -> CGFloat? {
+            do {
+                return try c.decodeIfPresent(CGFloat.self, forKey: key)
+            } catch {
+                hyprLog(.notice, .config,
+                        "monitor-config.json has a \(key.stringValue) padding this build can't read; using outer padding")
+                return nil
+            }
+        }
+        self.init(top: side(.top), left: side(.left), bottom: side(.bottom), right: side(.right))
+    }
+}
+
 // monitor-specific settings — stored locally, never synced via iCloud
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
-    // a monitor without an entry pads its top edge with outerPadding
-    var topPaddingPerMonitor: [String: CGFloat]? = nil
+    // a monitor without an entry pads every edge with outerPadding
+    var outerPaddingPerMonitor: [String: EdgePadding]? = nil
 }
 
 // per-field tolerant like SavedConfig: a hand-edited bad value costs only
@@ -418,12 +450,17 @@ struct SavedMonitorConfig: Codable {
 // wrote every monitor setting away.
 extension SavedMonitorConfig {
     private enum CodingKeys: String, CodingKey {
-        case maxSplitsPerMonitor, disabledMonitors, topPaddingPerMonitor
+        case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor
+    }
+
+    // unreleased top-only shape from PR #51. read once, never written back
+    private enum LegacyKeys: String, CodingKey {
+        case topPaddingPerMonitor
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        func tolerant<T: Decodable>(_ key: CodingKeys) -> T? {
+        func tolerant<T: Decodable, K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) -> T? {
             do {
                 return try c.decodeIfPresent(T.self, forKey: key)
             } catch {
@@ -432,8 +469,14 @@ extension SavedMonitorConfig {
                 return nil
             }
         }
-        self.init(maxSplitsPerMonitor: tolerant(.maxSplitsPerMonitor),
-                  disabledMonitors: tolerant(.disabledMonitors),
-                  topPaddingPerMonitor: tolerant(.topPaddingPerMonitor))
+        var padding: [String: EdgePadding]? = tolerant(c, .outerPaddingPerMonitor)
+        if !c.contains(.outerPaddingPerMonitor) {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            let top: [String: CGFloat]? = tolerant(legacy, .topPaddingPerMonitor)
+            padding = top?.mapValues { EdgePadding(top: $0) }
+        }
+        self.init(maxSplitsPerMonitor: tolerant(c, .maxSplitsPerMonitor),
+                  disabledMonitors: tolerant(c, .disabledMonitors),
+                  outerPaddingPerMonitor: padding)
     }
 }
