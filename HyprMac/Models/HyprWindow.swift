@@ -333,6 +333,12 @@ class HyprWindow: Equatable, Hashable {
             // .activateIgnoringOtherApps is the legacy option but still functions on Tahoe;
             // empty-options activate() is silently dropped from non-keyboard contexts.
             app?.activate(options: [.activateIgnoringOtherApps])
+            // macOS 27 drops that activate from an inactive accessory app, so
+            // the window gets AX focus while keys still go to the old app.
+            // SkyLight fronts the process the way focusWithoutRaise does.
+            if let sl = makeFrontAndKeyWithoutRaise() {
+                hyprLog(.debug, .focus, "focus(\(wid)) \(sl)")
+            }
             // verify activation actually flipped — if not, log it. isActive
             // follows the workspace notification, which lands well after
             // 10 ms when the main thread is busy with the frame writes that
