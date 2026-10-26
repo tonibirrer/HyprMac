@@ -64,6 +64,15 @@ enum LogConfig {
     /// in DEBUG because os_log discards `.debug` before it persists, so
     /// the file is the only evidence left after a bug. In Release it
     /// follows the same `HyprMacVerboseLogging` toggle as trace output.
+    /// Frame reads around every setter for the `frame write trace:` line.
+    /// They cost AX round trips inside the write deadline, so they are
+    /// opt-in in every build:
+    /// `defaults write <bundle id> HyprMacFrameWriteTrace -bool YES`.
+    static let frameWriteTraceKey = "HyprMacFrameWriteTrace"
+    static var frameWriteTrace: Bool {
+        UserDefaults.standard.bool(forKey: frameWriteTraceKey)
+    }
+
     #if DEBUG
     static var persistentFileLog = true
     #else

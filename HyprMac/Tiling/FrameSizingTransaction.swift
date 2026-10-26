@@ -95,7 +95,8 @@ struct FrameSizingIO {
     }
     /// Diagnostic only: the window's frame before its writes and after each
     /// setter, for the `frame write trace:` notice on a refused attempt. nil
-    /// skips those reads; production sets it only while the file log is on.
+    /// skips those reads; production sets it only with
+    /// `LogConfig.frameWriteTrace` on.
     var traceFrame: ((CGWindowID) -> CGRect?)?
 }
 
@@ -122,7 +123,7 @@ extension FrameSizingIO {
                                                     checkpoint: checkpoint)
             }
         )
-        if LogConfig.persistentFileLog {
+        if LogConfig.frameWriteTrace {
             io.traceFrame = { id in
                 guard let window = windows[id],
                       case let (.success, origin?) = window.readPosition(),

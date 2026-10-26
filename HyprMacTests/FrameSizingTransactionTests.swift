@@ -113,6 +113,19 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(probed.actualFrames, plain.actualFrames)
     }
 
+    // the probes are extra AX reads inside the write deadline. the Debug
+    // build keeps the file log on, so they must not ride along with it.
+    func testProductionIOTracesFramesOnlyWhenAskedTo() {
+        let key = LogConfig.frameWriteTraceKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertNil(FrameSizingIO.accessibility(windows: [:], currentGeneration: { 0 }).traceFrame)
+        UserDefaults.standard.set(true, forKey: key)
+        XCTAssertNotNil(FrameSizingIO.accessibility(windows: [:], currentGeneration: { 0 }).traceFrame)
+    }
+
     func testDelayedAcceptancePollsWithinDeadline() {
         let fake = Fake()
         let id: CGWindowID = 8

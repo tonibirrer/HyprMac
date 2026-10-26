@@ -298,7 +298,8 @@ writes until it was staged (issue #43). A min-size refusal read from a
 position-first window stays that window's: its `min-size record:` line ends in
 `shared=false` and the app hint does not move.
 
-While the file log is on (Debug builds, or Release with verbose logging), each
+With `defaults write <bundle id> HyprMacFrameWriteTrace -bool YES` (off by
+default in every build, since the reads run inside the write deadline), each
 window's frame is also read before its writes and after every setter. A
 refused attempt then logs one line per window its failure names (issue #43):
 
