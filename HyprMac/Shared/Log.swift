@@ -59,11 +59,6 @@ enum LogConfig {
         UserDefaults.standard.bool(forKey: "HyprMacVerboseLogging")
     }
 
-    /// Mirror every `hyprLog` call into `DebugLogFile`, at every level
-    /// and category, ignoring the trace-tier gating above. On by default
-    /// in DEBUG because os_log discards `.debug` before it persists, so
-    /// the file is the only evidence left after a bug. In Release it
-    /// follows the same `HyprMacVerboseLogging` toggle as trace output.
     /// Frame reads around every setter for the `frame write trace:` line.
     /// They cost AX round trips inside the write deadline, so they are
     /// opt-in in every build:
@@ -73,6 +68,11 @@ enum LogConfig {
         UserDefaults.standard.bool(forKey: frameWriteTraceKey)
     }
 
+    /// Mirror every `hyprLog` call into `DebugLogFile`, at every level
+    /// and category, ignoring the trace-tier gating above. On by default
+    /// in DEBUG because os_log discards `.debug` before it persists, so
+    /// the file is the only evidence left after a bug. In Release it
+    /// follows the same `HyprMacVerboseLogging` toggle as trace output.
     #if DEBUG
     static var persistentFileLog = true
     #else
