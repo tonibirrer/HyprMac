@@ -190,9 +190,7 @@ General → "Pin apps to workspaces" edits it, one rule per app:
   finds every workspace full stays on the one where it opened.
 
 Between those moments a pin is not a tether: a window moved elsewhere
-stays there until the next Retile All. A hand edit to `windowRules` is
-picked up by the file watcher in `ConfigStore`, which re-opens the path
-after an atomic save (editors and `mv` replace the file's inode). The array decodes per element,
+stays there until the next Retile All. The array decodes per element,
 like `keybinds`: a malformed rule is logged and dropped, and an
 unreadable `windowRules` value costs only the rules.
 
@@ -485,7 +483,11 @@ Config lives at `~/Library/Application Support/HyprMac/config.json`
 { "keyCode": 123, "modifiers": 1, "action": { "focusDirection": { "_0": "left" } } }
 ```
 
-Restart HyprMac after editing. Example — bind Hypr+B to launch Safari:
+`ConfigStore` watches the file and reloads it on change. After an atomic
+save (most editors, `mv tmp config.json`) the file has a new inode, so the
+watcher re-opens the path, retries while the path is briefly missing, and
+reloads once more so a save in that gap is not lost. If an edit does not
+show up, restart HyprMac. Example — bind Hypr+B to launch Safari:
 
 ```json
 { "keyCode": 11, "modifiers": 1, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }
