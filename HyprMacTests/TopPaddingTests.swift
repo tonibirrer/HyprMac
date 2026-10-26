@@ -159,6 +159,21 @@ final class TopPaddingTests: XCTestCase {
         XCTAssertEqual(decoded.maxSplitsPerMonitor, ["A": 4])
     }
 
+    // monitor-config.json is hand-editable now. one unreadable value must
+    // cost only that field, or the next save writes the others away.
+    func testUnreadableMonitorConfigValueCostsOnlyItsField() throws {
+        let json = #"{"maxSplitsPerMonitor":{"A":2},"disabledMonitors":["B"],"topPaddingPerMonitor":{"A":"37"}}"#
+        let decoded = try JSONDecoder().decode(SavedMonitorConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.maxSplitsPerMonitor, ["A": 2])
+        XCTAssertEqual(decoded.disabledMonitors, ["B"])
+        XCTAssertNil(decoded.topPaddingPerMonitor)
+
+        let badSplits = #"{"maxSplitsPerMonitor":{"A":null},"topPaddingPerMonitor":{"A":37}}"#
+        let other = try JSONDecoder().decode(SavedMonitorConfig.self, from: Data(badSplits.utf8))
+        XCTAssertNil(other.maxSplitsPerMonitor)
+        XCTAssertEqual(other.topPaddingPerMonitor, ["A": 37])
+    }
+
     func testMonitorConfigWithoutTopPaddingLoadsUnchanged() throws {
         let json = #"{"maxSplitsPerMonitor":{"A":2},"disabledMonitors":["B"]}"#
         let decoded = try JSONDecoder().decode(SavedMonitorConfig.self, from: Data(json.utf8))

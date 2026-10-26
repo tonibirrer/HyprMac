@@ -412,3 +412,28 @@ struct SavedMonitorConfig: Codable {
     // a monitor without an entry pads its top edge with outerPadding
     var topPaddingPerMonitor: [String: CGFloat]? = nil
 }
+
+// per-field tolerant like SavedConfig: a hand-edited bad value costs only
+// its field. strict decoding failed the whole file, and the next save then
+// wrote every monitor setting away.
+extension SavedMonitorConfig {
+    private enum CodingKeys: String, CodingKey {
+        case maxSplitsPerMonitor, disabledMonitors, topPaddingPerMonitor
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func tolerant<T: Decodable>(_ key: CodingKeys) -> T? {
+            do {
+                return try c.decodeIfPresent(T.self, forKey: key)
+            } catch {
+                hyprLog(.notice, .config,
+                        "monitor-config.json has a \(key.stringValue) value this build can't read; using the default")
+                return nil
+            }
+        }
+        self.init(maxSplitsPerMonitor: tolerant(.maxSplitsPerMonitor),
+                  disabledMonitors: tolerant(.disabledMonitors),
+                  topPaddingPerMonitor: tolerant(.topPaddingPerMonitor))
+    }
+}
