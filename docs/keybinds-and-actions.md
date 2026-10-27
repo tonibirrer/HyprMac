@@ -487,7 +487,11 @@ Config lives at `~/Library/Application Support/HyprMac/config.json`
 { "keyCode": 123, "modifiers": 1, "action": { "focusDirection": { "_0": "left" } } }
 ```
 
-Restart HyprMac after editing. Example — bind Hypr+B to launch Safari:
+`ConfigStore` watches the file and reloads it on change. After an atomic
+save (most editors, `mv tmp config.json`) the file has a new inode, so the
+watcher re-opens the path, retries while the path is briefly missing, and
+reloads once more so a save in that gap is not lost. If an edit does not
+show up, restart HyprMac. Example — bind Hypr+B to launch Safari:
 
 ```json
 { "keyCode": 11, "modifiers": 1, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }

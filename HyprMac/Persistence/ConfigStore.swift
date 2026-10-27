@@ -42,8 +42,13 @@ final class ConfigStore {
         return iCloudDir.appendingPathComponent("config.json")
     }
 
-    var localConfigURL: URL { Self.configPath }
+    let localConfigURL: URL
     var monitorConfigURL: URL { Self.monitorConfigPath }
+
+    /// `localConfigURL` is injectable so tests can watch a scratch file.
+    init(localConfigURL: URL = ConfigStore.configPath) {
+        self.localConfigURL = localConfigURL
+    }
 
     var isICloudDriveAvailable: Bool {
         FileManager.default.fileExists(atPath:
@@ -59,6 +64,9 @@ final class ConfigStore {
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var fileWatcherFD: Int32 = -1
+    // bumped by stopFileWatcher so a pending re-arm retry knows it's stale
+    private var rearmGeneration = 0
+    private static let rearmMaxDelay: TimeInterval = 4
 
     // MARK: - load
 
@@ -175,8 +183,17 @@ final class ConfigStore {
             eventMask: [.write, .rename, .delete],
             queue: .main
         )
-        source.setEventHandler { [weak self] in
-            self?.onFileChanged?()
+        source.setEventHandler { [weak self, unowned source] in
+            guard let self else { return }
+            let replaced = !source.data.isDisjoint(with: [.rename, .delete])
+            self.onFileChanged?()
+            // an atomic save (most editors, `mv tmp config.json`) swaps in a
+            // new inode and leaves this fd on the unlinked old one, which
+            // never fires again. re-open the path so later edits still land
+            if replaced {
+                hyprLog(.notice, .config, "config file replaced on disk, re-arming watcher")
+                self.rearmAfterReplace()
+            }
         }
         source.setCancelHandler {
             close(fd)
@@ -185,10 +202,34 @@ final class ConfigStore {
         fileWatcherSource = source
     }
 
+    var isWatchingFile: Bool { fileWatcherSource != nil }
+
     func stopFileWatcher() {
         fileWatcherSource?.cancel()
         fileWatcherSource = nil
         fileWatcherFD = -1
+        rearmGeneration += 1
+    }
+
+    // re-open the path after the file was replaced. editors that rename the
+    // old file away before writing the new one leave nothing to open for a
+    // moment, so keep retrying with backoff. once the new file is watched,
+    // reload again: a save that landed in the gap fired no event.
+    private func rearmAfterReplace(delay: TimeInterval = 0.5) {
+        stopFileWatcher()
+        let generation = rearmGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, generation == self.rearmGeneration else { return }
+            self.startFileWatcher()
+            if self.isWatchingFile {
+                self.onFileChanged?()
+            } else {
+                if delay == 0.5 {
+                    hyprLog(.notice, .config, "config file missing at re-arm, retrying")
+                }
+                self.rearmAfterReplace(delay: min(delay * 2, Self.rearmMaxDelay))
+            }
+        }
     }
 
     func restartFileWatcher() {
