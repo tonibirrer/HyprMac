@@ -26,33 +26,33 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "rectangle.split.2x2",
-            title: "Steadier Tiling",
-            description: "Windows keep their tile when an app is slow to answer, splits survive a minimize, and saved layouts restore to the same shape.",
-            credit: "@Amin-El-Sayed"
-        ),
-        WhatsNewFeature(
             icon: "display.2",
-            title: "Displays After Sleep",
-            description: "Workspaces come back on the right monitor after sleep or a reconnect, and Caps Lock stays your Hypr key.",
-            credit: "@Amin-El-Sayed"
+            title: "Workspaces on Your Monitors",
+            description: "Pick which workspaces live on which monitor in Settings → Layout. The rest keep their usual home."
         ),
         WhatsNewFeature(
-            icon: "hourglass",
-            title: "Frozen Apps Don't Stall Tiling",
-            description: "An app that stops answering no longer holds up switches, moves and layouts for everything else.",
-            credit: "@Amin-El-Sayed"
+            icon: "rectangle.inset.filled",
+            title: "Padding per Monitor",
+            description: "Give each side of a monitor its own padding, to make room for a custom bar or a side Dock.",
+            credit: "@zalewskigrzegorz"
         ),
         WhatsNewFeature(
-            icon: "square.grid.3x3",
-            title: "Live Overview",
-            description: "The Hypr+O overview updates while it's open."
+            icon: "character.cursor.ibeam",
+            title: "Workspace Names",
+            description: "Name a workspace, and the HUD, menu bar and overview show \"term\" instead of 4.",
+            credit: "@zalewskigrzegorz"
         ),
         WhatsNewFeature(
-            icon: "paintpalette",
-            title: "Your Floating Color Everywhere",
-            description: "Overlays mark floating windows in the floating color you picked in Settings.",
-            tint: .magenta
+            icon: "arrow.up.and.down.square",
+            title: "Move Windows Up and Down",
+            description: "Hypr+Ctrl+Up and Down move a window to the monitor above or below.",
+            credit: "@BruceChanJianLe"
+        ),
+        WhatsNewFeature(
+            icon: "keyboard",
+            title: "Steadier Switches and Moves",
+            description: "Typing follows a workspace switch, Hypr+F works on more desks, and windows moved to another monitor fit their tile.",
+            credit: "@zalewskigrzegorz"
         ),
     ]
 }
