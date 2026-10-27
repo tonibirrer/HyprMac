@@ -3441,7 +3441,7 @@ class TilingEngine {
             guard layoutGeneration == prepared.generation else { return .degraded(.superseded) }
             var pending = false
             for window in windows {
-                guard let original = prepared.originals[window.windowID] else {
+                guard prepared.originals[window.windowID] != nil else {
                     return .degraded(.windowUnavailable(window.windowID))
                 }
                 let positionRead = window.readPosition()
@@ -3454,9 +3454,9 @@ class TilingEngine {
                 }
                 let actual = CGRect(origin: actualPosition, size: actualSize)
                 lastFrames[window.windowID] = actual
-                let sizeStable = abs(actual.width - original.width) <= 1
-                    && abs(actual.height - original.height) <= 1
-                if sizeStable && Self.isHiddenParkedFrame(actual, on: displayFrames) {
+                // no size check: a window taller than the corner screen comes back
+                // cut to its height (#54). the next show retiles it, as after a switch
+                if Self.isHiddenParkedFrame(actual, on: displayFrames) {
                     stableSamples[window.windowID, default: 0] += 1
                 } else {
                     stableSamples[window.windowID] = 0

@@ -31,6 +31,18 @@ final class NextEmptyWorkspaceTests: XCTestCase {
         XCTAssertNil(manager.nextEmptyWorkspace(after: 1, on: screen))
     }
 
+    // #54: the built-in sits under the ultrawide and shares its right edge.
+    // parked in the ultrawide's corner, a window hangs over the built-in and
+    // macOS pulls it onto it below the menu bar, shrunk to its height.
+    func testHideCornerIsTheLowestOfTheRightmostScreens() {
+        let ultrawide = TransferScreen(x: 0, width: 3440, height: 1440)
+        let builtIn = TransferScreen(x: 1928, y: -982, width: 1512, height: 982)
+        let dell = TransferScreen(x: -1920, y: 360, width: 1920, height: 1080)
+        let manager = WorkspaceManager(displayManager: DisplayManager(
+            screenSource: { [ultrawide, builtIn, dell] }))
+        XCTAssertEqual(manager.hidePosition(), CGPoint(x: 3439, y: 2421))
+    }
+
     func testCleanSingleDisplaySelectsWorkspaceTwo() {
         let screen = TransferScreen(x: 0)
         let manager = WorkspaceManager(displayManager: DisplayManager(screenSource: { [screen] }))
@@ -268,6 +280,50 @@ final class FullscreenWorkspaceOrchestratorTests: XCTestCase {
             CGRect(x: 1500, y: 930, width: 600, height: 500), on: [display]))
     }
 
+    // #54: a tile taller than the corner screen's usable height comes back
+    // from the park moved under that screen's menu bar and cut to its height.
+    // only the sliver shows, and the next show retiles it to full size.
+    func testParkedSiblingShrunkByTheCornerScreenStillHides() throws {
+        let screen = TransferScreen(x: 0)
+        let display = DisplayManager(screenSource: { [screen] })
+        let manager = WorkspaceManager(displayManager: display)
+        manager.initializeMonitors()
+        let state = WindowStateCache()
+        let mover = TransferWindow(id: 4351, frame: CGRect(x: 80, y: 90, width: 600, height: 500))
+        let sibling = TransferWindow(id: 4352, frame: CGRect(x: 700, y: 90, width: 600, height: 500))
+        sibling.parkingYOffset = -999
+        sibling.parkingHeight = 400
+        let source = manager.workspaceForScreen(screen)
+        let destination = try XCTUnwrap(manager.nextEmptyWorkspace(after: source, on: screen))
+        for window in [mover, sibling] {
+            manager.assignWindow(window.windowID, toWorkspace: source)
+            state.cachedWindows[window.windowID] = window
+        }
+        let engine = TilingEngine(displayManager: display)
+        engine.prepareTileLayout([mover, sibling], onWorkspace: source, screen: screen)
+        let border = FocusBorder()
+        let orchestrator = WorkspaceOrchestrator(
+            workspaceManager: manager, tilingEngine: engine,
+            accessibility: AccessibilityManager(), displayManager: display,
+            cursorManager: CursorManager(), stateCache: state,
+            focusController: FocusStateController(focusBorder: border), focusBorder: border,
+            dimmingOverlay: DimmingOverlay(), suppressions: SuppressionRegistry(),
+            revalidation: MinimaRevalidation())
+        orchestrator.actualFocusedWindow = { mover }
+        orchestrator.allWindows = { [mover, sibling] }
+        orchestrator.focusTransferredWindow = { _ in }
+        orchestrator.warpToWindow = { _ in }
+        orchestrator.updateFocusBorder = { _ in }
+        orchestrator.updatePositionCache = { }
+        orchestrator.transferRejected = { _, message in XCTFail("unexpected rejection: \(message)") }
+
+        orchestrator.moveToNextEmptyWorkspace()
+
+        XCTAssertEqual(manager.workspaceFor(mover.windowID), destination)
+        XCTAssertEqual(manager.workspaceForScreen(screen), destination)
+        XCTAssertEqual(sibling.testFrame, CGRect(x: 1599, y: 0, width: 600, height: 400))
+    }
+
     func testParkingFailureRestoresFramesAndLeavesOwnershipUntouched() throws {
         let screen = TransferScreen(x: 0)
         let display = DisplayManager(screenSource: { [screen] })
@@ -503,8 +559,8 @@ final class FullscreenWorkspaceOrchestratorTests: XCTestCase {
 
 private final class TransferScreen: SyntheticScreen {
     private let bounds: CGRect
-    init(x: CGFloat, width: CGFloat = 1600, height: CGFloat = 1000) {
-        bounds = CGRect(x: x, y: 0, width: width, height: height)
+    init(x: CGFloat, y: CGFloat = 0, width: CGFloat = 1600, height: CGFloat = 1000) {
+        bounds = CGRect(x: x, y: y, width: width, height: height)
         super.init()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -544,6 +600,7 @@ private final class TransferWindow: HyprWindow {
     private var storedFrame: CGRect
     var rejectParking = false
     var parkingYOffset: CGFloat = 0
+    var parkingHeight: CGFloat?
     var sizeWriteCount = 0
     var onParkingWrite: (() -> Void)?
     var testFrame: CGRect { storedFrame }
@@ -561,6 +618,7 @@ private final class TransferWindow: HyprWindow {
             storedFrame.origin = rejectParking
                 ? CGPoint(x: point.x - 100, y: point.y)
                 : CGPoint(x: point.x, y: point.y + parkingYOffset)
+            if !rejectParking, let parkingHeight { storedFrame.size.height = parkingHeight }
         } else {
             storedFrame.origin = point
         }

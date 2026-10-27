@@ -328,7 +328,10 @@ workspaces park their windows at a single global hide position: 1 px
 inside the bottom-right corner of the **rightmost** monitor (a 1 px
 sliver remains visible; macOS limitation). The rightmost edge has no
 neighbor, so the parked window's off-screen extension never overlaps
-another monitor and macOS's rescale-to-neighbor bug cannot fire.
+another monitor and macOS's rescale-to-neighbor bug cannot fire. When
+monitors share the rightmost edge, the lowest one holds the corner: a
+monitor below it would catch the extension, and macOS would pull the
+window onto it under its menu bar, shrunk to its height.
 
 Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.
@@ -358,8 +361,9 @@ while internal workspace 0 remains the scratchpad.
 
 The transfer captures source frames, verifies a private one-window candidate,
 then verifies position-only source-window parking before publishing destination membership.
-Parking accepts the macOS titlebar clamp only when every physical display sees
-at most the normal one-pixel right-edge sliver and the window size is preserved.
+Parking accepts the macOS titlebar clamp when every physical display sees
+at most the normal one-pixel right-edge sliver. A window taller than the corner
+screen comes back cut to that screen's height. The next show retiles it.
 Generation, display, and membership checks guard the commit. Ordinary failures
 restore captured geometry through verified AX writes. Superseded or changed
 display state must not receive stale-coordinate restoration. The mover is
