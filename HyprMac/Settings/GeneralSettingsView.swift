@@ -11,6 +11,7 @@ struct GeneralSettingsView: View {
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
     @StateObject private var loginItem = LoginItemController()
+    @State private var showingWorkspaceNames = false
 
     var body: some View {
         VStack(spacing: HyprSpacing.lg) {
@@ -149,21 +150,28 @@ struct GeneralSettingsView: View {
 
     private var workspaceNamesPanel: some View {
         HyprPanel("Workspace names",
-                  footer: "A name replaces the number in the switch HUD, the menu bar and the "
-                        + "workspace pickers. Leave it empty to keep the number.") {
-            ForEach(Constants.workspaceRange, id: \.self) { workspace in
-                HyprRow("Workspace \(workspace)", divider: workspace != Constants.workspaceCount) {
-                    TextField("\(workspace)", text: workspaceNameBinding(workspace))
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 180)
-                }
+                  footer: "Names replace the numbers in the switch HUD, the menu bar and the workspace pickers.") {
+            HyprRow("Names", icon: "character.cursor.ibeam",
+                    subtitle: workspaceNamesSummary, divider: false) {
+                Button("Rename…") { showingWorkspaceNames = true }
+                    .controlSize(.small)
             }
+        }
+        .sheet(isPresented: $showingWorkspaceNames) {
+            WorkspaceNamesSheet(config: config)
         }
     }
 
-    private func workspaceNameBinding(_ workspace: Int) -> Binding<String> {
-        Binding(get: { config.workspaceNames[String(workspace)] ?? "" },
-                set: { config.workspaceNames[String(workspace)] = $0.isEmpty ? nil : $0 })
+    // "None, ..." or "3 named: web, term, music"
+    private var workspaceNamesSummary: String {
+        let named = Constants.workspaceRange.compactMap { workspace -> String? in
+            let name = config.workspaceNames[String(workspace)]?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? nil : name
+        }
+        if named.isEmpty { return "None, workspaces show their numbers" }
+        let shown = named.prefix(4).joined(separator: ", ")
+        return "\(named.count) named: " + shown + (named.count > 4 ? ", …" : "")
     }
 
     // MARK: workspace pins
