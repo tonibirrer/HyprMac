@@ -383,6 +383,8 @@ then verifies position-only source-window parking before publishing destination 
 Parking accepts the macOS titlebar clamp when every physical display sees
 at most the normal one-pixel right-edge sliver. A window taller than the corner
 screen comes back cut to that screen's height. The next show retiles it.
+A park counts as done after two hidden readbacks in a row that agree to one
+point, so a window macOS is still moving does not pass between two steps.
 Generation, display, and membership checks guard the commit. Ordinary failures
 restore captured geometry through verified AX writes. Superseded or changed
 display state must not receive stale-coordinate restoration. The mover is

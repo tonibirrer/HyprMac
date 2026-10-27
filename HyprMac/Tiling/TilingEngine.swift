@@ -3525,11 +3525,16 @@ class TilingEngine {
                         positionRead.0 != .success ? positionRead.0 : sizeRead.0))
                 }
                 let actual = CGRect(origin: actualPosition, size: actualSize)
+                let previous = lastFrames[window.windowID]
                 lastFrames[window.windowID] = actual
                 // no size check: a window taller than the corner screen comes back
                 // cut to its height (#54). the next show retiles it, as after a switch
                 if Self.isHiddenParkedFrame(actual, on: displayFrames) {
-                    stableSamples[window.windowID, default: 0] += 1
+                    // hidden isn't settled: macOS may still be moving it, so a
+                    // sample only counts when it matches the one before
+                    let unchanged = previous.map { Self.framesMatch($0, actual) } ?? false
+                    stableSamples[window.windowID] = unchanged
+                        ? stableSamples[window.windowID, default: 0] + 1 : 1
                 } else {
                     stableSamples[window.windowID] = 0
                 }
@@ -3547,6 +3552,11 @@ class TilingEngine {
         let failed = windows.first { stableSamples[$0.windowID, default: 0] < 2 }
         hyprLog(.notice, .workspace, "position-only park rejected: frames=\(lastFrames) hidden=false")
         return .degraded(.geometryMismatch(failed?.windowID ?? 0))
+    }
+
+    private static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1
+            && abs(a.width - b.width) <= 1 && abs(a.height - b.height) <= 1
     }
 
     static func isHiddenParkedFrame(_ frame: CGRect, on displayFrames: [CGRect],

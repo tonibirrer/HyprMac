@@ -324,6 +324,62 @@ final class FullscreenWorkspaceOrchestratorTests: XCTestCase {
         XCTAssertEqual(sibling.testFrame, CGRect(x: 1599, y: 0, width: 600, height: 400))
     }
 
+    // a hidden sample alone isn't settled: macOS can still be moving the window.
+    // two samples in a row must also agree
+    func testParkedSiblingStillMovingWhileHiddenIsRejected() throws {
+        let sibling = TransferWindow(id: 4362, frame: CGRect(x: 700, y: 90, width: 600, height: 500))
+        sibling.hiddenReadDrift = 2
+        let result = try runSiblingPark(sibling)
+        XCTAssertTrue(result.rejected)
+        XCTAssertEqual(result.manager.workspaceFor(result.moverID), result.source)
+        XCTAssertEqual(sibling.testFrame, CGRect(x: 700, y: 90, width: 600, height: 500))
+    }
+
+    func testParkedSiblingThatSettlesWhileHiddenStillParks() throws {
+        let sibling = TransferWindow(id: 4364, frame: CGRect(x: 700, y: 90, width: 600, height: 500))
+        sibling.hiddenReadDrift = 2
+        sibling.hiddenDriftReads = 3
+        let result = try runSiblingPark(sibling)
+        XCTAssertFalse(result.rejected)
+        XCTAssertNotEqual(result.manager.workspaceFor(result.moverID), result.source)
+    }
+
+    private func runSiblingPark(_ sibling: TransferWindow) throws
+        -> (rejected: Bool, manager: WorkspaceManager, source: Int, moverID: CGWindowID) {
+        let screen = TransferScreen(x: 0)
+        let display = DisplayManager(screenSource: { [screen] })
+        let manager = WorkspaceManager(displayManager: display)
+        manager.initializeMonitors()
+        let state = WindowStateCache()
+        let mover = TransferWindow(id: sibling.windowID - 1, frame: CGRect(x: 80, y: 90, width: 600, height: 500))
+        let source = manager.workspaceForScreen(screen)
+        for window in [mover, sibling] {
+            manager.assignWindow(window.windowID, toWorkspace: source)
+            state.cachedWindows[window.windowID] = window
+        }
+        let engine = TilingEngine(displayManager: display)
+        engine.prepareTileLayout([mover, sibling], onWorkspace: source, screen: screen)
+        let border = FocusBorder()
+        let orchestrator = WorkspaceOrchestrator(
+            workspaceManager: manager, tilingEngine: engine,
+            accessibility: AccessibilityManager(), displayManager: display,
+            cursorManager: CursorManager(), stateCache: state,
+            focusController: FocusStateController(focusBorder: border), focusBorder: border,
+            dimmingOverlay: DimmingOverlay(), suppressions: SuppressionRegistry(),
+            revalidation: MinimaRevalidation())
+        var rejected = false
+        orchestrator.actualFocusedWindow = { mover }
+        orchestrator.allWindows = { [mover, sibling] }
+        orchestrator.focusTransferredWindow = { _ in }
+        orchestrator.warpToWindow = { _ in }
+        orchestrator.updateFocusBorder = { _ in }
+        orchestrator.updatePositionCache = { }
+        orchestrator.transferRejected = { _, _ in rejected = true }
+
+        orchestrator.moveToNextEmptyWorkspace()
+        return (rejected, manager, source, mover.windowID)
+    }
+
     func testParkingFailureRestoresFramesAndLeavesOwnershipUntouched() throws {
         let screen = TransferScreen(x: 0)
         let display = DisplayManager(screenSource: { [screen] })
@@ -601,6 +657,8 @@ private final class TransferWindow: HyprWindow {
     var rejectParking = false
     var parkingYOffset: CGFloat = 0
     var parkingHeight: CGFloat?
+    var hiddenReadDrift: CGFloat = 0
+    var hiddenDriftReads = Int.max
     var sizeWriteCount = 0
     var onParkingWrite: (() -> Void)?
     var testFrame: CGRect { storedFrame }
@@ -611,7 +669,14 @@ private final class TransferWindow: HyprWindow {
     override var isFullscreen: Bool { false }
     override var isSizeSettable: Bool? { true }
     override func readPosition() -> (AXError, CGPoint?) { (.success, storedFrame.origin) }
-    override func readSize() -> (AXError, CGSize?) { (.success, storedFrame.size) }
+    override func readSize() -> (AXError, CGSize?) {
+        // parked and still shrinking, like a window macOS resizes in steps
+        if storedFrame.origin.x > 1500, hiddenDriftReads > 0, hiddenReadDrift != 0 {
+            storedFrame.size.height -= hiddenReadDrift
+            hiddenDriftReads -= 1
+        }
+        return (.success, storedFrame.size)
+    }
     override func writePosition(_ point: CGPoint) -> AXError {
         if point.x > 1500 { onParkingWrite?(); onParkingWrite = nil }
         if point.x > 1500 {
