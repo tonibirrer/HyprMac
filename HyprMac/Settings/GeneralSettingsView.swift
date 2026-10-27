@@ -3,7 +3,7 @@
 import SwiftUI
 
 /// "General" tab. Enable toggle, accessibility status,
-/// focus-follows-mouse, never-tile list, workspace pins, System panel
+/// focus-follows-mouse, never-tile list, workspace names, workspace pins, System panel
 /// (menu bar indicator, iCloud sync, launch-at-login), and a footer with
 /// replay-the-tour + reset.
 struct GeneralSettingsView: View {
@@ -17,6 +17,7 @@ struct GeneralSettingsView: View {
             statusPanel
             mousePanel
             neverTilePanel
+            workspaceNamesPanel
             workspacePinsPanel
             systemPanel
             layoutsPanel
@@ -144,6 +145,27 @@ struct GeneralSettingsView: View {
         }
     }
 
+    // MARK: workspace names
+
+    private var workspaceNamesPanel: some View {
+        HyprPanel("Workspace names",
+                  footer: "A name replaces the number in the switch HUD, the menu bar and the "
+                        + "workspace pickers. Leave it empty to keep the number.") {
+            ForEach(Constants.workspaceRange, id: \.self) { workspace in
+                HyprRow("Workspace \(workspace)", divider: workspace != Constants.workspaceCount) {
+                    TextField("\(workspace)", text: workspaceNameBinding(workspace))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 180)
+                }
+            }
+        }
+    }
+
+    private func workspaceNameBinding(_ workspace: Int) -> Binding<String> {
+        Binding(get: { config.workspaceNames[String(workspace)] ?? "" },
+                set: { config.workspaceNames[String(workspace)] = $0.isEmpty ? nil : $0 })
+    }
+
     // MARK: workspace pins
 
     private var workspacePinsPanel: some View {
@@ -187,7 +209,9 @@ struct GeneralSettingsView: View {
                 get: { rule.workspace },
                 set: { setPinnedWorkspace($0, for: rule.bundleID) }
             )) {
-                ForEach(Constants.workspaceRange, id: \.self) { Text("Workspace \($0)").tag($0) }
+                ForEach(Constants.workspaceRange, id: \.self) {
+                    Text(UserConfig.workspaceDisplayName($0, names: config.workspaceNames)).tag($0)
+                }
             }
             .labelsHidden()
             .fixedSize()

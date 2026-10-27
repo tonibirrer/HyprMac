@@ -284,6 +284,7 @@ struct SavedConfig: Codable {
     // trailing optional — existing `SavedConfig(...)` call sites keep compiling.
     var restoreLayoutOnLaunch: Bool? = nil
     var windowRules: [WindowRule]? = nil
+    var workspaceNames: [String: String]? = nil
 }
 
 // MARK: - per-keybind decode tolerance
@@ -312,6 +313,7 @@ extension SavedConfig {
         case scratchpadTileByDefault, scratchpadRegionInset
         case restoreLayoutOnLaunch
         case windowRules
+        case workspaceNames
     }
 
     init(from decoder: Decoder) throws {
@@ -380,6 +382,16 @@ extension SavedConfig {
         self.scratchpadRegionInset = Self.tolerant(c, .scratchpadRegionInset)
         self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
         self.windowRules = Self.tolerantWindowRules(c)
+        self.workspaceNames = Self.tolerantWorkspaceNames(c)
+    }
+
+    // keys "1"…"10" with a non-empty name; anything else is dropped, so a
+    // hand edit can't leave a stray key that nothing ever shows
+    private static func tolerantWorkspaceNames(_ c: KeyedDecodingContainer<CodingKeys>) -> [String: String]? {
+        let valid = Set(Constants.workspaceRange.map(String.init))
+        let names: [String: String]? = tolerant(c, .workspaceNames)
+        let kept = names?.filter { valid.contains($0.key) && !$0.value.isEmpty }
+        return kept?.isEmpty == false ? kept : nil
     }
 
     // same per-element tolerance as keybinds: the rules are hand-editable
@@ -486,6 +498,10 @@ struct SavedMonitorConfig: Codable {
     var outerPaddingPerMonitor: [String: EdgePadding]? = nil
     // monitor name → workspaces that live there. nil = the formula homes
     var workspaceMonitors: [String: [Int]]? = nil
+    // status bar export, see docs/status-bar.md. per machine since the bar
+    // and its hook are set up per Mac. no Settings UI, hand-edited
+    var statusExportEnabled: Bool? = nil
+    var statusHookCommand: String? = nil
 }
 
 // per-field tolerant like SavedConfig: a hand-edited bad value costs only
@@ -493,7 +509,8 @@ struct SavedMonitorConfig: Codable {
 // wrote every monitor setting away.
 extension SavedMonitorConfig {
     private enum CodingKeys: String, CodingKey {
-        case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor, workspaceMonitors
+        case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor, workspaceMonitors,
+             statusExportEnabled, statusHookCommand
     }
 
     // unreleased top-only shape from PR #51. read once, never written back
@@ -521,6 +538,8 @@ extension SavedMonitorConfig {
         self.init(maxSplitsPerMonitor: tolerant(c, .maxSplitsPerMonitor),
                   disabledMonitors: tolerant(c, .disabledMonitors),
                   outerPaddingPerMonitor: padding,
-                  workspaceMonitors: tolerant(c, .workspaceMonitors))
+                  workspaceMonitors: tolerant(c, .workspaceMonitors),
+                  statusExportEnabled: tolerant(c, .statusExportEnabled),
+                  statusHookCommand: tolerant(c, .statusHookCommand))
     }
 }

@@ -24,7 +24,11 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertEqual(MenuBarPresentation.monitorSummary([
             monitor(0, "Studio Display", workspace: 7),
             monitor(1, "Built-in Display", workspace: 2)
-        ]), "Studio Display: Workspace 7\nBuilt-in Display: Workspace 2")
+        ], names: [:]), "Studio Display: Workspace 7\nBuilt-in Display: Workspace 2")
+        XCTAssertEqual(MenuBarPresentation.monitorSummary([
+            monitor(0, "Studio Display", workspace: 7),
+            monitor(1, "Built-in Display", workspace: 2)
+        ], names: ["7": "web"]), "Studio Display: web\nBuilt-in Display: Workspace 2")
     }
 
     func testWorkspaceStateHidesWhilePausedOrIndicatorDisabled() {

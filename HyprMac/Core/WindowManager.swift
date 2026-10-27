@@ -4,6 +4,7 @@
 // directly — this class is the seam that holds them in one place.
 
 import Cocoa
+import Combine
 
 /// Long-lived orchestrator that owns every subsystem and routes work between them.
 ///
@@ -38,6 +39,13 @@ class WindowManager {
     let dragManager = DragManager()
     let keybindOverlay = KeybindOverlayController()
     let workspaceOverview = WorkspaceOverviewController()
+
+    // status bar export (state.json + hook). every publish point below ends
+    // in refreshWorkspaceOverview, which notes the change; focus notes its own
+    private let statusExporter = StatusExporter(
+        schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
+        publish: StatusFilePublisher().publish)
+    private var statusConfigObservation: AnyCancellable?
 
     private(set) var workspaceManager: WorkspaceManager!
     private(set) var tilingEngine: TilingEngine!
@@ -584,12 +592,28 @@ class WindowManager {
             self.workspaceOrchestrator.switchWorkspace(workspace, preferredWindowID: windowID)
         }
 
+        configureStatusExport()
         configureLiveConfigUpdates()
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
         hotkeyManager.start()
         hotkeyManager.updateTilingEnabled(config.enabled)
         hotkeyManager.start()
+    }
+
+    private func configureStatusExport() {
+        statusExporter.isEnabled = { [weak self] in
+            guard let self else { return false }
+            return self.isRunning && self.config.statusExportEnabled
+        }
+        statusExporter.hookCommand = { [weak self] in self?.config.statusHookCommand }
+        statusExporter.snapshot = { [weak self] in self?.statusSnapshot() }
+        focusController.onChange = { [weak self] in self?.statusExporter.noteChange() }
+        // workspace names, the toggle itself. objectWillChange fires before
+        // the write, so the note waits a turn to see the new value
+        statusConfigObservation = config.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.statusExporter.noteChange()
+        }
     }
 
     /// Observe the model's post-mutation signal once and route a complete
@@ -2830,7 +2854,59 @@ class WindowManager {
     /// Live overview: new windows, closes, moves and retiles show up while
     /// Hypr+O is open. No-op (and no AX walk) while it is closed.
     private func refreshWorkspaceOverview(windows: [HyprWindow]? = nil) {
+        // the switch, the poll and the position cache all end here, so a
+        // status bar hears of every change the overview would show
+        statusExporter.noteChange()
         workspaceOverview.refreshIfOpen { workspaceOverviewSnapshots(windows: windows) }
+    }
+
+    /// Read-only, no AX walk: workspace state plus app names from the owners.
+    private func statusSnapshot() -> StatusSnapshot {
+        let assigned = workspaceManager.regularWorkspaceWindowIDs()
+        let members = scratchpad.members
+        let hidden = stateCache.hiddenWindowIDs
+        var apps: [CGWindowID: StatusSnapshot.Input.App] = [:]
+        for id in assigned.values.reduce(members, { $0.union($1) }).subtracting(hidden) {
+            let window = stateCache.cachedWindows[id]
+            let app = (stateCache.windowOwners[id] ?? window?.ownerPID)
+                .flatMap { NSRunningApplication(processIdentifier: $0) }
+            let bundleID = window?.bundleID ?? app?.bundleIdentifier
+            apps[id] = .init(name: app?.localizedName ?? bundleID ?? "Unknown app", bundleID: bundleID)
+        }
+        let screens = workspaceManager.enabledScreensLeftToRight()
+        return StatusSnapshot.build(.init(
+            screens: screens.map { .init(name: $0.localizedName, visibleWorkspace: workspaceManager.workspaceForScreen($0)) },
+            homeScreens: Dictionary(uniqueKeysWithValues: Constants.workspaceRange.compactMap { ws in
+                workspaceManager.homeScreenForWorkspace(ws).map { (ws, $0.localizedName) }
+            }),
+            assigned: assigned,
+            scratchpad: members,
+            scratchpadVisible: scratchpad.isVisible,
+            hidden: hidden,
+            floating: stateCache.floatingWindowIDs,
+            focusedWindowID: focusController.lastFocusedID,
+            cursorScreen: screens.isEmpty ? nil : screenUnderCursor().localizedName,
+            apps: apps,
+            names: config.workspaceNames))
+    }
+
+    /// A `hyprmac://` action from a status bar. Same paths as the switch
+    /// keybind and the overview's window pick, so the same guards apply.
+    func handleStatusURL(_ command: StatusURLCommand) {
+        guard isRunning, config.statusExportEnabled else { return }
+        switch command {
+        case .workspace(let workspace):
+            handleAction(.switchWorkspace(workspace))
+        case .focus(let workspace):
+            // a repeat click cycles that workspace's windows
+            if !displayTransitionPending,
+               let next = StatusURLCommand.nextFocusTarget(on: workspace, in: statusSnapshot()) {
+                scratchpad.hide(reason: .workspaceAction)
+                workspaceOrchestrator.switchWorkspace(workspace, preferredWindowID: next)
+            } else {
+                handleAction(.switchWorkspace(workspace))
+            }
+        }
     }
 
     /// Workspaces that hold at least one live floating window.

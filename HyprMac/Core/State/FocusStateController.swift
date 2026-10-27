@@ -29,6 +29,9 @@ final class FocusStateController {
     /// the bordered window without depending on `FocusBorder` directly.
     var borderTrackedID: CGWindowID? { focusBorder.trackedWindowID }
 
+    /// Fired after every focus transition (the status bar export listens).
+    var onChange: () -> Void = {}
+
     init(focusBorder: FocusBorder) {
         self.focusBorder = focusBorder
     }
@@ -48,5 +51,6 @@ final class FocusStateController {
         lastFocusedID = id
         generation &+= 1
         hyprLog(.debug, .focus, "focus \(prev) → \(id) (\(reason))")
+        onChange()
     }
 }
