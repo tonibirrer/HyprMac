@@ -42,9 +42,13 @@ class WindowManager {
 
     // status bar export (state.json + hook). every publish point below ends
     // in refreshWorkspaceOverview, which notes the change; focus notes its own
-    private let statusExporter = StatusExporter(
-        schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
-        publish: StatusFilePublisher().publish)
+    private let statusExporter: StatusExporter = {
+        // one publisher, so writes and the clear share a queue and a hook runner
+        let publisher = StatusFilePublisher()
+        return StatusExporter(
+            schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
+            publish: publisher.publish, clear: publisher.clear)
+    }()
     private var statusConfigObservation: AnyCancellable?
 
     private(set) var workspaceManager: WorkspaceManager!
@@ -927,6 +931,9 @@ class WindowManager {
     /// indicator. The hotkey tap stays available for the pause/resume binding
     /// unless this is final application teardown. Safe to call when not running.
     func stop(keepPauseShortcut: Bool = true) {
+        // before isRunning drops, while the export still counts as on.
+        // keepPauseShortcut false is the quit
+        statusExporter.clear(quitting: !keepPauseShortcut)
         isRunning = false
         hyprHeld = false
         focusBrackets.hide()

@@ -46,6 +46,10 @@ another window or monitor, a workspace name change, a monitor connecting or
 leaving, and the scratchpad showing or hiding. Changes within 50 ms produce one
 write, and a state equal to the last one written is not written again.
 
+When HyprMac quits or tiling pauses, it removes `state.json` and runs the hook
+once with the focus variables empty, so a bar can clear itself. The file
+comes back with the next write after tiling resumes.
+
 ```json
 {
   "version": 1,

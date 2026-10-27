@@ -188,8 +188,9 @@ final class StatusExportTests: XCTestCase {
 
     private func exporter(clock: FakeClock, enabled: @escaping () -> Bool = { true },
                           snapshot: @escaping () -> StatusSnapshot,
+                          cleared: @escaping (String?, Bool) -> Void = { _, _ in },
                           published: @escaping (StatusSnapshot, String?) -> Void) -> StatusExporter {
-        let exporter = StatusExporter(schedule: clock.schedule, publish: published)
+        let exporter = StatusExporter(schedule: clock.schedule, publish: published, clear: cleared)
         exporter.isEnabled = enabled
         exporter.snapshot = snapshot
         exporter.hookCommand = { "hook" }
@@ -249,6 +250,76 @@ final class StatusExportTests: XCTestCase {
         exporter.noteChange()
         clock.fire()
         XCTAssertEqual(published, 2, "the same state is written again after a toggle")
+    }
+
+    // pause or quit: the file goes, the hook runs once, and a write still
+    // pending can't bring the file back
+    func testStopClearsOnceAndDropsThePendingWrite() {
+        let clock = FakeClock()
+        var current = StatusSnapshot.build(input())
+        var published = 0
+        var cleared: [(String?, Bool)] = []
+        let exporter = exporter(clock: clock, snapshot: { current },
+                                cleared: { cleared.append(($0, $1)) }) { _, _ in published += 1 }
+
+        exporter.noteChange()
+        clock.fire()
+        current = StatusSnapshot.build(input(focused: 12))
+        exporter.noteChange()
+        exporter.clear(quitting: false)
+        XCTAssertEqual(cleared.count, 1)
+        XCTAssertEqual(cleared.first?.0, "hook")
+        XCTAssertEqual(cleared.first?.1, false)
+        clock.fire()
+        XCTAssertEqual(published, 1, "the pending write was dropped")
+
+        // a later start writes the same state again
+        exporter.noteChange()
+        XCTAssertEqual(clock.pending.count, 1)
+        clock.fire()
+        XCTAssertEqual(published, 2)
+
+        exporter.clear(quitting: true)
+        XCTAssertEqual(cleared.last?.1, true)
+    }
+
+    func testStopWithExportOffClearsNothing() {
+        let clock = FakeClock()
+        var cleared = 0
+        let exporter = exporter(clock: clock, enabled: { false }, snapshot: { StatusSnapshot.build(self.input()) },
+                                cleared: { _, _ in cleared += 1 }) { _, _ in }
+        exporter.clear(quitting: false)
+        exporter.clear(quitting: true)
+        XCTAssertEqual(cleared, 0)
+    }
+
+    func testClearedHookEnvironmentHasOnlyTheFile() {
+        let url = URL(fileURLWithPath: "/tmp/state.json")
+        XCTAssertEqual(StatusSnapshot.hookEnvironment(nil, stateFile: url), [
+            "HYPRMAC_STATE_FILE": "/tmp/state.json",
+            "HYPRMAC_FOCUSED_WORKSPACE": "",
+            "HYPRMAC_FOCUSED_WORKSPACE_NAME": "",
+            "HYPRMAC_FOCUSED_MONITOR": "",
+        ])
+    }
+
+    // at quit the clear runs before returning, so nothing is left to land later
+    func testQuitRemovesTheStateFileBeforeReturning() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("state.json")
+        let publisher = StatusFilePublisher(stateFile: file)
+
+        publisher.publish(StatusSnapshot.build(input()), hookCommand: nil)
+        let deadline = Date().addingTimeInterval(2)
+        while !FileManager.default.fileExists(atPath: file.path), Date() < deadline { usleep(10_000) }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        publisher.clear(hookCommand: nil, quitting: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        // no file to remove is fine too
+        publisher.clear(hookCommand: nil, quitting: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
     // MARK: - hook runner
@@ -315,6 +386,28 @@ final class StatusExportTests: XCTestCase {
         fake.startFails = false
         fake.runner.request(command: "hook", environment: ["N": "1"])
         XCTAssertEqual(fake.launches, [["N": "1"]])
+    }
+
+    // at quit nothing would start a queued run, so the last one starts now
+    func testRunNowKillsTheHookInFlightAndStartsAtOnce() {
+        let fake = FakeLauncher()
+        fake.runner.request(command: "hook", environment: ["N": "1"])
+        fake.runner.request(command: "hook", environment: ["N": "2"])
+        fake.runner.runNow(command: "hook", environment: ["N": "cleared"])
+        XCTAssertEqual(fake.kills, 1)
+        XCTAssertEqual(fake.launches, [["N": "1"], ["N": "cleared"]])
+
+        // the killed child's exit and timer don't start the dropped request
+        fake.exits[0]()
+        fake.timers[0]()
+        XCTAssertEqual(fake.launches.count, 2)
+        XCTAssertEqual(fake.kills, 1)
+
+        // nothing in flight: it just starts
+        let idle = FakeLauncher()
+        idle.runner.runNow(command: "hook", environment: ["N": "1"])
+        XCTAssertEqual(idle.launches, [["N": "1"]])
+        XCTAssertEqual(idle.kills, 0)
     }
 
     // MARK: - URLs
