@@ -289,6 +289,28 @@ within a third of the deadline is sized anyway, and says so:
 position settle cut short: wid=<id> phase=candidate after=<n>ms samples=<n> last=(x,y) target=(x,y) — writing size anyway
 ```
 
+A position-first window whose old size, put at its target origin, would hang
+off the destination screen moves first to the nearest origin where that old
+size stands on the screen, is sized there, then moves to its target. Its
+`steps=` then read `position,settle,size,position2,size2`. A parked Ghostty
+window moved to a bottom slot hung below every screen and ignored both size
+writes until it was staged (issue #43). A min-size refusal read from a
+position-first window stays that window's: its `min-size record:` line ends in
+`shared=false` and the app hint does not move.
+
+With `defaults write <bundle id> HyprMacFrameWriteTrace -bool YES` (off by
+default in every build, since the reads run inside the write deadline), each
+window's frame is also read before its writes and after every setter. A
+refused attempt then logs one line per window its failure names (issue #43):
+
+```
+frame write trace: wid=9256 phase=candidate gen=12 reason=outsideUsableFrame(9256) target=(-956,10,946,1060) frames=[before→(-1920,0,1920,1080),size→(…),position→(…),size2→(…)] read=(-956,10,946,1080) positionFirst=false
+```
+
+A setter whose own frame is already off says the app or macOS clamped it
+there; frames on target after `size2` with an off `read` say the app undid
+the write afterwards.
+
 The admission recovery's narrowing lines, all `[notice] [tiling]`:
 
 - `admission retry tiles what fits: refused=[…] ws<N> — the known minima

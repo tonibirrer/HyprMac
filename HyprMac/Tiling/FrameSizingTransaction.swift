@@ -93,12 +93,17 @@ struct FrameSizingIO {
     var endFrameWrite: (AXFrameWriteBatch.Token, TimeInterval, () -> FrameSizingFailure?) -> AXFrameWriteBatch.EndResult = {
         _, _, _ in .restored
     }
+    /// Diagnostic only: the window's frame before its writes and after each
+    /// setter, for the `frame write trace:` notice on a refused attempt. nil
+    /// skips those reads; production sets it only with
+    /// `LogConfig.frameWriteTrace` on.
+    var traceFrame: ((CGWindowID) -> CGRect?)?
 }
 
 extension FrameSizingIO {
     static func accessibility(windows: [CGWindowID: HyprWindow],
                               currentGeneration: @escaping () -> UInt64) -> FrameSizingIO {
-        FrameSizingIO(
+        var io = FrameSizingIO(
             setMessagingTimeout: { id, timeout in
                 windows[id]?.setMessagingTimeout(timeout) ?? .invalidUIElement
             },
@@ -118,6 +123,15 @@ extension FrameSizingIO {
                                                     checkpoint: checkpoint)
             }
         )
+        if LogConfig.frameWriteTrace {
+            io.traceFrame = { id in
+                guard let window = windows[id],
+                      case let (.success, origin?) = window.readPosition(),
+                      case let (.success, size?) = window.readSize() else { return nil }
+                return CGRect(origin: origin, size: size)
+            }
+        }
+        return io
     }
 }
 
@@ -150,6 +164,12 @@ struct FrameSizingConfiguration {
     /// most `positionSettleBudget`, before it is sized. Every other window
     /// sizes first.
     var positionSettleWindowIDs: Set<CGWindowID> = []
+    /// Position-first windows whose old size, put at their target origin,
+    /// would hang off the destination screen. Each moves here first, where
+    /// that old size stands on the screen, is sized, then moves to its
+    /// target. Issue #43: a parked Ghostty window moved to a bottom slot hung
+    /// below every screen and ignored both size writes.
+    var stagingOrigins: [CGWindowID: CGPoint] = [:]
     /// Restoration only. A rollback asks every window to go back where it
     /// was, so the question is per-window correspondence, not whether the
     /// result is a valid tiled arrangement. Originals that overlapped each
@@ -267,6 +287,9 @@ struct FrameSizingAttempt {
         var settle: TimeInterval = 0
         /// per window, every setter with its raw AX code and duration
         var steps: [String] = []
+        /// per window, its frame before the writes and after each setter,
+        /// when the IO carries `traceFrame`
+        var stepFrames: [CGWindowID: String] = [:]
         /// readback samples taken, and the slowest single-window read
         var samples = 0
         var slowestRead: TimeInterval = 0
@@ -444,6 +467,18 @@ struct FrameSizingAttempt {
                     + "deadline=\(Self.ms(configuration.deadline)) samples=\(timings.samples) "
                     + "slowestRead=\(Self.ms(timings.slowestRead)) "
                     + "steps=[\(timings.steps.joined(separator: " "))]")
+        case let .rejected(failure), let .unknown(failure):
+            // issue #43: a window that read back off its target. say where it
+            // stood before its writes and after each setter
+            for id in failure.namedWindowIDs.sorted() {
+                guard let frames = timings.stepFrames[id] else { continue }
+                let target = targets.first { $0.windowID == id }.map { traced($0.frame) } ?? "none"
+                let read = result.actualFrames[id].map { traced($0) } ?? "unread"
+                hyprLog(.notice, .tiling, "frame write trace: wid=\(id) phase=\(phase.rawValue) "
+                        + "gen=\(generation) reason=\(failure.trace) target=\(target) "
+                        + "frames=[\(frames)] read=\(read) "
+                        + "positionFirst=\(configuration.positionSettleWindowIDs.contains(id))")
+            }
         default:
             break
         }
@@ -600,6 +635,13 @@ struct FrameSizingAttempt {
         let phase = progress.phase
         let writeStarted = io.now()
         var steps: [String] = []
+        var stepFrames: [String] = []
+        // diagnostic: where the window stands now, so a refused attempt can
+        // tell a setter the app clamped from one it applied and then undid
+        func probe(_ label: String) {
+            guard let read = io.traceFrame else { return }
+            stepFrames.append("\(label)→" + (read(target.windowID).map { traced($0) } ?? "unread"))
+        }
         // one line per window listing every setter that went out, with its
         // raw AX code and how long it took
         func traceSteps(_ complete: Bool) {
@@ -607,8 +649,12 @@ struct FrameSizingAttempt {
             // total also covers the enhanced-ui begin and the timeout
             // setup, so total minus the setters is what those cost
             timings.steps.append("\(target.windowID):\(listed)/total=\(Self.ms(io.now() - writeStarted))")
+            if !stepFrames.isEmpty {
+                timings.stepFrames[target.windowID] = stepFrames.joined(separator: ",")
+            }
             hyprLog(.debug, .tiling, "frame write: wid=\(target.windowID) phase=\(phase.rawValue) "
-                    + "steps=\(listed) complete=\(complete)")
+                    + "steps=\(listed) complete=\(complete)"
+                    + (stepFrames.isEmpty ? "" : " frames=\(stepFrames.joined(separator: ","))"))
         }
         hyprLog(.debug, .tiling,
                 "frame write: wid=\(target.windowID) phase=\(phase.rawValue) "
@@ -643,11 +689,19 @@ struct FrameSizingAttempt {
                        checkpoint: checkpoint)
         }
 
+        probe("before")
         let settlePositionBeforeSizing = configuration.positionSettleWindowIDs.contains(target.windowID)
+        let staging = settlePositionBeforeSizing ? configuration.stagingOrigins[target.windowID] : nil
+        // where the position-first write sends the window, and where its
+        // settle waits for it
+        let firstOrigin = staging ?? target.frame.origin
         let writes: [(String, () -> AXError)] = settlePositionBeforeSizing
             ? [
-                ("position", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) }),
-                ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) }),
+                ("position", { io.writePosition(target.windowID, firstOrigin, configuration.perCallTimeout) }),
+                ("size", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
+            ] + (staging == nil ? [] : [
+                ("position2", { io.writePosition(target.windowID, target.frame.origin, configuration.perCallTimeout) })
+            ]) + [
                 ("size2", { io.writeSize(target.windowID, target.frame.size, configuration.perCallTimeout) })
             ]
             : [
@@ -721,8 +775,8 @@ struct FrameSizingAttempt {
                         }
                         samples += 1
                         last = position
-                        let onTarget = abs(position.x - target.frame.minX) <= configuration.positionTolerance
-                            && abs(position.y - target.frame.minY) <= configuration.positionTolerance
+                        let onTarget = abs(position.x - firstOrigin.x) <= configuration.positionTolerance
+                            && abs(position.y - firstOrigin.y) <= configuration.positionTolerance
                         if onTarget, let prior = anchor,
                            abs(position.x - prior.x) <= configuration.stableTolerance,
                            abs(position.y - prior.y) <= configuration.stableTolerance {
@@ -748,10 +802,11 @@ struct FrameSizingAttempt {
                         hyprLog(.notice, .tiling, "position settle cut short: wid=\(target.windowID) "
                                 + "phase=\(phase.rawValue) after=\(Self.ms(waited)) samples=\(samples) "
                                 + "last=\(landed) "
-                                + "target=(\(traced(target.frame.minX)),\(traced(target.frame.minY))) "
+                                + "target=(\(traced(firstOrigin.x)),\(traced(firstOrigin.y))) "
                                 + "— writing size anyway")
                     }
                 }
+                probe(label)
                 continue
             }
             traceSteps(false)

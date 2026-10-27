@@ -125,7 +125,8 @@ class MinSizeMemory {
                         actual: CGSize,
                         widthConflict: Bool,
                         heightConflict: Bool,
-                        phase: FrameSizingPhase) -> Bool {
+                        phase: FrameSizingPhase,
+                        sharedWithApp: Bool = true) -> Bool {
         let existing = known[window.windowID]
         let base = existing?.provenance == .observed ? (existing?.size ?? .zero) : CGSize.zero
         let updated = CGSize(
@@ -143,11 +144,11 @@ class MinSizeMemory {
         let entry = Entry(size: updated, provenance: .observed)
         known[window.windowID] = entry
         mirror(entry, onto: window)
-        rememberAppHint(for: window, entry.size)
+        if sharedWithApp { rememberAppHint(for: window, entry.size) }
         hyprLog(.debug, .lifecycle, "min-size record: wid=\(window.windowID) "
                 + "old=\(old) new=\(Self.text(updated)) target=\(Self.text(target)) "
                 + "actual=\(Self.text(actual)) axis=\(axis) phase=\(phase.rawValue) "
-                + "source=readback")
+                + "source=readback" + (sharedWithApp ? "" : " shared=false"))
         return true
     }
 
