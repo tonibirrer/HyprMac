@@ -90,6 +90,7 @@
 		440732216A02AA6BC39588CC /* AppLauncherManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A36D359F723D63F2E6036D15 /* AppLauncherManager.swift */; };
 		446BF26414F6821D08738E80 /* WorkspaceOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FCF579F05A2DFBB28DF945A /* WorkspaceOrchestrator.swift */; };
 		45AA3F81F877E4CDA2BBB0D3 /* AppIcon.svg in Resources */ = {isa = PBXBuildFile; fileRef = F95CD8FB8B25B86236401214 /* AppIcon.svg */; };
+		462A219B116F901D7F783789 /* OuterPaddingOverrideTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96C6802CD77F6E1EFDFB3A9C /* OuterPaddingOverrideTests.swift */; };
 		492F188FFE5E7E9FCCAF42BB /* HyprKeyPickerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D568478EEC93DE00AEA47C7 /* HyprKeyPickerTests.swift */; };
 		498931AB0DE01FD760A0C1DC /* AccessibilityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8FB422F1864D03E43BF91E /* AccessibilityManager.swift */; };
 		49B97DA976D5A62FE5B243DC /* ColorPickerRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F2F88E3A815333F6542EEA /* ColorPickerRow.swift */; };
@@ -110,6 +111,7 @@
 		557EC1265B83BD0ACFB2564C /* FrameReadbackPoller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F1105FD856A5A007D619120 /* FrameReadbackPoller.swift */; };
 		56A699943F7EF9287C3CD27F /* WindowCornerRadius.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6FC3298BBD003F3AD7DAC44 /* WindowCornerRadius.swift */; };
 		577FBDB77676F37630FAF0FE /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = D52156D6AEACDCE26A6370BF /* Sparkle */; };
+		580116D7926CC1A74801952F /* WorkspaceHomeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D074B67888F73309274FDC /* WorkspaceHomeResolver.swift */; };
 		58055351760741262F2BBB5F /* TiledDragTransactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9812349B328396A07257C085 /* TiledDragTransactionTests.swift */; };
 		587B30428B194CEDE06428E5 /* TiledDropPreviewPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D1180BDFCCA277B2991FA8 /* TiledDropPreviewPanel.swift */; };
 		5953698B05EC33E530C72A12 /* TiledDriftMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8425DC47E2604936890FF01 /* TiledDriftMonitor.swift */; };
@@ -162,6 +164,7 @@
 		8A7450A0AEBA21F9865B5BEA /* DragSwapHandlerInsertionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9C3A29473C9D3ECD870EB22 /* DragSwapHandlerInsertionTests.swift */; };
 		8BEC65B84A975386F95AA087 /* TiledDragTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8049A0C6B0FBEF8B6ED25B /* TiledDragTarget.swift */; };
 		8C3306FE7A9CD13A28CA5C87 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E49CB059612127CA6F3E7766 /* SettingsComponents.swift */; };
+		8E3735550BDEEB9448C3C9DA /* WorkspaceMonitorMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E91BD79281123D28B840628 /* WorkspaceMonitorMappingTests.swift */; };
 		90EB97F4A5B2FE3355B8A591 /* TiledDragPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30AEC105EA3C66B4DE85EB14 /* TiledDragPreviewSession.swift */; };
 		93AFE8B3CA78BCF41A938991 /* FocusBrackets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8680AE34CAB9F0BAA3C9D8F0 /* FocusBrackets.swift */; };
 		93F279679A1DA953F5BD2707 /* TiledDragEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AECFAE9BE1E8270FACA3F28 /* TiledDragEventTests.swift */; };
@@ -213,6 +216,7 @@
 		BF9B651B475474AE92319DE4 /* DisplayManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 593D96A7340421A4588DE5D5 /* DisplayManager.swift */; };
 		C0CB8311CCCD82F35DE8A451 /* WorkspaceFollowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2931B6DAD1E489B5F372FC /* WorkspaceFollowTests.swift */; };
 		C1CCA6C07D0B273CF3AB3D6C /* HandleDisplayChangeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */; };
+		C28ADF707B4AD674AA78CDAC /* WorkspaceHomeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28D074B67888F73309274FDC /* WorkspaceHomeResolver.swift */; };
 		C4C0FB5F11923E54D785E16B /* ConfigUpdateCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27E1D4391AFE7A5802FF00C4 /* ConfigUpdateCoordinatorTests.swift */; };
 		C59F755D984292EB1E5B57CD /* MinSizeMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80DEDE87B2D877B2B57C6767 /* MinSizeMemory.swift */; };
 		C5C841CD7B9E0C41D488EF3B /* KeybindsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B9CF795BFCF2AE866D59470 /* KeybindsSettingsView.swift */; };
@@ -323,6 +327,7 @@
 		0A56E7F84728914582E4BEC0 /* TiledDragPreviewSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDragPreviewSessionTests.swift; sourceTree = "<group>"; };
 		0B9CF795BFCF2AE866D59470 /* KeybindsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindsSettingsView.swift; sourceTree = "<group>"; };
 		0E2931B6DAD1E489B5F372FC /* WorkspaceFollowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceFollowTests.swift; sourceTree = "<group>"; };
+		0E91BD79281123D28B840628 /* WorkspaceMonitorMappingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceMonitorMappingTests.swift; sourceTree = "<group>"; };
 		10CDCBC69C5DFDC3E907A02B /* WorkspaceOrchestratorMoveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOrchestratorMoveTests.swift; sourceTree = "<group>"; };
 		12DCA371573CAAC4B23A96AA /* PrepareLayoutMutationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrepareLayoutMutationTests.swift; sourceTree = "<group>"; };
 		14EDE284FED93137B1A0BADB /* AdmissionRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdmissionRecovery.swift; sourceTree = "<group>"; };
@@ -342,6 +347,7 @@
 		26E5C6E3F03B5BD56771D741 /* DwindleLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DwindleLayoutTests.swift; sourceTree = "<group>"; };
 		2796ACDEF732F4AB5C0EC77C /* BSPTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BSPTreeTests.swift; sourceTree = "<group>"; };
 		27E1D4391AFE7A5802FF00C4 /* ConfigUpdateCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigUpdateCoordinatorTests.swift; sourceTree = "<group>"; };
+		28D074B67888F73309274FDC /* WorkspaceHomeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceHomeResolver.swift; sourceTree = "<group>"; };
 		298318CA91C080E2C130A4DE /* LayoutEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEngineTests.swift; sourceTree = "<group>"; };
 		2AECFAE9BE1E8270FACA3F28 /* TiledDragEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDragEventTests.swift; sourceTree = "<group>"; };
 		2BA2DB7604ABD064933A5F4C /* DestroyRecheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestroyRecheck.swift; sourceTree = "<group>"; };
@@ -421,6 +427,7 @@
 		913F7521CBE5FF04365D18D8 /* SpaceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceManager.swift; sourceTree = "<group>"; };
 		92C350B5FCD0242E1993F822 /* DebugLogFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLogFileTests.swift; sourceTree = "<group>"; };
 		936B7CF6C89B974F27A4E2BC /* HoverResponseRate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoverResponseRate.swift; sourceTree = "<group>"; };
+		96C6802CD77F6E1EFDFB3A9C /* OuterPaddingOverrideTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OuterPaddingOverrideTests.swift; sourceTree = "<group>"; };
 		97B8B2C68D268341AC86BF4B /* KeyBadgeViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyBadgeViews.swift; sourceTree = "<group>"; };
 		9812349B328396A07257C085 /* TiledDragTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiledDragTransactionTests.swift; sourceTree = "<group>"; };
 		984C8889680F5B0CDD449061 /* FloatingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingWindowController.swift; sourceTree = "<group>"; };
@@ -684,6 +691,7 @@
 				704DCC0F96A16AC32FD1A5C0 /* LayoutMatcher.swift */,
 				62C7EA1B257E580577FE04BD /* LayoutRestorer.swift */,
 				5211B4FC8814875264166E19 /* RetileAllPlanner.swift */,
+				28D074B67888F73309274FDC /* WorkspaceHomeResolver.swift */,
 				3FCF579F05A2DFBB28DF945A /* WorkspaceOrchestrator.swift */,
 			);
 			path = Workspace;
@@ -766,6 +774,7 @@
 				D16EBA7D483B97532F32D8BE /* MinimaRevalidationTests.swift */,
 				3EEE26248F15BB9A567CA60E /* MinSizeMemoryTests.swift */,
 				078A1208AA569E70DD703182 /* MonitorDirectionTests.swift */,
+				96C6802CD77F6E1EFDFB3A9C /* OuterPaddingOverrideTests.swift */,
 				18F440861EC1F33CEB326CB4 /* PollingSchedulerTests.swift */,
 				12DCA371573CAAC4B23A96AA /* PrepareLayoutMutationTests.swift */,
 				5867C8BC4A0B38BC15E47DE2 /* ProbeFrameArgumentsTests.swift */,
@@ -795,6 +804,7 @@
 				901F153AA3906FE161498E58 /* WindowStateCacheTests.swift */,
 				162A7BC992F18583B4289589 /* WorkspaceBatchMoveTests.swift */,
 				0E2931B6DAD1E489B5F372FC /* WorkspaceFollowTests.swift */,
+				0E91BD79281123D28B840628 /* WorkspaceMonitorMappingTests.swift */,
 				10CDCBC69C5DFDC3E907A02B /* WorkspaceOrchestratorMoveTests.swift */,
 				6E6472ACE23C8EB1DC35E7F2 /* WorkspaceOverviewPresentationTests.swift */,
 				F3DB9C9425DBA2D12D58CAF7 /* WorkspaceSwitchAnnouncementTests.swift */,
@@ -1088,6 +1098,7 @@
 				D42C28555A078D585F2268A2 /* WindowRule.swift in Sources */,
 				0590157898015CA6B47E1C0B /* WindowStacking.swift in Sources */,
 				1276120B1D8BE4DEEDCF8EF3 /* WindowStateCache.swift in Sources */,
+				580116D7926CC1A74801952F /* WorkspaceHomeResolver.swift in Sources */,
 				42778D615628483A357572DF /* WorkspaceManager.swift in Sources */,
 				446BF26414F6821D08738E80 /* WorkspaceOrchestrator.swift in Sources */,
 				21622AC2016B275601A830F2 /* WorkspaceOverviewController.swift in Sources */,
@@ -1198,6 +1209,7 @@
 				265C8C7215823D21571E2A00 /* WindowRule.swift in Sources */,
 				96F355A5556E7972080C2183 /* WindowStacking.swift in Sources */,
 				63156863AFDB39FBF469DFFE /* WindowStateCache.swift in Sources */,
+				C28ADF707B4AD674AA78CDAC /* WorkspaceHomeResolver.swift in Sources */,
 				F77406C0EB205AD6F1959A82 /* WorkspaceManager.swift in Sources */,
 				D01C12241132BDCD8C95E2D0 /* WorkspaceOrchestrator.swift in Sources */,
 				E7E24ABBCC37A37498737EEF /* WorkspaceOverviewController.swift in Sources */,
@@ -1256,6 +1268,7 @@
 				A7BBF6505B2DE609FB43CE08 /* MinSizeMemoryTests.swift in Sources */,
 				F0CFEA06EED537EFEBB7D3B4 /* MinimaRevalidationTests.swift in Sources */,
 				5DC0653308BC85F658CCDC29 /* MonitorDirectionTests.swift in Sources */,
+				462A219B116F901D7F783789 /* OuterPaddingOverrideTests.swift in Sources */,
 				98D72FEBD5773242B4F199B7 /* PollingSchedulerTests.swift in Sources */,
 				CAF7E4C0660A5075D1D9DD62 /* PrepareLayoutMutationTests.swift in Sources */,
 				557A617F0E258A3267E39BEC /* ProbeFrameArgumentsTests.swift in Sources */,
@@ -1285,6 +1298,7 @@
 				EA8FC0F77CB146BAD8B35CBE /* WindowStateCacheTests.swift in Sources */,
 				32F6911C6656248A6458CBC2 /* WorkspaceBatchMoveTests.swift in Sources */,
 				C0CB8311CCCD82F35DE8A451 /* WorkspaceFollowTests.swift in Sources */,
+				8E3735550BDEEB9448C3C9DA /* WorkspaceMonitorMappingTests.swift in Sources */,
 				7FB5DB945BA887353289ACB1 /* WorkspaceOrchestratorMoveTests.swift in Sources */,
 				A1945FBB6F6C5307CC809EA4 /* WorkspaceOverviewPresentationTests.swift in Sources */,
 				1C09D1112018B2B6DDA753F3 /* WorkspaceSwitchAnnouncementTests.swift in Sources */,

@@ -360,7 +360,8 @@ Two on-disk files:
   a symlink into `~/Library/Mobile Documents/com~apple~CloudDocs/HyprMac/`).
 - `~/Library/Application Support/HyprMac/monitor-config.json` —
   per-machine settings. Local only, never synced.
-  `maxSplitsPerMonitor` and `disabledMonitors` live here. These
+  `maxSplitsPerMonitor`, `disabledMonitors`,
+  `outerPaddingPerMonitor` and `workspaceMonitors` live here. The first two
   used to live in `config.json`, but per-machine settings round-tripping
   through iCloud Drive clobbered each machine's setup.
 
@@ -369,6 +370,19 @@ the local file is absent and the synced config has the old fields,
 it adopts the synced values and returns `needsLocalWrite: true` so
 the caller persists a local file. After one launch, the local file
 is the source of truth and the synced fields are ignored.
+
+`workspaceMonitors` is optional and maps a monitor name
+(`NSScreen.localizedName`) to the workspaces that live on it, e.g.
+`{"DELL U3225QE": [1, 2, 3], "LG HDR 4K": [4, 5], "Built-in Retina Display": [6, 7]}`.
+Absent or empty means the formula homes, `(N - 1) % enabledMonitorCount`.
+Unlisted workspaces, and workspaces listed under a monitor that is not
+connected or is disabled, keep their formula home. A number listed twice
+goes to the name that sorts first, with one notice in the log. Numbers
+outside 1–10 are ignored. A mapping that would leave an enabled monitor
+with no workspace is ignored for that layout. Keys 1–9 and 0 still mean
+workspaces 1–10. It decodes tolerantly like the other monitor fields: a
+value this build can't read costs only `workspaceMonitors`. It was
+local-only from the start, so there is no `ConfigMigration` step.
 
 ## Default keybinds
 
@@ -531,6 +545,13 @@ every JSON example in this file.
 tile — auto-float on discovery, and Hypr+T refuses to tile them),
 `windowRules` (per-app workspace pins, see "Window rules"), `disabledMonitors` (monitor names
 matching `NSScreen.localizedName`, excluded from tiling entirely),
+`outerPaddingPerMonitor` (in `monitor-config.json`: per-side outer
+padding per monitor name, e.g.
+`{"DELL U3225QE": {"top": 37, "left": 8}, "Built-in Retina Display": {"right": 60}}`;
+`top`, `left`, `bottom` and `right` are each optional, and a missing side
+or monitor uses `outerPadding`. An unreleased build wrote a top-only
+`topPaddingPerMonitor` map; it still loads as top overrides when
+`outerPaddingPerMonitor` is absent, and the next save drops it),
 `scratchpadTileByDefault` (windows sent to the scratchpad tile into
 the layer instead of floating; no-fit windows float regardless),
 `scratchpadRegionInset` (per-edge inset fraction of the scratchpad's

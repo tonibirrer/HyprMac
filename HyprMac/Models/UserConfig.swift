@@ -59,6 +59,13 @@ class UserConfig: ObservableObject {
     @Published var disabledMonitors: Set<String> {
         didSet { persistRuntimeChange() }
     }
+    @Published var outerPaddingPerMonitor: [String: EdgePadding] {
+        didSet { persistRuntimeChange() }
+    }
+    // monitor name → workspaces that live there. empty = the formula homes
+    @Published var workspaceMonitors: [String: [Int]] {
+        didSet { persistRuntimeChange() }
+    }
     @Published var showFocusBorder: Bool {
         didSet { persistRuntimeChange() }
     }
@@ -240,15 +247,16 @@ class UserConfig: ObservableObject {
         let resolved = ConfigMigration.resolveMonitorConfig(local: monitorConfig, embedded: savedConfig)
         self.maxSplitsPerMonitor = resolved.maxSplits
         self.disabledMonitors = resolved.disabled
+        // local-only from the start, so the synced config has nothing to migrate
+        self.outerPaddingPerMonitor = monitorConfig?.outerPaddingPerMonitor ?? [:]
+        self.workspaceMonitors = monitorConfig?.workspaceMonitors ?? [:]
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
         }
 
         if resolved.needsLocalWrite {
-            store.writeSavedMonitorConfig(SavedMonitorConfig(
-                maxSplitsPerMonitor: resolved.maxSplits,
-                disabledMonitors: Array(resolved.disabled)))
+            store.writeSavedMonitorConfig(makeSavedMonitorConfig())
         }
 
         store.onFileChanged = { [weak self] in self?.reloadFromDisk() }
@@ -292,9 +300,19 @@ class UserConfig: ObservableObject {
 
     func save() {
         store.writeSavedConfig(makeSavedConfig())
-        store.writeSavedMonitorConfig(SavedMonitorConfig(
+        store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+    }
+
+    private func makeSavedMonitorConfig() -> SavedMonitorConfig {
+        // an entry with no side set is dropped, not saved
+        let savedPadding = outerPaddingPerMonitor.filter { !$0.value.isEmpty }
+        // same for a monitor with no workspaces; none at all is no mapping
+        let savedWorkspaces = workspaceMonitors.filter { !$0.value.isEmpty }
+        return SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,
-            disabledMonitors: Array(disabledMonitors)))
+            disabledMonitors: Array(disabledMonitors),
+            outerPaddingPerMonitor: savedPadding.isEmpty ? nil : savedPadding,
+            workspaceMonitors: savedWorkspaces.isEmpty ? nil : savedWorkspaces)
     }
 
     private func persistRuntimeChange() {
@@ -350,6 +368,8 @@ class UserConfig: ObservableObject {
         overlayAppearance = UserConfigDefaults.overlayAppearance
         maxSplitsPerMonitor = [:]
         disabledMonitors = []
+        outerPaddingPerMonitor = [:]
+        workspaceMonitors = [:]
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -466,6 +486,8 @@ class UserConfig: ObservableObject {
         if let mc = store.loadSavedMonitorConfig() {
             maxSplitsPerMonitor = mc.maxSplitsPerMonitor ?? [:]
             disabledMonitors = Set(mc.disabledMonitors ?? [])
+            outerPaddingPerMonitor = mc.outerPaddingPerMonitor ?? [:]
+            workspaceMonitors = mc.workspaceMonitors ?? [:]
         }
         // else keep current values — don't overwrite with synced defaults
 

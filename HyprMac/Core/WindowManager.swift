@@ -634,6 +634,18 @@ class WindowManager {
             if self.isRunning { self.handleDisabledMonitorChange() }
             hyprLog(.debug, .lifecycle, "disabled monitors updated: \(disabled)")
         }
+        coordinator.onOuterPaddingOverride = { [weak self] padding in
+            guard let self else { return }
+            self.tilingEngine.outerPaddingPerMonitor = padding
+            if self.isRunning { self.animatedRetile() }
+        }
+        coordinator.onWorkspaceMonitors = { [weak self] mapping in
+            guard let self else { return }
+            self.workspaceManager.workspaceMonitors = mapping
+            // homes moved, not windows: the same reconcile a monitor
+            // plug or unplug runs carries the trees to them
+            if self.isRunning { self.reconcileAfterDisplayChange() }
+        }
         coordinator.onChrome = { [weak self] state, changes in
             self?.applyChromeConfig(state, changes: changes)
         }
@@ -745,6 +757,7 @@ class WindowManager {
         tilingEngine.gapSize = config.gapSize
         tilingEngine.outerPadding = config.outerPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
+        tilingEngine.outerPaddingPerMonitor = config.outerPaddingPerMonitor
         scratchpad.tiledRegionInset = config.scratchpadRegionInset
         scratchpad.tileNewMembers = config.scratchpadTileByDefault
         focusBorder.isEnabled = config.showFocusBorder
@@ -762,6 +775,7 @@ class WindowManager {
             floatingColor: config.resolvedFloatingBorderColor.cgColor)
         dimmingOverlay.fadeDurationSec = config.chromeFadeDurationSec
         workspaceManager.disabledMonitors = config.disabledMonitors
+        workspaceManager.workspaceMonitors = config.workspaceMonitors
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
 
