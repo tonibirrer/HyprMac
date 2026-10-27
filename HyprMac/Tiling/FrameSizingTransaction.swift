@@ -1212,8 +1212,10 @@ struct FrameSizingTransaction {
         return second
     }
 
+    // restorationUsableFrame: the rollback's rect, when it differs from the candidate's
     func apply(targets: [FrameSizingAttempt.Target], originalFrames: [CGWindowID: CGRect],
-               usableFrame: CGRect, gap: CGFloat, generation: UInt64,
+               usableFrame: CGRect, restorationUsableFrame: CGRect? = nil,
+               gap: CGFloat, generation: UInt64,
                phase: FrameSizingPhase = .candidate) -> Report {
         guard Set(targets.map(\.windowID)) == Set(originalFrames.keys) else {
             return Report(outcome: .degraded(candidateReason: .windowUnavailable(
@@ -1241,7 +1243,8 @@ struct FrameSizingTransaction {
                 return report(.degraded(candidateReason: reason, restorationReason: nil,
                                         actualFrames: candidate.actualFrames))
             }
-            let restored = restore(originalFrames: originalFrames, usableFrame: usableFrame,
+            let restored = restore(originalFrames: originalFrames,
+                                   usableFrame: restorationUsableFrame ?? usableFrame,
                                    gap: gap, generation: generation)
             switch restored.verdict {
             case .accepted:

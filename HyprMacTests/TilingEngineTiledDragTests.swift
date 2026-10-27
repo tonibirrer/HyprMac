@@ -131,6 +131,49 @@ final class TilingEngineTiledDragTests: XCTestCase {
                                                   screen: fixture.screen) === sourceTree)
     }
 
+    // a raised padding whose retile was refused leaves the tiles in the old
+    // strip. a drag that restores must put them back there, not call them
+    // off the padded rect
+    func testRestoreAfterRaisedPaddingVerifiesAgainstTheUnpaddedScreen() throws {
+        let fixture = try makeFixture(screen: DragTestScreen())
+        fixture.engine.outerPaddingPerMonitor = [fixture.screen.localizedName: EdgePadding(top: 40)]
+        let snapshot = try capture(fixture)
+        XCTAssertTrue(snapshot.originalFrames.values.contains {
+            $0.minY < snapshot.context.usableFrame.minY
+        })
+        fixture.trace.frames[1] = CGRect(
+            x: snapshot.context.usableFrame.maxX + 100,
+            y: snapshot.context.usableFrame.minY,
+            width: 800,
+            height: 500
+        )
+
+        let outcome = fixture.engine.dropTiledDrag(
+            snapshot, mode: nil, currentLocation: { (1, fixture.screen, []) })
+
+        guard case .rejectedRestored(reason: .preflight(.noTarget), _) = outcome else {
+            return XCTFail("expected a verified restore, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.frames, snapshot.originalFrames)
+    }
+
+    func testRefusedDropAfterRaisedPaddingRestoresIntoTheOldStrip() throws {
+        let fixture = try makeFixture(screen: DragTestScreen())
+        fixture.engine.outerPaddingPerMonitor = [fixture.screen.localizedName: EdgePadding(top: 40)]
+        let snapshot = try capture(fixture)
+        fixture.trace.frames[1]?.origin.x += 2
+        fixture.trace.remainingWriteFailures = 1
+
+        let outcome = fixture.engine.dropTiledDrag(
+            snapshot, mode: .insert(targetID: 2, edge: .left),
+            currentLocation: { (1, fixture.screen, []) })
+
+        guard case .rejectedRestored = outcome else {
+            return XCTFail("expected a verified restore, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.frames, snapshot.originalFrames)
+    }
+
     func testResizeClassificationReadFailureRestoresOriginalFrameMap() throws {
         let fixture = try makeFixture()
         let snapshot = try capture(fixture)
@@ -549,6 +592,30 @@ final class TilingEngineTiledDragTests: XCTestCase {
         XCTAssertTrue(fixture.engine.existingTree(forWorkspace: 2, screen: fixture.wide) === targetTree)
         XCTAssertEqual(fixture.engine.windowIDs(inTreeForWorkspace: 1, screen: fixture.tall), [1, 2, 3])
         XCTAssertEqual(fixture.engine.windowIDs(inTreeForWorkspace: 2, screen: fixture.wide), [10, 11])
+    }
+
+    // both screens raised their top padding after the last layout. each
+    // tree rolls back into its old strip
+    func testCrossMonitorRollbackAfterRaisedPaddingVerifiesBothScreens() throws {
+        let fixture = makeCrossFixture()
+        fixture.engine.outerPaddingPerMonitor = [
+            fixture.wide.localizedName: EdgePadding(top: 40),
+            fixture.tall.localizedName: EdgePadding(top: 40),
+        ]
+        let originals = fixture.trace.frames
+        let snapshot = try captureCross(fixture)
+        let slot = try XCTUnwrap(originals[10])
+        fixture.trace.frames[1]?.origin = CGPoint(x: 300, y: 200)
+        fixture.trace.sizeFloors[10] = slot.size
+        fixture.trace.advancesClock = true
+
+        let outcome = dropCross(fixture, snapshot,
+                                at: CGPoint(x: slot.minX + 5, y: slot.midY), swap: false)
+
+        guard case .acrossTrees(.rejectedRestored, _) = outcome else {
+            return XCTFail("expected a verified rollback of both trees, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.trace.frames, originals)
     }
 
     func testCrossMonitorReleaseOnAScreenThatCannotTakeTheWindowRestoresAsBefore() throws {

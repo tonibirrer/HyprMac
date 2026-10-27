@@ -1132,16 +1132,18 @@ class TilingEngine {
         let key = TilingKey(workspace: workspace, screen: currentScreen)
         guard trees[key] === (mapped ? sourceTree : nil) else { return nil }
         let memberIDs = sourceTree.allWindows.map(\.windowID)
+        let rect = layoutRect(for: key, screen: currentScreen)
         return TiledDragContext(
             workspace: workspace,
             physicalDisplayID: physicalDisplayID(for: currentScreen),
-            usableFrame: layoutRect(for: key, screen: currentScreen),
+            usableFrame: rect,
             gap: gapSize,
             padding: outerPadding,
             maxDepth: maxDepth(for: currentScreen),
             memberIDs: Set(memberIDs),
             floatingIDs: floatingIDs,
-            fingerprint: sourceTree.structuralFingerprint()
+            fingerprint: sourceTree.structuralFingerprint(),
+            restorationFrame: restorationRect(for: rect)
         )
     }
 
