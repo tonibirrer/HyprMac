@@ -26,33 +26,9 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "display.2",
-            title: "Workspaces on Your Monitors",
-            description: "Pick which workspaces live on which monitor in Settings → Layout. The rest keep their usual home."
-        ),
-        WhatsNewFeature(
-            icon: "rectangle.inset.filled",
-            title: "Padding per Monitor",
-            description: "Give each side of a monitor its own padding, to make room for a custom bar or a side Dock.",
-            credit: "@zalewskigrzegorz"
-        ),
-        WhatsNewFeature(
-            icon: "character.cursor.ibeam",
-            title: "Workspace Names",
-            description: "Name a workspace, and the HUD, menu bar and overview show \"term\" instead of 4.",
-            credit: "@zalewskigrzegorz"
-        ),
-        WhatsNewFeature(
-            icon: "arrow.up.and.down.square",
-            title: "Move Windows Up and Down",
-            description: "Hypr+Ctrl+Up and Down move a window to the monitor above or below.",
-            credit: "@BruceChanJianLe"
-        ),
-        WhatsNewFeature(
-            icon: "keyboard",
-            title: "Steadier Switches and Moves",
-            description: "Typing follows a workspace switch, Hypr+F works on more desks, and windows moved to another monitor fit their tile.",
-            credit: "@zalewskigrzegorz"
+            icon: "link",
+            title: "Control from Other Apps",
+            description: "Apps like BetterTouchTool and LeaderKey can run HyprMac actions. Turn it on in Settings → General."
         ),
     ]
 }
