@@ -164,6 +164,11 @@ class UserConfig: ObservableObject {
     @Published var statusHookCommand: String? {
         didSet { guard !isReloading else { return }; save() }
     }
+    // hyprmac://action/… links from other apps. per machine like the export,
+    // so turning it on here doesn't turn it on for every synced Mac
+    @Published var externalControlEnabled: Bool {
+        didSet { guard !isReloading else { return }; save() }
+    }
 
     // iCloud sync state — stored in UserDefaults, not config.json
     @Published var iCloudSyncEnabled: Bool {
@@ -205,6 +210,7 @@ class UserConfig: ObservableObject {
         // optional hook command goes through its setter and didSet saves
         self.statusExportEnabled = monitorConfig?.statusExportEnabled ?? false
         self.statusHookCommand = monitorConfig?.statusHookCommand
+        self.externalControlEnabled = monitorConfig?.externalControlEnabled ?? false
 
         if let saved = savedConfig {
             self.keybinds = Self.mergeNewDefaults(saved: saved.keybinds)
@@ -339,7 +345,8 @@ class UserConfig: ObservableObject {
             workspaceMonitors: savedWorkspaces.isEmpty ? nil : savedWorkspaces,
             // off and empty write no key, so a machine that never opts in is unchanged
             statusExportEnabled: statusExportEnabled ? true : nil,
-            statusHookCommand: statusHookCommand?.isEmpty == false ? statusHookCommand : nil)
+            statusHookCommand: statusHookCommand?.isEmpty == false ? statusHookCommand : nil,
+            externalControlEnabled: externalControlEnabled ? true : nil)
     }
 
     private func persistRuntimeChange() {
@@ -417,6 +424,7 @@ class UserConfig: ObservableObject {
         workspaceNames = [:]
         statusExportEnabled = false
         statusHookCommand = nil
+        externalControlEnabled = false
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -522,6 +530,7 @@ class UserConfig: ObservableObject {
             workspaceMonitors = mc.workspaceMonitors ?? [:]
             statusExportEnabled = mc.statusExportEnabled ?? false
             statusHookCommand = mc.statusHookCommand
+            externalControlEnabled = mc.externalControlEnabled ?? false
         }
         // else keep current values — don't overwrite with synced defaults
 

@@ -286,6 +286,33 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         XCTAssertEqual([enabled, keybinds, keys, regions, modes], [1, 1, 1, 1, 1])
     }
 
+    // per machine: lives in monitor-config.json, never config.json, and
+    // loading it at launch must not rewrite config.json (the #50 trap)
+    func testExternalControlLivesInMonitorConfigOnly() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        UserConfig().save()
+        try Data(#"{"externalControlEnabled":true}"#.utf8).write(to: ConfigStore.monitorConfigPath)
+        let configOnDisk = try Data(contentsOf: ConfigStore.configPath)
+
+        let config = UserConfig()
+        XCTAssertTrue(config.externalControlEnabled)
+        XCTAssertEqual(try Data(contentsOf: ConfigStore.configPath), configOnDisk)
+
+        config.externalControlEnabled = false
+        let monitor = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: ConfigStore.monitorConfigPath)) as? [String: Any])
+        XCTAssertNil(monitor["externalControlEnabled"])
+        let synced = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: ConfigStore.configPath)) as? [String: Any])
+        XCTAssertNil(synced["externalControlEnabled"])
+    }
+
     func testProductionObservationIsInstalledOnlyOnceAndReadsStoredValue() throws {
         try requireIsolatedHome()
         let configBefore = try? Data(contentsOf: ConfigStore.configPath)

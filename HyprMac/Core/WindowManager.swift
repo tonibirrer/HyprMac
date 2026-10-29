@@ -374,16 +374,7 @@ class WindowManager {
             // secure input keeps key events from, so one firing means the
             // session is in use again
             self.discovery.endSessionInterruption(evidence: "hotkey press")
-            if action == .toggleTiling {
-                self.config.enabled.toggle()
-                return
-            }
-            guard self.config.enabled || action == .showKeybinds || action == .showWorkspaceOverview else { return }
-            self.suppressions.suppress("mouse-focus", for: 0.15)
-            self.handleAction(action)
-            // a workspace switch or the scratchpad mid-drag changes where the
-            // drop would land, even with the pointer standing still
-            self.dropPreview.refresh()
+            self.performUserAction(action)
         }
 
         hotkeyManager.onHyprKeyDown = { [weak self] in
@@ -2897,22 +2888,51 @@ class WindowManager {
             names: config.workspaceNames))
     }
 
-    /// A `hyprmac://` action from a status bar. Same paths as the switch
-    /// keybind and the overview's window pick, so the same guards apply.
-    func handleStatusURL(_ command: StatusURLCommand) {
-        guard isRunning, config.statusExportEnabled else { return }
+    /// A keybind press or an action link. Pause and resume always work; the
+    /// rest need tiling on, except the two read-only overlays.
+    private func performUserAction(_ action: Action) {
+        if action == .toggleTiling {
+            config.enabled.toggle()
+            return
+        }
+        guard Self.runsWhilePaused(action) || config.enabled else { return }
+        suppressions.suppress("mouse-focus", for: 0.15)
+        handleAction(action)
+        // a workspace switch or the scratchpad mid-drag changes where the
+        // drop would land, even with the pointer standing still
+        dropPreview.refresh()
+    }
+
+    static func runsWhilePaused(_ action: Action) -> Bool {
+        action == .toggleTiling || action == .showKeybinds || action == .showWorkspaceOverview
+    }
+
+    /// A `hyprmac://` link from a status bar or another app. The status
+    /// links take the same paths as the switch keybind and the overview's
+    /// window pick; an action link runs exactly like its keybind.
+    func handleExternalURL(_ command: ExternalCommand) {
+        guard ExternalCommand.isAllowed(command, externalControl: config.externalControlEnabled,
+                                        statusExport: config.statusExportEnabled) else {
+            hyprLog(.debug, .lifecycle, "hyprmac:// link ignored: not turned on")
+            return
+        }
         switch command {
         case .workspace(let workspace):
+            guard isRunning else { return }
             handleAction(.switchWorkspace(workspace))
         case .focus(let workspace):
+            guard isRunning else { return }
             // a repeat click cycles that workspace's windows
             if !displayTransitionPending,
-               let next = StatusURLCommand.nextFocusTarget(on: workspace, in: statusSnapshot()) {
+               let next = ExternalCommand.nextFocusTarget(on: workspace, in: statusSnapshot()) {
                 scratchpad.hide(reason: .workspaceAction)
                 workspaceOrchestrator.switchWorkspace(workspace, preferredWindowID: next)
             } else {
                 handleAction(.switchWorkspace(workspace))
             }
+        case .action(let action):
+            hyprLog(.debug, .lifecycle, "hyprmac:// action \(ActionDispatcher.discriminator(for: action))")
+            performUserAction(action)
         }
     }
 

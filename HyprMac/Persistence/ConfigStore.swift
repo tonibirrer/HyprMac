@@ -502,6 +502,8 @@ struct SavedMonitorConfig: Codable {
     // and its hook are set up per Mac. no Settings UI, hand-edited
     var statusExportEnabled: Bool? = nil
     var statusHookCommand: String? = nil
+    // hyprmac://action/… links, see docs/external-control.md. per machine
+    var externalControlEnabled: Bool? = nil
 }
 
 // per-field tolerant like SavedConfig: a hand-edited bad value costs only
@@ -510,7 +512,7 @@ struct SavedMonitorConfig: Codable {
 extension SavedMonitorConfig {
     private enum CodingKeys: String, CodingKey {
         case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor, workspaceMonitors,
-             statusExportEnabled, statusHookCommand
+             statusExportEnabled, statusHookCommand, externalControlEnabled
     }
 
     // unreleased top-only shape from PR #51. read once, never written back
@@ -540,6 +542,7 @@ extension SavedMonitorConfig {
                   outerPaddingPerMonitor: padding,
                   workspaceMonitors: tolerant(c, .workspaceMonitors),
                   statusExportEnabled: tolerant(c, .statusExportEnabled),
-                  statusHookCommand: tolerant(c, .statusHookCommand))
+                  statusHookCommand: tolerant(c, .statusHookCommand),
+                  externalControlEnabled: tolerant(c, .externalControlEnabled))
     }
 }

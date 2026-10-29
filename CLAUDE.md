@@ -60,6 +60,7 @@ Tests do not prove window behavior; say so if you did not check it live.
 - `docs/tiling-algorithm.md`: dwindle, smart insert, layout passes, drag classification.
 - `docs/keybinds-and-actions.md`: Action wire format, frozen keys, decoder tolerance.
 - `docs/coordinate-systems.md`: NSScreen vs CG origins. Read it before frame math.
+- `docs/external-control.md`: `hyprmac://action/…` links for other apps; frozen link names.
 - Other `docs/*.md` and `plans/`: dated audits and plans. Their facts go stale.
 
 Top-level layout: `HyprMac/` app source, `HyprMacTests/` unit tests, `scripts/` build, test and

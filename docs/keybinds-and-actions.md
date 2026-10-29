@@ -272,6 +272,10 @@ alias entry rather than break the wire format.
 A case added later is frozen at the key it first shipped with, such as
 `moveToNextEmptyWorkspace`, `moveToWorkspaceAndFollow` or `retileAll`.
 
+The `hyprmac://action/<name>` link names (`ExternalCommand.actionNames`,
+`docs/external-control.md`) are a second frozen list. They use the Swift
+case names, not these wire keys, and `ExternalCommandTests` pins them.
+
 ## `AnyKey`
 
 `Action.swift` declares a small file-private `AnyKey: CodingKey`

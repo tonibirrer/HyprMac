@@ -30,7 +30,8 @@ file and drops the edit. To turn the export off, set `statusExportEnabled` to
 it off and clears the command.
 
 With `statusExportEnabled` off or missing, nothing below happens: no file, no
-hook, and the links are ignored. HyprMac leaves `statusExportEnabled` out of
+hook, and the links are ignored unless "Allow other apps to control HyprMac"
+is on (see `docs/external-control.md`). HyprMac leaves `statusExportEnabled` out of
 the file while it is off, and `statusHookCommand` out while it is empty. An
 unreadable value costs only that key; the rest of the file still loads. An
 older build ignores both keys and drops them the next time it saves the file.
@@ -112,6 +113,8 @@ Opened with `open -g` so the bar keeps focus. Each takes a whole number
   there. Opened again while a window of workspace 4 has focus, it focuses the
   next window of that workspace, wrapping.
 
+Both also run with "Allow other apps to control HyprMac" on, which adds
+`hyprmac://action/…` links for every other action (`docs/external-control.md`).
 Both are dropped while tiling is paused, and the switch follows the keybind's
 rules (dropped with a beep while displays settle, closes the scratchpad).
 

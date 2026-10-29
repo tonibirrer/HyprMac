@@ -1,7 +1,8 @@
 // Status bar export (sketchybar and friends, upstream issue #44): a JSON
 // state file written on every change a bar shows, an optional hook command
-// run after each write, and the hyprmac:// URL actions a bar's click script
-// calls. All of it is off unless `UserConfig.statusExportEnabled` is on.
+// run after each write. All of it is off unless
+// `UserConfig.statusExportEnabled` is on. The hyprmac:// links a bar's click
+// script calls are in ExternalCommand.swift.
 
 import Cocoa
 
@@ -122,43 +123,6 @@ struct StatusSnapshot: Codable, Equatable {
             "HYPRMAC_FOCUSED_WORKSPACE_NAME": snapshot?.workspaces.first { $0.id == focused }?.name ?? "",
             "HYPRMAC_FOCUSED_MONITOR": snapshot?.focusedMonitor ?? "",
         ]
-    }
-}
-
-/// A `hyprmac://` action. Anything else, or a number outside 1–10, is nil.
-enum StatusURLCommand: Equatable {
-    /// `hyprmac://workspace?n=4`
-    case workspace(Int)
-    /// `hyprmac://focus?workspace=4`: switch there, or on a repeat call
-    /// while already there, focus the next window of that workspace
-    case focus(Int)
-
-    static func parse(_ url: URL) -> StatusURLCommand? {
-        guard url.scheme?.lowercased() == "hyprmac",
-              let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              parts.path.isEmpty || parts.path == "/" else { return nil }
-        func workspace(_ key: String) -> Int? {
-            let values = (parts.queryItems ?? []).filter { $0.name == key }
-            guard values.count == 1, let raw = values[0].value,
-                  (1...2).contains(raw.count), raw.allSatisfy({ ("0"..."9").contains($0) }),
-                  let n = Int(raw), Constants.workspaceRange.contains(n) else { return nil }
-            return n
-        }
-        switch parts.host?.lowercased() {
-        case "workspace": return workspace("n").map(Self.workspace)
-        case "focus": return workspace("workspace").map(Self.focus)
-        default: return nil
-        }
-    }
-
-    /// The window a repeat `focus` call moves to: the one after the focused
-    /// window on `workspace`, wrapping. nil when focus is not on a window of
-    /// that workspace, and the call is an ordinary switch.
-    static func nextFocusTarget(on workspace: Int, in snapshot: StatusSnapshot) -> CGWindowID? {
-        guard snapshot.focusedWorkspace == workspace,
-              let windows = snapshot.workspaces.first(where: { $0.id == workspace })?.windows,
-              let index = windows.firstIndex(where: { $0.focused == true }) else { return nil }
-        return windows[(index + 1) % windows.count].id
     }
 }
 

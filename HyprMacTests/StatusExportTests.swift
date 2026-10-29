@@ -412,30 +412,14 @@ final class StatusExportTests: XCTestCase {
 
     // MARK: - URLs
 
-    func testURLParsing() {
-        func parse(_ s: String) -> StatusURLCommand? { URL(string: s).flatMap(StatusURLCommand.parse) }
-        XCTAssertEqual(parse("hyprmac://workspace?n=4"), .workspace(4))
-        XCTAssertEqual(parse("hyprmac://workspace/?n=10"), .workspace(10))
-        XCTAssertEqual(parse("HYPRMAC://Focus?workspace=1"), .focus(1))
-        XCTAssertEqual(parse("hyprmac://focus?workspace=7&x=1"), .focus(7))
-        for bad in ["hyprmac://workspace?n=0", "hyprmac://workspace?n=11", "hyprmac://workspace?n=-1",
-                    "hyprmac://workspace?n=+4", "hyprmac://workspace?n=4.0", "hyprmac://workspace?n=",
-                    "hyprmac://workspace?n=abc", "hyprmac://workspace?n=4&n=5", "hyprmac://workspace",
-                    "hyprmac://workspace?workspace=4", "hyprmac://focus?n=4", "hyprmac://close?n=4",
-                    "hyprmac://workspace/extra?n=4", "https://workspace?n=4",
-                    "hyprmac://workspace?n=99999999999999999999"] {
-            XCTAssertNil(parse(bad), bad)
-        }
-    }
-
     func testRepeatFocusCyclesTheWorkspaceWindows() {
         let onFour = StatusSnapshot.build(input(focused: 11))
-        XCTAssertEqual(StatusURLCommand.nextFocusTarget(on: 4, in: onFour), 12)
-        XCTAssertEqual(StatusURLCommand.nextFocusTarget(on: 4, in: StatusSnapshot.build(input(focused: 12))), 11)
+        XCTAssertEqual(ExternalCommand.nextFocusTarget(on: 4, in: onFour), 12)
+        XCTAssertEqual(ExternalCommand.nextFocusTarget(on: 4, in: StatusSnapshot.build(input(focused: 12))), 11)
         // not on that workspace yet: an ordinary switch
-        XCTAssertNil(StatusURLCommand.nextFocusTarget(on: 2, in: onFour))
-        XCTAssertNil(StatusURLCommand.nextFocusTarget(on: 7, in: onFour))
+        XCTAssertNil(ExternalCommand.nextFocusTarget(on: 2, in: onFour))
+        XCTAssertNil(ExternalCommand.nextFocusTarget(on: 7, in: onFour))
         // on it, but no window holds focus
-        XCTAssertNil(StatusURLCommand.nextFocusTarget(on: 2, in: StatusSnapshot.build(input(focused: 0))))
+        XCTAssertNil(ExternalCommand.nextFocusTarget(on: 2, in: StatusSnapshot.build(input(focused: 0))))
     }
 }

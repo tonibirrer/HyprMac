@@ -259,6 +259,13 @@ struct GeneralSettingsView: View {
                     .labelsHidden()
             }
 
+            HyprRow("Allow other apps to control HyprMac", icon: "link",
+                    subtitle: "Lets apps like BetterTouchTool run HyprMac actions with hyprmac:// links.") {
+                Toggle("", isOn: $config.externalControlEnabled)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+            }
+
             HyprRow("Overlay appearance", icon: "circle.lefthalf.filled") {
                 Picker("", selection: $config.overlayAppearance) {
                     ForEach(OverlayAppearance.allCases) { appearance in
