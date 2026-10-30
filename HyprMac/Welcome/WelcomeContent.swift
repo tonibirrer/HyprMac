@@ -26,9 +26,9 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "link",
-            title: "Control from Other Apps",
-            description: "Apps like BetterTouchTool and LeaderKey can run HyprMac actions. Turn it on in Settings → General."
+            icon: "rectangle.split.2x1",
+            title: "No More Empty Gaps",
+            description: "When you close a window or move it to another workspace, the window next to it grows to fill the space. Dia windows used to stay half size."
         ),
     ]
 }
