@@ -199,10 +199,31 @@ class HyprWindow: Equatable, Hashable {
     }
 
     func writeSize(_ size: CGSize) -> AXError {
+        let error = setSize(size)
+        guard error == .attributeUnsupported else { return error }
+        let resent = Self.resendRefusedSize(size, write: setSize)
+        hyprLog(.notice, .tiling, "size write refused: wid=\(windowID) pid=\(ownerPID)"
+                + " size=\(Int(size.width))x\(Int(size.height)) — resent after a 1pt nudge: \(resent.rawValue)")
+        return resent
+    }
+
+    private func setSize(_ size: CGSize) -> AXError {
         var size = size
         guard let value = AXValueCreate(.cgSize, &size) else { return .illegalArgument }
         cachedFrame = nil
         return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value)
+    }
+
+    /// Some apps report the size they were last asked for, not the size the
+    /// window has, and refuse a write equal to it with -25205 without
+    /// resizing. Seen live with Dia: AX said 1496x839 while the window server
+    /// had 688x446, so the grow into a closed neighbour's slot never landed.
+    /// A size one point narrower is a real change; the target after it is
+    /// one too.
+    static func resendRefusedSize(_ size: CGSize, write: (CGSize) -> AXError) -> AXError {
+        let nudge = write(CGSize(width: max(size.width - 1, 1), height: size.height))
+        guard nudge == .success else { return nudge }
+        return write(size)
     }
 
     func readPosition() -> (AXError, CGPoint?) {

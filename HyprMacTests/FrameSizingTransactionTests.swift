@@ -1656,3 +1656,54 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertFalse(report.candidateVerified)
     }
 }
+
+/// Dia reports the size it was last asked for, not the size its window has,
+/// and refuses a write equal to that with -25205 without resizing. Seen live
+/// 2026-10-30: AX 1496x839 while the window server had 688x446.
+final class RefusedSizeResendTests: XCTestCase {
+
+    /// A window whose AX size is the last size requested. A write equal to it
+    /// is refused; any other lands.
+    private final class StaleSizeWindow {
+        var reported: CGSize
+        var real: CGSize
+        var writes: [CGSize] = []
+        init(reported: CGSize, real: CGSize) { self.reported = reported; self.real = real }
+        func write(_ size: CGSize) -> AXError {
+            writes.append(size)
+            guard size != reported else { return .attributeUnsupported }
+            reported = size
+            real = size
+            return .success
+        }
+    }
+
+    func testARefusedSizeIsSentAgainAfterAOnePointNudge() {
+        let window = StaleSizeWindow(reported: CGSize(width: 1496, height: 839),
+                                     real: CGSize(width: 688, height: 446))
+        let target = CGSize(width: 1496, height: 839)
+
+        let first = window.write(target)
+        let error = HyprWindow.resendRefusedSize(target, write: window.write)
+
+        XCTAssertEqual(first, .attributeUnsupported)
+        XCTAssertEqual(error, .success)
+        XCTAssertEqual(window.real, target, "the window took the size it refused")
+        XCTAssertEqual(window.writes.dropFirst(), [CGSize(width: 1495, height: 839), target])
+    }
+
+    func testAResendThatIsRefusedAgainReportsTheRefusal() {
+        let error = HyprWindow.resendRefusedSize(CGSize(width: 744, height: 839)) { _ in .attributeUnsupported }
+        XCTAssertEqual(error, .attributeUnsupported)
+    }
+
+    func testANudgeThatFailsIsNotFollowedByTheTarget() {
+        var writes: [CGSize] = []
+        let error = HyprWindow.resendRefusedSize(CGSize(width: 744, height: 839)) { size in
+            writes.append(size)
+            return .cannotComplete
+        }
+        XCTAssertEqual(error, .cannotComplete)
+        XCTAssertEqual(writes, [CGSize(width: 743, height: 839)])
+    }
+}

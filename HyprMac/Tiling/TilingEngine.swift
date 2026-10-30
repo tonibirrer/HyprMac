@@ -127,6 +127,9 @@ class TilingEngine {
         let restoredIDs: Set<CGWindowID>
         /// newcomers refused before sizing; recovery floats these without a retry.
         let refusedIDs: Set<CGWindowID>
+        /// a window left this key since its last accepted layout, so the
+        /// frames on screen still hold its gap.
+        var vacated = false
 
         /// newcomers this pass could not leave tiled.
         var failedInsertedIDs: Set<CGWindowID> { insertedIDs.subtracting(publishedIDs) }
@@ -216,6 +219,9 @@ class TilingEngine {
     /// Set by any non-accepted attempt, cleared by an accepted one or by
     /// lifecycle cleanup. Nothing in here advertises an intended rect.
     private var unverified: [TilingKey: UnverifiedRecord] = [:]
+    /// Keys a window left since their last accepted layout. Until one is
+    /// accepted, the frames on screen still hold the gap it left.
+    private var vacatedKeys: Set<TilingKey> = []
     let displayManager: DisplayManager
 
     /// Gap between adjacent tiles, in pixels. Default from
@@ -379,6 +385,7 @@ class TilingEngine {
             rememberSlot(of: w, in: t, key: key)
             t.remove(w)
             t.root.pruneEmptyNodes()
+            vacatedKeys.insert(key)
             // the membership changed here, not in the pass that follows, so
             // the pass would keep the ratios: a split skewed for a min-size
             // app stayed skewed after that app was gone. user-set ratios
@@ -629,6 +636,7 @@ class TilingEngine {
             if t.allWindows.isEmpty {
                 trees.removeValue(forKey: other)
                 unverified.removeValue(forKey: other)
+                vacatedKeys.remove(other)
             }
         }
         hyprLog(.debug, .lifecycle, "layout rebuild ws\(workspace): \(placed.count) placed, \(insertedIDs.count) inserted, \(refusedIDs.count) refused, frames \(applyFrames ? "verified" : "deferred")")
@@ -898,6 +906,7 @@ class TilingEngine {
         }
         trees[key] = candidate
         unverified.removeValue(forKey: key)
+        vacatedKeys.remove(key)
         return .committed(candidate: candidate, actualFrames: actualFrames, progress: progress)
     }
 
@@ -1106,7 +1115,9 @@ class TilingEngine {
         }
         trees[targetKey] = targetCandidate
         unverified.removeValue(forKey: sourceKey)
+        vacatedKeys.remove(sourceKey)
         unverified.removeValue(forKey: targetKey)
+        vacatedKeys.remove(targetKey)
         for (id, workspace) in cross.moves {
             admit([id], toWorkspace: workspace)
             pendingInsertedWindowIDs[sourceKey]?.removeAll { $0 == id }
@@ -1218,6 +1229,7 @@ class TilingEngine {
                 mark(newKey, windowIDs: carried.windowIDs, insertedIDs: carried.insertedIDs,
                      restored: carried.restorationVerifiedThroughout)
             }
+            if vacatedKeys.remove(oldKey) != nil { vacatedKeys.insert(newKey) }
             // a tree may already exist on the destination if the workspace had
             // been visited there before. keep the larger one and merge the
             // other's windows into it — dropping a tree wholesale orphaned its
@@ -1257,6 +1269,7 @@ class TilingEngine {
         // a pruned key takes its mark with it. a migrated one already
         // moved its mark above.
         unverified = unverified.filter { trees[$0.key] != nil }
+        vacatedKeys = vacatedKeys.filter { trees[$0] != nil }
     }
 
     private var layoutEngine: LayoutEngine {
@@ -1392,11 +1405,11 @@ class TilingEngine {
         switch outcome {
         case .accepted: break
         case let .rejectedRestored(reason, frames, progress):
-            hyprLog(.notice, .tiling, "verified layout rejected and restored: reason=\(reason) actual=\(frames)"
+            hyprLog(.notice, .tiling, "verified layout rejected and restored: reason=\(reason.trace) actual=\(frames)"
                     + Self.overlapTrace(progress))
         case let .degraded(candidateReason, restorationReason, attempted, frames, progress):
             hyprLog(.notice, .tiling,
-                    "verified layout degraded: candidate=\(candidateReason) restoration=\(String(describing: restorationReason)) attempted=\(attempted) actual=\(frames)"
+                    "verified layout degraded: candidate=\(candidateReason.trace) restoration=\(restorationReason?.trace ?? "nil") attempted=\(attempted) actual=\(frames)"
                     + Self.overlapTrace(progress))
         }
         return outcome
@@ -1458,6 +1471,7 @@ class TilingEngine {
         guard layoutGeneration == generation else { return }
         if publishes(outcome) {
             unverified.removeValue(forKey: key)
+            vacatedKeys.remove(key)
             return
         }
         var ids = Set(inserted)
@@ -1717,7 +1731,7 @@ class TilingEngine {
                              progress: candidateProgress)
         }
         let reason = terminal.verdict.failure ?? .attemptsExhausted
-        hyprLog(.notice, .tiling, "verified layout candidate failed: reason=\(reason)"
+        hyprLog(.notice, .tiling, "verified layout candidate failed: reason=\(reason.trace)"
                 + " phase=\(terminal.progress.phase.rawValue)"
                 + Self.offTargetTrace(terminalLayouts, actual: terminal.actualFrames)
                 + " actual=\(terminal.actualFrames)")
@@ -2299,6 +2313,9 @@ class TilingEngine {
         let key = m.key
         let t = m.tree
         let rect = m.rect
+        if let live, !Set(live.allWindows.map(\.windowID)).isSubset(of: t.allWindows.map(\.windowID)) {
+            vacatedKeys.insert(key)
+        }
 
         let refusedIncumbents = Set(m.refusedWindows.map(\.windowID)).intersection(incumbents)
         if let id = refusedIncumbents.min(), layoutGeneration == generation {
@@ -2349,6 +2366,7 @@ class TilingEngine {
             if TilingKey(workspace: workspace, screen: screen) != key {
                 trees.removeValue(forKey: key)
                 unverified.removeValue(forKey: key)
+                vacatedKeys.remove(key)
             }
         }
 
@@ -2400,9 +2418,12 @@ class TilingEngine {
         case let .degraded(candidateReason, _, _, _, _):
             failure = candidateReason
         }
+        // an empty key has no gap to fill
+        let vacated = vacatedKeys.contains(key) && !published.isEmpty
         return AdmissionResult(workspace: workspace, screen: screen, generation: generation,
                                insertedIDs: inserted, publishedIDs: published,
-                               failure: failure, restoredIDs: restored, refusedIDs: refused)
+                               failure: failure, restoredIDs: restored, refusedIDs: refused,
+                               vacated: vacated)
     }
 
     /// One more admission attempt for `(workspace, screen)`, ignoring for
@@ -2611,6 +2632,7 @@ class TilingEngine {
             for other in trees.keys where other.workspace == Self.scratchpadWorkspace && other != key {
                 trees.removeValue(forKey: other)
                 unverified.removeValue(forKey: other)
+                vacatedKeys.remove(other)
                 scratchpadRegions.removeValue(forKey: other)
             }
         }
@@ -2758,6 +2780,7 @@ class TilingEngine {
                 t.remove(window)
                 t.root.pruneEmptyNodes()
                 t.root.resetSplitRatios()
+                vacatedKeys.insert(key)
                 if let screen = displayManager.screens.first(where: {
                     TilingKey(workspace: workspace, screen: $0) == key
                 }) {
@@ -3467,6 +3490,7 @@ class TilingEngine {
         admittedWindowIDs[prepared.workspace] = []
         admit(prepared.candidate.allWindows.map(\.windowID), toWorkspace: prepared.workspace)
         unverified.removeValue(forKey: key)
+        vacatedKeys.remove(key)
         return true
     }
 
@@ -3605,10 +3629,12 @@ class TilingEngine {
             tree.remove(window)
             tree.root.pruneEmptyNodes()
             tree.root.resetSplitRatios()
+            vacatedKeys.insert(key)
             pendingInsertedWindowIDs[key]?.removeAll { $0 == window.windowID }
             if tree.allWindows.isEmpty {
                 trees.removeValue(forKey: key)
                 unverified.removeValue(forKey: key)
+                vacatedKeys.remove(key)
             }
         }
     }

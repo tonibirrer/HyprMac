@@ -3080,7 +3080,8 @@ class WindowManager {
     /// Nothing special: the same path a retile takes, down to the
     /// bookkeeping, so a refusal rolls back, marks the key, and hands
     /// whatever it stranded to the recovery exactly as it always would.
-    private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) {
+    @discardableResult
+    private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) -> TilingEngine.AdmissionResult {
         let allWindows = accessibility.getAllWindows()
         tilingEngine.primeMinimumSizes(allWindows)
         for w in allWindows where stateCache.floatingWindowIDs.contains(w.windowID) {
@@ -3088,8 +3089,9 @@ class WindowManager {
         }
         let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
         let windows = allWindows.filter { assigned.contains($0.windowID) }
-        admissionPass.run(windows, onWorkspace: workspace, screen: screen)
+        let result = admissionPass.run(windows, onWorkspace: workspace, screen: screen)
         updatePositionCache(windows: allWindows)
+        return result
     }
 
     /// Park self-repair: a hidden-workspace window the OS (or its own app)
@@ -4115,6 +4117,14 @@ private extension WindowManager {
         }
         admissionRecovery.clearUnverified = { [weak self] workspace, screen in
             self?.tilingEngine.clearUnverifiedGeometry(forWorkspace: workspace, screen: screen)
+        }
+        // the same pass a drift re-apply runs, so anything it strands still
+        // reaches the newcomer recovery
+        admissionRecovery.retileVacated = { [weak self] workspace, screen in
+            self?.reapplyLayout(onWorkspace: workspace, screen: screen)
+        }
+        admissionRecovery.isLayoutSuspended = { [weak self] in
+            self?.driftMonitor.isSuspended() ?? true
         }
         admissionRecovery.retileAfterFallback = { [weak self] workspace, screen in
             guard let self else { return [] }

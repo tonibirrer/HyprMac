@@ -537,6 +537,22 @@ retry at all: the pass already judged them with the bounds it was told to
 ignore, so a second attempt would decide the same way. Their next turn floats
 them where they stand.
 
+A window that closes or moves away leaves a gap its neighbours grow into. When
+that pass fails on an AX error (a setter, read or cleanup error, or a
+timeout), the rollback puts the neighbours back around the gap. The key then
+gets up to three more ordinary passes, 0.25, 0.5 and 1 s apart. They wait out
+a drag or a move's transition and stop if the workspace is hidden. All lines
+are `[notice] [tiling]`:
+
+```
+vacated layout retry scheduled: ws2 in 250ms cause=writeFailed(33023, -25204)
+vacated layout retry 1: ws2 filled the gap
+vacated layout retry 1 failed: ws2 cause=writeFailed(33023, -25204) — again in 500ms
+vacated layout retry gave up: ws2 after 3 passes cause=writeFailed(33023, -25204)
+vacated layout retry settled: ws2 — another pass filled it
+vacated layout retry dropped: ws2 — workspace hidden
+```
+
 Same-screen drift has two lines of its own, both `[notice] [tiling]`:
 
 ```

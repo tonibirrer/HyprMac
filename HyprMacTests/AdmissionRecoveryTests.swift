@@ -863,6 +863,175 @@ final class AdmissionRecoveryTests: XCTestCase {
         XCTAssertEqual(target?.reason, "syncTracker-tiled")
     }
 
+    // MARK: - a key a window just left
+
+    /// A pass on ws2 after a window closed or moved away, refused by an AX
+    /// error on the window that should have grown into the gap.
+    private func vacatedPass(workspace: Int = 2, vacated: Bool = true,
+                             failure: FrameSizingFailure? = .writeFailed(11, .failure),
+                             inserted: Set<CGWindowID> = [],
+                             published: Set<CGWindowID> = [11]) -> TilingEngine.AdmissionResult {
+        TilingEngine.AdmissionResult(workspace: workspace, screen: screen, generation: 7,
+                                     insertedIDs: inserted, publishedIDs: published,
+                                     failure: failure, restoredIDs: failure == nil ? [] : [11],
+                                     refusedIDs: [], vacated: vacated)
+    }
+
+    func testAFailedPassOnAVacatedKeyRetilesItAfterAShortDelay() {
+        recovery.note(vacatedPass())
+
+        XCTAssertEqual(harness.scheduled.map(\.delay), [0.25])
+        harness.fire()
+        XCTAssertEqual(harness.vacatedRetiles, [2])
+        XCTAssertEqual(harness.scheduled.count, 1, "an accepted retry arms nothing more")
+        XCTAssertTrue(recovery.pendingWindowIDs.isEmpty, "no newcomer was involved")
+    }
+
+    func testAVacatedRetryBacksOffAndStopsAtItsBound() {
+        harness.vacatedResults = [vacatedPass(), vacatedPass(), vacatedPass()]
+        recovery.note(vacatedPass())
+
+        for _ in 0..<5 { harness.fire() }
+
+        XCTAssertEqual(harness.scheduled.map(\.delay), [0.25, 0.5, 1.0])
+        XCTAssertEqual(harness.vacatedRetiles, [2, 2, 2])
+    }
+
+    func testATimedOutPassOnAVacatedKeyIsRetriedToo() {
+        recovery.note(vacatedPass(failure: .writeFailed(11, .cannotComplete)))
+        XCTAssertEqual(harness.scheduled.count, 1)
+    }
+
+    func testAGeometryRefusalOnAVacatedKeyIsNotRetried() {
+        // the window answered and said no; writing the same frame again
+        // would only resize it and roll it back once more
+        recovery.note(vacatedPass(failure: .geometryMismatch(11)))
+        XCTAssertTrue(harness.scheduled.isEmpty)
+    }
+
+    func testAFailedPassThatVacatedNothingIsNotRetried() {
+        recovery.note(vacatedPass(vacated: false))
+        XCTAssertTrue(harness.scheduled.isEmpty)
+    }
+
+    func testAnAcceptedPassOnAVacatedKeyArmsNothing() {
+        recovery.note(vacatedPass(failure: nil))
+        XCTAssertTrue(harness.scheduled.isEmpty)
+    }
+
+    func testOnlyOneVacatedRetryIsArmedPerKey() {
+        recovery.note(vacatedPass())
+        recovery.note(vacatedPass())
+        XCTAssertEqual(harness.scheduled.count, 1)
+        harness.fire()
+        XCTAssertEqual(harness.vacatedRetiles, [2])
+    }
+
+    func testAnotherPassThatFillsTheKeySettlesThePendingRetry() {
+        recovery.note(vacatedPass())
+        // a workspace switch away and back, or a later poll, got there first
+        recovery.note(vacatedPass(failure: nil))
+        harness.fire()
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty)
+    }
+
+    func testAVacatedRetryOnAHiddenWorkspaceIsDropped() {
+        recovery.note(vacatedPass())
+        // the switch that hid it lays the key out again when it is shown
+        harness.visibleWorkspaces = []
+        harness.fire()
+        harness.fire()
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty)
+        XCTAssertEqual(harness.scheduled.count, 1)
+    }
+
+    func testAVacatedRetryWaitsOutNothingDuringADisplayTransition() {
+        recovery.note(vacatedPass())
+        harness.displayTransitionPending = true
+        harness.fire()
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty)
+    }
+
+    func testANewcomerRetryOwnsAKeyThatAlsoLostAMember() {
+        // the admission retry already lays the key out again, members and all
+        recovery.note(vacatedPass(inserted: [26]))
+        XCTAssertEqual(harness.scheduled.count, 1)
+        harness.fire()
+        XCTAssertEqual(harness.attempts.count, 1)
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty)
+    }
+
+    func testCancellingEverythingDropsAVacatedRetry() {
+        recovery.note(vacatedPass())
+        recovery.cancelAll(reason: "stop")
+        harness.fire()
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty)
+    }
+
+    func testVacatedRetriesOnTwoKeysRunIndependently() {
+        harness.visibleWorkspaces = [2, 3]
+        recovery.note(vacatedPass(workspace: 2))
+        recovery.note(vacatedPass(workspace: 3))
+        harness.fire()
+        XCTAssertEqual(harness.vacatedRetiles.sorted(), [2, 3])
+    }
+
+    func testAVacatedRetryWaitsOutADragOrAMoveTransition() {
+        recovery.note(vacatedPass())
+        harness.layoutSuspended = true
+        harness.fire()
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty, "no pass under the user's hand")
+        XCTAssertEqual(harness.scheduled.map(\.delay), [0.25, 0.25])
+
+        harness.layoutSuspended = false
+        harness.fire()
+        XCTAssertEqual(harness.vacatedRetiles, [2])
+    }
+
+    func testAVacatedRetryStopsWaitingOnASuspensionThatNeverEnds() {
+        recovery.vacatedSuspensionWaits = 2
+        recovery.note(vacatedPass())
+        harness.layoutSuspended = true
+        for _ in 0..<6 { harness.fire() }
+        XCTAssertTrue(harness.vacatedRetiles.isEmpty)
+        XCTAssertEqual(harness.scheduled.count, 3, "the first timer and two waits")
+    }
+
+    func testARetryPassReportingBackDoesNotArmASecondRetry() {
+        harness.reportsTo = recovery
+        harness.vacatedResults = [vacatedPass()]
+        recovery.note(vacatedPass())
+
+        harness.fire()
+
+        XCTAssertEqual(harness.vacatedRetiles, [2])
+        XCTAssertEqual(harness.scheduled.map(\.delay), [0.25, 0.5],
+                       "the series re-arms itself once; the report arms nothing")
+    }
+
+    func testARetryPassThatStrandsANewcomerHandsTheKeyToItsRetry() {
+        harness.reportsTo = recovery
+        harness.vacatedResults = [vacatedPass(inserted: [26])]
+        recovery.note(vacatedPass())
+
+        harness.fire()
+
+        XCTAssertEqual(recovery.pendingWindowIDs, [26], "the newcomer retry has it")
+        harness.fire()
+        XCTAssertEqual(harness.vacatedRetiles, [2], "no second vacated pass on the same key")
+    }
+
+    func testAnAXFailureIsOneTheAppMayGetRightNextTime() {
+        XCTAssertTrue(FrameSizingFailure.writeFailed(1, .failure).isAXFailure)
+        XCTAssertTrue(FrameSizingFailure.readFailed(1, .cannotComplete).isAXFailure)
+        XCTAssertTrue(FrameSizingFailure.cleanupFailed(1, primary: nil, error: .failure).isAXFailure)
+        XCTAssertTrue(FrameSizingFailure.deadlineExceeded.isAXFailure)
+        XCTAssertFalse(FrameSizingFailure.geometryMismatch(1).isAXFailure)
+        XCTAssertFalse(FrameSizingFailure.overlap(1, 2).isAXFailure)
+        XCTAssertFalse(FrameSizingFailure.windowUnavailable(1).isAXFailure)
+        XCTAssertFalse(FrameSizingFailure.superseded.isAXFailure)
+    }
+
     // MARK: - the bookkeeping every pass owes
 
     /// The drift monitor's re-apply runs the same pass the ordinary retile
@@ -936,6 +1105,15 @@ private final class RecoveryHarness {
     var keepsTimeouts = true
     /// ids the fallback retile leaves visible, nonfloating and in no tree
     var leftovers: Set<CGWindowID> = []
+    /// what each vacated-key retile returns, in order; an accepted pass once
+    /// it runs out
+    var vacatedResults: [TilingEngine.AdmissionResult] = []
+    /// the workspaces the vacated-key retry laid out again, in order
+    private(set) var vacatedRetiles: [Int] = []
+    /// a drag or a workspace transition is settling
+    var layoutSuspended = false
+    /// the production retile reports its pass back through `note`
+    weak var reportsTo: AdmissionRecovery?
     var failure: FrameSizingFailure? = .geometryMismatch(11)
     var displayTransitionPending = false
     var sessionInterrupted = false
@@ -1018,6 +1196,19 @@ private final class RecoveryHarness {
             self.retiles.append((workspace, screen))
             return self.leftovers
         }
+        recovery.retileVacated = { [weak self] workspace, screen in
+            guard let self else { return nil }
+            self.calls.append("retileVacated")
+            self.vacatedRetiles.append(workspace)
+            let result = self.vacatedResults.isEmpty
+                ? TilingEngine.AdmissionResult(
+                    workspace: workspace, screen: screen, generation: 9, insertedIDs: [],
+                    publishedIDs: [11], failure: nil, restoredIDs: [], refusedIDs: [])
+                : self.vacatedResults.removeFirst()
+            self.reportsTo?.note(result)
+            return result
+        }
+        recovery.isLayoutSuspended = { [weak self] in self?.layoutSuspended ?? false }
     }
 
     /// Run every timer armed so far, once.
@@ -1692,4 +1883,147 @@ final class MouseTrackingFocusRegressionTests: XCTestCase {
 private final class PrimaryRecoveryScreen: SyntheticScreen {
     override var frame: NSRect { NSRect(x: 0, y: 0, width: 1600, height: 1000) }
     override var visibleFrame: NSRect { frame }
+}
+
+/// A window leaving a workspace (closed, or moved to another one) leaves a
+/// gap its neighbour should grow into. Seen live on 2026-10-30: the grow
+/// came back with an AX error, the pass rolled the neighbour back to its
+/// half, and nothing laid the key out again until a workspace switch or
+/// Hypr+R. The engine has to say the key was vacated, so the recovery can
+/// lay it out again, and an accepted pass has to fill the gap.
+final class VacatedKeyEngineTests: XCTestCase {
+
+    private var screen: PrimaryRecoveryScreen!
+    private var io: GrowRefusingIO!
+    private var engine: TilingEngine!
+
+    override func setUp() {
+        screen = PrimaryRecoveryScreen()
+        io = GrowRefusingIO()
+        engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] in [screen!] }),
+                              frameSizingIOFactory: { [io] _, generation in io!.io(generation: generation) })
+    }
+
+    /// Two windows side by side on ws2. Same app or not, by pid.
+    private func tiledPair(pids: (pid_t, pid_t)) -> (HyprWindow, HyprWindow) {
+        let left = makeWindow(id: 71, pid: pids.0)
+        let right = makeWindow(id: 72, pid: pids.1)
+        let first = engine.tileWindows([left, right], onWorkspace: 2, screen: screen)
+        XCTAssertNil(first.failure)
+        XCTAssertFalse(first.vacated)
+        return (left, right)
+    }
+
+    private static let pairs: [(String, (pid_t, pid_t))] = [("same app", (501, 501)),
+                                                             ("different apps", (501, 502))]
+
+    func testClosingOneOfTwoWindowsWhoseNeighbourCannotGrowReportsTheKeyVacated() throws {
+        for (label, pids) in Self.pairs {
+            setUp()
+            let (left, right) = tiledPair(pids: pids)
+            let half = try XCTUnwrap(io.frames[left.windowID])
+
+            io.refusingGrowth = [left.windowID]
+            engine.removeWindowID(right.windowID)
+            let result = engine.tileWindows([left], onWorkspace: 2, screen: screen)
+
+            XCTAssertEqual(result.failure, .writeFailed(left.windowID, .failure), label)
+            XCTAssertTrue(result.vacated, label)
+            XCTAssertEqual(io.frames[left.windowID], half, "\(label): the rollback is the gap")
+            XCTAssertEqual(engine.windowIDs(inTreeForWorkspace: 2, screen: screen), [left.windowID],
+                           "\(label): the closed window stays out of the tree")
+        }
+    }
+
+    func testMovingAWindowAwayReportsOnlyTheSourceKeyVacated() throws {
+        for (label, pids) in Self.pairs {
+            setUp()
+            let (left, right) = tiledPair(pids: pids)
+
+            io.refusingGrowth = [left.windowID]
+            engine.removeWindowMembershipOnly(right, fromWorkspace: 2)
+            let source = engine.tileWindows([left], onWorkspace: 2, screen: screen)
+            let destination = engine.tileWindows([right], onWorkspace: 3, screen: screen)
+
+            XCTAssertTrue(source.vacated, label)
+            XCTAssertEqual(source.failure, .writeFailed(left.windowID, .failure), label)
+            XCTAssertNil(destination.failure, label)
+            XCTAssertFalse(destination.vacated, "\(label): the destination gained a window")
+            XCTAssertEqual(engine.windowIDs(inTreeForWorkspace: 2, screen: screen), [left.windowID], label)
+            XCTAssertEqual(engine.windowIDs(inTreeForWorkspace: 3, screen: screen), [right.windowID], label)
+        }
+    }
+
+    func testTheNextAcceptedPassFillsTheGapAndClearsTheMark() throws {
+        for (label, pids) in Self.pairs {
+            setUp()
+            let (left, right) = tiledPair(pids: pids)
+            let half = try XCTUnwrap(io.frames[left.windowID])
+
+            io.refusingGrowth = [left.windowID]
+            engine.removeWindowID(right.windowID)
+            _ = engine.tileWindows([left], onWorkspace: 2, screen: screen)
+            io.refusingGrowth = []
+            let retry = engine.tileWindows([left], onWorkspace: 2, screen: screen)
+
+            XCTAssertNil(retry.failure, label)
+            XCTAssertFalse(retry.vacated, label)
+            let filled = try XCTUnwrap(io.frames[left.windowID])
+            XCTAssertGreaterThan(filled.width, half.width * 1.5, "\(label): the window took the gap")
+        }
+    }
+
+    func testAFailedPassWithNoWindowLeavingIsNotVacated() throws {
+        let (left, right) = tiledPair(pids: (501, 502))
+        // knocked off its tile by the app, and the re-apply cannot grow it back
+        let half = try XCTUnwrap(io.frames[left.windowID])
+        io.frames[left.windowID] = half.insetBy(dx: 40, dy: 0)
+        io.refusingGrowth = [left.windowID]
+
+        let result = engine.tileWindows([left, right], onWorkspace: 2, screen: screen)
+
+        XCTAssertNotNil(result.failure)
+        XCTAssertFalse(result.vacated)
+    }
+
+    func testRemovingTheLastWindowLeavesNothingToFill() {
+        let only = makeWindow(id: 75, pid: 501)
+        XCTAssertNil(engine.tileWindows([only], onWorkspace: 2, screen: screen).failure)
+
+        engine.removeWindowID(only.windowID)
+        let result = engine.tileWindows([], onWorkspace: 2, screen: screen)
+
+        XCTAssertFalse(result.vacated)
+    }
+}
+
+/// Accepts every write except one that widens a window in `refusingGrowth`,
+/// which comes back with `.failure` and changes nothing.
+private final class GrowRefusingIO {
+    var frames: [CGWindowID: CGRect] = [:]
+    var refusingGrowth: Set<CGWindowID> = []
+
+    func io(generation: @escaping () -> UInt64) -> FrameSizingIO {
+        FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { [self] id, size, _ in
+                var frame = frames[id] ?? CGRect(x: 0, y: 0, width: 100, height: 100)
+                if refusingGrowth.contains(id), size.width > frame.width + 1 { return .failure }
+                frame.size = size
+                frames[id] = frame
+                return .success
+            },
+            writePosition: { [self] id, position, _ in
+                var frame = frames[id] ?? CGRect(x: 0, y: 0, width: 100, height: 100)
+                frame.origin = position
+                frames[id] = frame
+                return .success
+            },
+            readPosition: { [self] id, _ in (.success, (frames[id] ?? .zero).origin) },
+            readSize: { [self] id, _ in
+                (.success, frames[id]?.size ?? CGSize(width: 100, height: 100))
+            },
+            now: { 0 }, sleep: { _ in }, currentGeneration: generation
+        )
+    }
 }

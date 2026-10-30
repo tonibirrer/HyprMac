@@ -35,6 +35,19 @@ extension FrameSizingFailure {
         }
     }
 
+    /// AX did not carry out or did not answer a call: a setter, a read, or
+    /// the cleanup after them came back with an error, or the attempt ran
+    /// out of time. It says nothing about whether the frames fit, so the
+    /// same layout may land on a later pass. Seen live: a browser window
+    /// refused its grow into a closed neighbour's slot and took it 250 ms
+    /// later.
+    var isAXFailure: Bool {
+        switch self {
+        case .writeFailed, .readFailed, .cleanupFailed: return true
+        default: return isTimeout
+        }
+    }
+
     /// A setter or read that AX gave up on itself, not wrapped in a cleanup
     /// failure. What an AX timeout recovery may try again.
     var isDirectCannotComplete: Bool {
