@@ -29,4 +29,12 @@ enum AppIdentity {
     /// of a build with a dedicated directory, to carry the user's config
     /// over; never written.
     static let upstreamDirectoryName = "HyprMac"
+    /// The link scheme this build registers (`HYPRMAC_URL_SCHEME` in
+    /// project.yml). The stock app registers `hyprmac://`, so with both
+    /// installed macOS would hand those links to either one.
+    #if HYPRMAC_DEBUG_VARIANT
+    static let urlScheme = "hyprmac-experiments-debug"
+    #else
+    static let urlScheme = "hyprmac-experiments"
+    #endif
 }

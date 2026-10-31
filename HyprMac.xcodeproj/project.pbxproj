@@ -189,6 +189,7 @@
 		8456B287CD1B9AC9E86336E5 /* TileScratchpadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3246386B0F502F2D858B3033 /* TileScratchpadTests.swift */; };
 		853CA0BA7806FC1CBB22F8F4 /* FullscreenSpaceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86782FF6A4EBE0C593ECD41B /* FullscreenSpaceController.swift */; };
 		8564EAF2C0A899D4DB0774C7 /* LinkedMonitorsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4669F48BAF163487682A94CC /* LinkedMonitorsTests.swift */; };
+		85B5BD8D8955CA5206C5E0E8 /* ForkURLSchemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714778BE07EB652A767870C7 /* ForkURLSchemeTests.swift */; };
 		860959AD6A92DB57753D655E /* ToggleSplitFallthroughRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC08AAC03ABC15E772214598 /* ToggleSplitFallthroughRegressionTests.swift */; };
 		8683B17E57E3DABFB9776F68 /* KeybindOverlayContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 735D2D29C87C520F2EDEEAF6 /* KeybindOverlayContentTests.swift */; };
 		86B3C95B411DB51B9AFBE08D /* WorkspacePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC4754A615E4871D79F5D066 /* WorkspacePicker.swift */; };
@@ -480,6 +481,7 @@
 		6EDEEE13B637CED75A9FD8A9 /* TourView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TourView.swift; sourceTree = "<group>"; };
 		6FF11879906CFAC20DB1166F /* StatusExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusExportTests.swift; sourceTree = "<group>"; };
 		704DCC0F96A16AC32FD1A5C0 /* LayoutMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutMatcher.swift; sourceTree = "<group>"; };
+		714778BE07EB652A767870C7 /* ForkURLSchemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForkURLSchemeTests.swift; sourceTree = "<group>"; };
 		728568405C25B4DD6E5EDD9B /* DestroyRecheckTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DestroyRecheckTests.swift; sourceTree = "<group>"; };
 		735D2D29C87C520F2EDEEAF6 /* KeybindOverlayContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeybindOverlayContentTests.swift; sourceTree = "<group>"; };
 		738DFFFE0F8635658F80C36D /* CapsLockGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapsLockGuardTests.swift; sourceTree = "<group>"; };
@@ -885,6 +887,7 @@
 				C0C8D3EAFB70C82B163D2DAA /* ForceInsertWindowFallbackTests.swift */,
 				BFF82BFB0DD5A67058F96BE9 /* ForgottenWindowCleanupTests.swift */,
 				752B436105A4B3133EA45FA4 /* ForkMonitorConfigTests.swift */,
+				714778BE07EB652A767870C7 /* ForkURLSchemeTests.swift */,
 				3E74E9F8AA97C6653000640F /* FrameReadbackPollerTests.swift */,
 				3F7802C236774AA24452B3E1 /* FrameSizingTransactionTests.swift */,
 				787772BD2B63EB7FAEB9DC58 /* FullHeightTests.swift */,
@@ -1442,6 +1445,7 @@
 				EAD93287EB51947EF49B40DE /* ForceInsertWindowFallbackTests.swift in Sources */,
 				EAF0DF45A4741C259DF350CA /* ForgottenWindowCleanupTests.swift in Sources */,
 				4084F3825D4ABAEDA6CAD9BC /* ForkMonitorConfigTests.swift in Sources */,
+				85B5BD8D8955CA5206C5E0E8 /* ForkURLSchemeTests.swift in Sources */,
 				12B84235B0C9B244D9366F35 /* FrameReadbackPollerTests.swift in Sources */,
 				4C307BB05F3FA6FC89B4A9F5 /* FrameSizingTransactionTests.swift in Sources */,
 				884A5BB21E7E4D13F3037146 /* FullHeightTests.swift in Sources */,
@@ -1618,6 +1622,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				HYPRMAC_SOURCE_REVISION = unknown;
+				HYPRMAC_URL_SCHEME = "hyprmac-experiments-debug";
 				INFOPLIST_FILE = HyprMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1734,6 +1739,7 @@
 				CURRENT_PROJECT_VERSION = 96;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
+				HYPRMAC_URL_SCHEME = "hyprmac-experiments";
 				INFOPLIST_FILE = HyprMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1764,6 +1770,7 @@
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
 				HYPRMAC_SOURCE_REVISION = unknown;
+				HYPRMAC_URL_SCHEME = "hyprmac-experiments-debug";
 				INFOPLIST_FILE = HyprMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1794,6 +1801,7 @@
 				CURRENT_PROJECT_VERSION = 96;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = NO;
+				HYPRMAC_URL_SCHEME = "hyprmac-experiments";
 				INFOPLIST_FILE = HyprMac/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -15,7 +15,9 @@ enum ExternalCommand: Equatable {
     case action(Action)
 
     static func parse(_ url: URL) -> ExternalCommand? {
-        guard url.scheme?.lowercased() == "hyprmac",
+        // fork: the registered scheme is AppIdentity.urlScheme; `hyprmac`
+        // still parses so upstream's links and tests read the same
+        guard let scheme = url.scheme?.lowercased(), scheme == "hyprmac" || scheme == AppIdentity.urlScheme,
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
         let query = parts.queryItems ?? []
         switch parts.host?.lowercased() {

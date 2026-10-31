@@ -50,6 +50,8 @@ targets:
         PRODUCT_NAME: HyprMacExperiments
         PRODUCT_MODULE_NAME: HyprMac
         PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments
+        # its own link scheme: the stock app in /Applications registers hyprmac://
+        HYPRMAC_URL_SCHEME: hyprmac-experiments
         MARKETING_VERSION: "0.20.1"
         CURRENT_PROJECT_VERSION: "96"
         CODE_SIGN_IDENTITY: "HyprMac Dev Signing"
@@ -75,6 +77,7 @@ targets:
         PRODUCT_NAME: HyprMacExperiments Debug
         PRODUCT_MODULE_NAME: HyprMac
         PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments.debug
+        HYPRMAC_URL_SCHEME: hyprmac-experiments-debug
         MARKETING_VERSION: "0.20.1"
         CURRENT_PROJECT_VERSION: "96.1"
         HYPRMAC_SOURCE_REVISION: unknown
