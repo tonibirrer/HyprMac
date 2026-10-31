@@ -30,7 +30,7 @@ func acceptingFrameSizingIOFactory()
 let defaultRect = CGRect(x: 0, y: 0, width: 1920, height: 1080)
 let narrowRect = CGRect(x: 0, y: 0, width: 800, height: 1600)
 let defaultGap: CGFloat = 8
-let defaultPadding = OuterPadding(uniform: 8)
+let defaultPadding: CGFloat = 8
 let defaultMinSlot: CGFloat = 500
 
 /// Base class for the screens tests build by hand.

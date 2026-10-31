@@ -100,12 +100,14 @@ struct MenuBarView: View {
                         guard config.enabled else { return }
                         appDelegate.windowManager?.handleAction(.switchWorkspace(workspace.id))
                     } label: {
-                        Text("\(workspace.id)").font(.hyprMonoSm)
+                        Text(UserConfig.workspaceDisplayName(workspace.id, names: config.workspaceNames,
+                                                             fallback: "\(workspace.id)"))
+                            .font(.hyprMonoSm).lineLimit(1).minimumScaleFactor(0.5)
                             .frame(width: 25, height: 23)
                             .background(RoundedRectangle(cornerRadius: 4).fill(workspace.isActive ? Color.hyprCyan : (workspace.isOccupied ? Color.hyprMagenta.opacity(0.24) : Color.white.opacity(0.06))))
                             .foregroundStyle(workspace.isActive ? Color.hyprBackground : Color.hyprTextPrimary)
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? config.resolvedFloatingColor : Color.clear, lineWidth: 1.5))
-                    }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to workspace \(workspace.id)")
+                    }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to \(UserConfig.workspaceDisplayName(workspace.id, names: config.workspaceNames, fallback: "workspace \(workspace.id)"))")
                 }
             }
         }
@@ -290,8 +292,8 @@ enum MenuBarPresentation {
         }.joined(separator: " ")
     }
 
-    static func monitorSummary(_ monitors: [MenuBarMonitorSnapshot]) -> String {
-        monitors.map { "\($0.name): Workspace \($0.currentWorkspace)" }
+    static func monitorSummary(_ monitors: [MenuBarMonitorSnapshot], names: [String: String]) -> String {
+        monitors.map { "\($0.name): \(UserConfig.workspaceDisplayName($0.currentWorkspace, names: names))" }
             .joined(separator: "\n")
     }
 
@@ -332,7 +334,7 @@ struct WorkspaceIndicatorLabel: View {
                     }
                 }
             }
-            .help(MenuBarPresentation.monitorSummary(state.monitors))
+            .help(MenuBarPresentation.monitorSummary(state.monitors, names: config.workspaceNames))
         } else {
             Image(systemName: "rectangle.split.2x2")
         }

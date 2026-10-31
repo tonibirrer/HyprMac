@@ -127,7 +127,7 @@ final class AccordionAdmissionTests: XCTestCase {
 
     func testSmallestFrameSizeSubtractsPaddingAndBothStrips() {
         let rect = CGRect(x: 0, y: 32, width: 1512, height: 950)
-        let padding = OuterPadding(uniform: 8)
+        let padding: CGFloat = 8
 
         XCTAssertEqual(AccordionLayout.smallestFrameSize(in: rect, padding: padding, overlap: 0),
                        CGSize(width: 1496, height: 934))

@@ -1,6 +1,6 @@
 // "Tiling" tab. Window gaps, focus color, dim intensity,
-// per-monitor enable + max-splits configuration plus a live dwindle
-// preview.
+// per-monitor enable, max-splits, edge padding and workspaces plus a live
+// dwindle preview.
 
 import SwiftUI
 
@@ -40,15 +40,6 @@ struct TilingSettingsView: View {
                 VStack(alignment: .leading, spacing: HyprSpacing.md) {
                     gapSlider(label: "Inner gap", value: $config.gapSize)
                     gapSlider(label: "Outer padding", value: $config.outerPadding)
-                    VStack(alignment: .leading, spacing: HyprSpacing.xs) {
-                        Text("Per-side overrides")
-                            .font(.hyprCaption)
-                            .foregroundStyle(Color.hyprTextTertiary)
-                        paddingOverrideRow("Top", \.top)
-                        paddingOverrideRow("Bottom", \.bottom)
-                        paddingOverrideRow("Left", \.left)
-                        paddingOverrideRow("Right", \.right)
-                    }
                     Text("The preview updates as you drag.")
                         .font(.hyprCaption)
                         .foregroundStyle(Color.hyprTextTertiary)
@@ -81,30 +72,6 @@ struct TilingSettingsView: View {
                 RoundedRectangle(cornerRadius: HyprRadius.lg, style: .continuous)
                     .strokeBorder(Color.hyprSeparator, lineWidth: 0.5)
             )
-        }
-    }
-
-    /// One side's padding override: checkbox enables it, slider sets it,
-    /// unchecked falls back to the uniform outer padding. Useful to
-    /// reserve space on a single edge, e.g. the top for sketchybar.
-    private func paddingOverrideRow(_ label: String, _ side: WritableKeyPath<PaddingSides, CGFloat?>) -> some View {
-        let enabled = Binding<Bool>(
-            get: { config.outerPaddingSides[keyPath: side] != nil },
-            set: { on in config.outerPaddingSides[keyPath: side] = on ? config.outerPadding : nil }
-        )
-        let value = Binding<CGFloat>(
-            get: { config.outerPaddingSides[keyPath: side] ?? config.outerPadding },
-            set: { config.outerPaddingSides[keyPath: side] = $0 }
-        )
-        return HStack(spacing: HyprSpacing.sm) {
-            Toggle(label, isOn: enabled)
-                .toggleStyle(.checkbox)
-                .font(.hyprBody)
-                .frame(width: 76, alignment: .leading)
-            Slider(value: value, in: 0...64, step: 2)
-                .disabled(!enabled.wrappedValue)
-            HyprChip(enabled.wrappedValue ? "\(Int(value.wrappedValue)) px" : "auto")
-                .frame(width: 52, alignment: .trailing)
         }
     }
 
@@ -475,8 +442,18 @@ struct TilingSettingsView: View {
 
     // MARK: monitors
 
+    // the mapping would leave an enabled monitor with nothing to show
+    private var workspaceMappingIgnored: Bool {
+        let enabled = WorkspaceManager.leftToRight(screens)
+            .filter { !config.disabledMonitors.contains($0.localizedName) }
+        return WorkspaceHomeResolver.resolve(enabledNames: enabled.map(\.localizedName),
+                                             mapping: config.workspaceMonitors).mappingIgnored
+    }
+
     private var monitorsPanel: some View {
-        HyprPanel("Per-Monitor Settings") {
+        HyprPanel("Per-Monitor Settings",
+                  footer: "Edge padding replaces the outer padding on one side of a monitor, to make room for a bar or the Dock. "
+                  + "Workspaces you don't put on a monitor keep their default home.") {
             if screens.count > 1 {
                 HyprRow("Link monitors", icon: "link",
                         subtitle: "All monitors show one workspace; tiles balance across screens by size, never spanning a border.",
@@ -485,6 +462,14 @@ struct TilingSettingsView: View {
                         .toggleStyle(HyprToggleStyle())
                         .labelsHidden()
                 }
+            }
+            if workspaceMappingIgnored && !config.linkedMonitors {
+                Text("A monitor would have no workspace, so the default workspace homes apply on this layout.")
+                    .font(.hyprCaption)
+                    .foregroundStyle(Color.hyprTextSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, HyprSpacing.md)
+                    .padding(.top, HyprSpacing.md)
             }
             ForEach(Array(screens.enumerated()), id: \.element.localizedName) { idx, screen in
                 MonitorSplitsRow(
@@ -509,6 +494,20 @@ struct TilingSettingsView: View {
                             }
                         }
                     ),
+                    edgePadding: Binding(
+                        get: { config.outerPaddingPerMonitor[screen.localizedName] ?? EdgePadding() },
+                        set: { newVal in
+                            config.outerPaddingPerMonitor[screen.localizedName] = newVal.isEmpty ? nil : newVal
+                        }
+                    ),
+                    workspaces: Binding(
+                        get: { Set(config.workspaceMonitors[screen.localizedName] ?? []) },
+                        set: { newVal in
+                            config.workspaceMonitors = WorkspaceHomeResolver.setting(
+                                newVal, for: screen.localizedName, in: config.workspaceMonitors)
+                        }
+                    ),
+                    showsWorkspaces: !config.linkedMonitors,
                     gap: config.gapSize,
                     padding: config.outerPadding,
                     isLast: idx == screens.count - 1
@@ -524,13 +523,21 @@ private struct MonitorSplitsRow: View {
     let screen: NSScreen
     @Binding var tilingEnabled: Bool
     @Binding var maxSplits: Int
+    // a nil side = the shared outer padding
+    @Binding var edgePadding: EdgePadding
+    // the workspaces put on this monitor; empty = default homes
+    @Binding var workspaces: Set<Int>
+    // linked monitors show one workspace everywhere, so homes are moot
+    let showsWorkspaces: Bool
     let gap: CGFloat
     let padding: CGFloat
     let isLast: Bool
 
+    @State private var editingPadding = false
+
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: HyprSpacing.sm) {
+            VStack(alignment: .leading, spacing: HyprSpacing.md) {
                 let res = screen.frame.size
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -547,14 +554,41 @@ private struct MonitorSplitsRow: View {
                 }
 
                 if tilingEnabled {
-                    MaxSplitsPicker(value: $maxSplits)
+                    MonitorSettingLine("Max splits") {
+                        MaxSplitsPicker(value: $maxSplits)
+                    }
 
-                    let aspect = res.width / res.height
+                    MonitorSettingLine("Edge padding") {
+                        HStack(spacing: HyprSpacing.sm) {
+                            Text(EdgePaddingSummary.text(edgePadding, fallback: padding))
+                                .font(.hyprBody)
+                                .foregroundStyle(edgePadding.isEmpty ? Color.hyprTextSecondary : Color.hyprTextPrimary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: HyprSpacing.sm)
+                            Button("Edit…") { editingPadding = true }
+                                .controlSize(.small)
+                                .popover(isPresented: $editingPadding, arrowEdge: .bottom) {
+                                    EdgePaddingEditor(monitorName: screen.localizedName,
+                                                      aspect: res.width / res.height,
+                                                      edgePadding: $edgePadding,
+                                                      fallback: padding)
+                                }
+                        }
+                    }
+
+                    if showsWorkspaces {
+                        MonitorSettingLine("Workspaces") {
+                            WorkspaceTogglePicker(selection: $workspaces)
+                        }
+                    }
+
                     DwindlePreview(
                         windowCount: maxSplits + 1,
-                        aspectRatio: aspect,
+                        aspectRatio: res.width / res.height,
                         gap: gap,
-                        padding: padding
+                        padding: padding,
+                        edges: edgePadding
                     )
                     .frame(height: 110)
                     .background(
@@ -575,6 +609,202 @@ private struct MonitorSplitsRow: View {
                     .fill(Color.hyprSeparator)
                     .frame(height: 0.5)
                     .padding(.horizontal, HyprSpacing.md)
+            }
+        }
+    }
+}
+
+// label column + control, one per monitor setting
+struct MonitorSettingLine<Content: View>: View {
+    let label: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ label: String, @ViewBuilder content: @escaping () -> Content) {
+        self.label = label
+        self.content = content
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: HyprSpacing.md) {
+            Text(label)
+                .font(.hyprBody)
+                .foregroundStyle(Color.hyprTextSecondary)
+                .frame(width: 100, alignment: .leading)
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - edge padding
+
+enum EdgePaddingSummary {
+    static func pt(_ value: CGFloat) -> String {
+        String(format: "%g", Double(value))
+    }
+
+    // "Default (8 pt)", "Top 40 pt", "Top 40 pt, Left 0 pt"
+    static func text(_ edges: EdgePadding, fallback: CGFloat) -> String {
+        if edges.isEmpty { return "Default (\(pt(fallback)) pt)" }
+        let sides = [("Top", edges.top), ("Left", edges.left), ("Bottom", edges.bottom), ("Right", edges.right)]
+        let set = sides.compactMap { name, value in value.map { "\(name) \(pt($0)) pt" } }
+        if set.count == 4, let top = edges.top,
+           [edges.left, edges.bottom, edges.right].allSatisfy({ $0 == top }) {
+            return "\(pt(top)) pt on every side"
+        }
+        return set.joined(separator: ", ")
+    }
+}
+
+// popover: one field per screen edge around a small screen diagram
+struct EdgePaddingEditor: View {
+    let monitorName: String
+    let aspect: CGFloat
+    @Binding var edgePadding: EdgePadding
+    let fallback: CGFloat
+    @Environment(\.dismiss) private var dismiss
+
+    // field text per side, so a half-typed number isn't reformatted
+    @State private var top: String
+    @State private var left: String
+    @State private var bottom: String
+    @State private var right: String
+
+    init(monitorName: String, aspect: CGFloat, edgePadding: Binding<EdgePadding>, fallback: CGFloat) {
+        self.monitorName = monitorName
+        self.aspect = aspect
+        self._edgePadding = edgePadding
+        self.fallback = fallback
+        let edges = edgePadding.wrappedValue
+        _top = State(initialValue: edges.top.map(EdgePaddingSummary.pt) ?? "")
+        _left = State(initialValue: edges.left.map(EdgePaddingSummary.pt) ?? "")
+        _bottom = State(initialValue: edges.bottom.map(EdgePaddingSummary.pt) ?? "")
+        _right = State(initialValue: edges.right.map(EdgePaddingSummary.pt) ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: HyprSpacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Edge padding")
+                    .font(.hyprBody.weight(.semibold))
+                Text(monitorName)
+                    .font(.hyprCaption)
+                    .foregroundStyle(Color.hyprTextTertiary)
+            }
+
+            VStack(spacing: HyprSpacing.sm) {
+                field("Top", $top, \.top)
+                HStack(spacing: HyprSpacing.sm) {
+                    field("Left", $left, \.left)
+                    screenDiagram
+                    field("Right", $right, \.right)
+                }
+                field("Bottom", $bottom, \.bottom)
+            }
+            .frame(maxWidth: .infinity)
+
+            Text("Space between tiled windows and each edge of this screen. "
+                 + "Empty sides use the outer padding (\(EdgePaddingSummary.pt(fallback)) pt).")
+                .font(.hyprCaption)
+                .foregroundStyle(Color.hyprTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Button("Reset") {
+                    top = ""; left = ""; bottom = ""; right = ""
+                    edgePadding = EdgePadding()
+                }
+                .disabled(edgePadding.isEmpty)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .controlSize(.small)
+        }
+        .padding(HyprSpacing.lg)
+        .frame(width: 360)
+    }
+
+    private var effective: (top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+        (edgePadding.top ?? fallback, edgePadding.left ?? fallback,
+         edgePadding.bottom ?? fallback, edgePadding.right ?? fallback)
+    }
+
+    // not to scale: big enough that 8 pt still shows
+    private var screenDiagram: some View {
+        let width: CGFloat = 150
+        let height = width / max(aspect, 0.5)
+        let cap = height * 0.35
+        let inset = { (value: CGFloat) in min(value * 0.5, cap) }
+        let e = effective
+        return RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
+            .fill(Color.hyprBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
+                    .strokeBorder(Color.hyprSeparator, lineWidth: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(Color.hyprCyan.opacity(0.35))
+                    .padding(EdgeInsets(top: inset(e.top), leading: inset(e.left),
+                                        bottom: inset(e.bottom), trailing: inset(e.right)))
+            )
+            .frame(width: width, height: height)
+            .accessibilityHidden(true)
+    }
+
+    // empty = the outer padding, shown as the dimmed placeholder
+    private func field(_ name: String, _ text: Binding<String>,
+                       _ side: WritableKeyPath<EdgePadding, CGFloat?>) -> some View {
+        HStack(spacing: HyprSpacing.xs) {
+            TextField(name, text: text, prompt: Text(EdgePaddingSummary.pt(fallback)))
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .frame(width: 44)
+                .help(name)
+                .onChange(of: text.wrappedValue) { newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty {
+                        edgePadding[keyPath: side] = nil
+                    } else if let value = Double(trimmed) {
+                        edgePadding[keyPath: side] = CGFloat(max(value, 0))
+                    }
+                }
+            Text("pt")
+                .font(.hyprCaption)
+                .foregroundStyle(Color.hyprTextSecondary)
+        }
+    }
+}
+
+// MARK: - workspace toggles (1–10)
+
+private struct WorkspaceTogglePicker: View {
+    @Binding var selection: Set<Int>
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Constants.workspaceRange, id: \.self) { n in
+                let on = selection.contains(n)
+                Button {
+                    if on { selection.remove(n) } else { selection.insert(n) }
+                } label: {
+                    Text("\(n)")
+                        .font(.hyprMonoSm)
+                        .frame(width: 26, height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
+                                .fill(on ? Color.hyprCyan.opacity(0.18) : Color.hyprSurfaceElevated)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: HyprRadius.sm, style: .continuous)
+                                .strokeBorder(on ? Color.hyprCyan.opacity(0.55) : Color.hyprSeparator,
+                                              lineWidth: 0.5)
+                        )
+                        .foregroundStyle(on ? Color.hyprCyan : Color.hyprTextSecondary)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -612,15 +842,12 @@ private struct MaxSplitsPicker: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text("max splits")
-                    .font(.hyprCaption)
-                    .foregroundStyle(Color.hyprTextSecondary)
-                    .padding(.leading, HyprSpacing.xs)
             }
             Text("Up to \(RetileAllPlanner.workspaceCapacity(maxDepth: value)) tiles per workspace, depending on window sizes. "
                  + "New windows use the next workspace when full.")
                 .font(.hyprCaption)
                 .foregroundStyle(Color.hyprTextTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -632,6 +859,8 @@ private struct DwindlePreview: View {
     let aspectRatio: CGFloat
     let gap: CGFloat
     let padding: CGFloat
+    // per-side overrides; a nil side uses `padding`
+    var edges = EdgePadding()
 
     var body: some View {
         GeometryReader { geo in
@@ -644,9 +873,13 @@ private struct DwindlePreview: View {
 
             let scale = previewSize.width / (aspectRatio * 1000)
             let scaledGap = max(gap * scale, 1)
-            let scaledPad = max(padding * scale, 1)
+            let pad = { (side: CGFloat?) in max((side ?? padding) * scale, 1) }
+            let top = pad(edges.top), left = pad(edges.left)
+            let bottom = pad(edges.bottom), right = pad(edges.right)
 
-            let innerRect = outerRect.insetBy(dx: scaledPad, dy: scaledPad)
+            let innerRect = CGRect(x: outerRect.minX + left, y: outerRect.minY + top,
+                                   width: max(outerRect.width - left - right, 1),
+                                   height: max(outerRect.height - top - bottom, 1))
             let rects = DwindleLayout.rects(count: windowCount, in: innerRect, gap: scaledGap)
 
             RoundedRectangle(cornerRadius: 4)

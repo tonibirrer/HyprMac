@@ -316,11 +316,6 @@ final class ActionDispatcher {
             floatingController.raiseBehind()
         }
 
-        // let IPC subscribers (status bars) refresh their window lists.
-        if changes.needsRetile {
-            NotificationCenter.default.post(name: .hyprMacWindowsChanged, object: nil)
-        }
-
         hasCompletedInitialDiscovery = true
         return retileResults
     }

@@ -83,7 +83,7 @@ class BSPTree {
     /// — inserting a full-height window here would force that stack into
     /// columns. Used to steer full-height newcomers toward slots that are
     /// already columns.
-    func hasStackedAncestor(_ leaf: BSPNode, in rect: CGRect, gap: CGFloat, padding: OuterPadding) -> Bool {
+    func hasStackedAncestor(_ leaf: BSPNode, in rect: CGRect, gap: CGFloat, padding: CGFloat) -> Bool {
         var node = leaf.parent
         while let p = node {
             if let r = rectForNode(p, in: rect, gap: gap, padding: padding),
@@ -376,13 +376,13 @@ class BSPTree {
     ///   already at the depth ceiling.
     @discardableResult
     func smartInsert(_ window: HyprWindow, maxDepth: Int, in rect: CGRect,
-                     gap: CGFloat, padding: OuterPadding, minSlotDimension: CGFloat) -> Bool {
+                     gap: CGFloat, padding: CGFloat, minSlotDimension: CGFloat) -> Bool {
         if root.isEmpty {
             root.window = window
             return true
         }
 
-        let padded = padding.inset(rect)
+        let padded = rect.insetBy(dx: padding, dy: padding)
         let leaves = root.allLeavesRightToLeft()
 
         for leaf in leaves {
@@ -439,7 +439,7 @@ class BSPTree {
     /// unrelated windows on every close/hide. Kept for explicit rebuilds
     /// (tests, potential future Retile All hook). All split overrides and
     /// user-set ratios are dropped — a structural rebuild voids both.
-    func compact(maxDepth: Int, in rect: CGRect, gap: CGFloat, padding: OuterPadding, minSlotDimension: CGFloat) {
+    func compact(maxDepth: Int, in rect: CGRect, gap: CGFloat, padding: CGFloat, minSlotDimension: CGFloat) {
         let windows = allWindows // left-to-right preserves insertion order
         guard windows.count > 1 else { return }
 
@@ -482,12 +482,12 @@ class BSPTree {
     /// (horizontal ↔ vertical) regardless of what dwindle would have picked
     /// from rect aspect ratio. Sets `splitOverride` so the choice survives
     /// retiles. No-op if `window` is the root (no parent to flip).
-    func toggleSplit(for window: HyprWindow, in rect: CGRect, gap: CGFloat, padding: OuterPadding) {
+    func toggleSplit(for window: HyprWindow, in rect: CGRect, gap: CGFloat, padding: CGFloat) {
         guard let leaf = root.find(window), let parent = leaf.parent else { return }
 
         // figure out what direction this parent would normally use
         // we need to compute the rect this parent occupies to know the default direction
-        let paddedRect = padding.inset(rect)
+        let paddedRect = rect.insetBy(dx: padding, dy: padding)
         let currentDir = resolveDirection(of: parent, in: paddedRect, gap: gap)
 
         // flip it
@@ -537,8 +537,8 @@ class BSPTree {
     /// Returns nil if `target` isn't reachable from `root`. Used by smart-insert
     /// backtracking and adjustForMinSizes to query post-layout geometry without
     /// re-running the full layout pass.
-    func rectForNode(_ target: BSPNode, in rect: CGRect, gap: CGFloat, padding: OuterPadding) -> CGRect? {
-        let padded = padding.inset(rect)
+    func rectForNode(_ target: BSPNode, in rect: CGRect, gap: CGFloat, padding: CGFloat) -> CGRect? {
+        let padded = rect.insetBy(dx: padding, dy: padding)
         return rectForNodeHelper(node: root, target: target, rect: padded, gap: gap)
     }
 
@@ -593,9 +593,9 @@ class BSPTree {
     /// never ask, so a hand-set ratio still refuses a swap or an arrival
     /// up front.
     func adjustForMinSizes(_ conflicts: [(window: HyprWindow, actual: CGSize)],
-                           in rect: CGRect, gap: CGFloat, padding: OuterPadding,
+                           in rect: CGRect, gap: CGFloat, padding: CGFloat,
                            givingWayOnUserSet: Bool = false) {
-        let padded = padding.inset(rect)
+        let padded = rect.insetBy(dx: padding, dy: padding)
 
         for (window, actualSize) in conflicts {
             guard let leaf = root.find(window) else { continue }
@@ -674,8 +674,8 @@ class BSPTree {
     /// Sub-pixel changes below `TilingConfig.manualResizeRatioTolerance` are
     /// skipped to avoid AX writes from drag jitter.
     func applyResizeDelta(for window: HyprWindow, newFrame: CGRect,
-                          in rect: CGRect, gap: CGFloat, padding: OuterPadding) {
-        let padded = padding.inset(rect)
+                          in rect: CGRect, gap: CGFloat, padding: CGFloat) {
+        let padded = rect.insetBy(dx: padding, dy: padding)
         guard let leaf = root.find(window) else { return }
 
         var node = leaf
@@ -730,8 +730,8 @@ class BSPTree {
     /// Compute layout rects for every window in the tree, with outer padding
     /// applied. Output is in tree iteration order (left-to-right). Pure
     /// function — no side effects on the tree.
-    func layout(in rect: CGRect, gap: CGFloat, padding: OuterPadding) -> [(HyprWindow, CGRect)] {
-        let padded = padding.inset(rect)
+    func layout(in rect: CGRect, gap: CGFloat, padding: CGFloat) -> [(HyprWindow, CGRect)] {
+        let padded = rect.insetBy(dx: padding, dy: padding)
         return root.layout(in: padded, gap: gap)
     }
 

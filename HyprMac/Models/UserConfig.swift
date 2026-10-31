@@ -93,6 +93,13 @@ class UserConfig: ObservableObject {
     @Published var gameBundleIDs: Set<String> {
         didSet { if !isReloading { save() } }
     }
+    @Published var outerPaddingPerMonitor: [String: EdgePadding] {
+        didSet { persistRuntimeChange() }
+    }
+    // monitor name → workspaces that live there. empty = the formula homes
+    @Published var workspaceMonitors: [String: [Int]] {
+        didSet { persistRuntimeChange() }
+    }
     @Published var showFocusBorder: Bool {
         didSet { persistRuntimeChange() }
     }
@@ -168,11 +175,6 @@ class UserConfig: ObservableObject {
     @Published var appRules: [AppRule] {
         didSet { if !isReloading { save() } }
     }
-    // per-side overrides of `outerPadding` (nil side = uniform value);
-    // e.g. top-only padding to reserve space for sketchybar
-    @Published var outerPaddingSides: PaddingSides {
-        didSet { if !isReloading { save() } }
-    }
     // per-workspace wallpaper image paths, keyed by workspace number as a
     // string ("1"..."9"). workspaces without an entry keep the current
     // desktop image.
@@ -201,15 +203,6 @@ class UserConfig: ObservableObject {
         return resolvedFocusBorderColor
     }
 
-    /// The uniform slider value with per-side overrides applied — what the
-    /// tiling engine actually consumes.
-    var resolvedOuterPadding: OuterPadding {
-        OuterPadding(top: outerPaddingSides.top ?? outerPadding,
-                     left: outerPaddingSides.left ?? outerPadding,
-                     bottom: outerPaddingSides.bottom ?? outerPadding,
-                     right: outerPaddingSides.right ?? outerPadding)
-    }
-
     // restore the saved layout for this display setup at launch. saved to
     // config.json; read once at startup, so nothing live needs re-applying
     @Published var restoreLayoutOnLaunch: Bool {
@@ -219,6 +212,28 @@ class UserConfig: ObservableObject {
     // per-app workspace pins. read when a window is placed, so nothing
     // live needs re-applying on change
     @Published var windowRules: [WindowRule] {
+        didSet { guard !isReloading else { return }; save() }
+    }
+
+    // custom names for workspaces 1–10, keyed "1"…"10". display only:
+    // every reader looks it up through `workspaceDisplayName`
+    @Published var workspaceNames: [String: String] {
+        didSet { guard !isReloading else { return }; save() }
+    }
+
+    // status bar export: state.json, the change hook and hyprmac:// URLs.
+    // read on every change, so nothing live needs re-applying. kept in
+    // monitor-config.json (per machine), set by hand, no Settings UI
+    @Published var statusExportEnabled: Bool {
+        didSet { guard !isReloading else { return }; save() }
+    }
+    // run after each state.json write, like a runCommand keybind (no shell)
+    @Published var statusHookCommand: String? {
+        didSet { guard !isReloading else { return }; save() }
+    }
+    // hyprmac://action/… links from other apps. per machine like the export,
+    // so turning it on here doesn't turn it on for every synced Mac
+    @Published var externalControlEnabled: Bool {
         didSet { guard !isReloading else { return }; save() }
     }
 
@@ -257,6 +272,12 @@ class UserConfig: ObservableObject {
 
         let monitorConfig = store.loadSavedMonitorConfig()
         let savedConfig = store.loadSavedConfig()
+        // local-only from the start, so the synced config has nothing to migrate.
+        // set before the other stored properties: once init is complete, the
+        // optional hook command goes through its setter and didSet saves
+        self.statusExportEnabled = monitorConfig?.statusExportEnabled ?? false
+        self.statusHookCommand = monitorConfig?.statusHookCommand
+        self.externalControlEnabled = monitorConfig?.externalControlEnabled ?? false
 
         if let saved = savedConfig {
             self.keybinds = Self.mergeNewDefaults(saved: saved.keybinds)
@@ -286,12 +307,12 @@ class UserConfig: ObservableObject {
             self.scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
             self.appRules = saved.appRules ?? []
-            self.outerPaddingSides = saved.outerPaddingSides ?? .none
             self.workspaceWallpapers = saved.workspaceWallpapers ?? [:]
             self.workspaceColors = saved.workspaceColors ?? [:]
             self.stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
             self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = saved.windowRules ?? []
+            self.workspaceNames = saved.workspaceNames ?? [:]
         } else {
             self.keybinds = Keybind.defaults
             self.gapSize = UserConfigDefaults.gapSize
@@ -318,12 +339,12 @@ class UserConfig: ObservableObject {
             self.scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
             self.appRules = []
-            self.outerPaddingSides = .none
             self.workspaceWallpapers = [:]
             self.workspaceColors = [:]
             self.stickyWorkspaces = []
             self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = []
+            self.workspaceNames = [:]
         }
 
         // monitor settings: prefer the local file; fall back to (and migrate
@@ -340,16 +361,33 @@ class UserConfig: ObservableObject {
         self.singleScreenRestore = monitorConfig?.singleScreenRestore
         self.gameMonitor = monitorConfig?.gameMonitor
         self.gameBundleIDs = Set(monitorConfig?.gameBundleIDs ?? [])
+        // local-only upstream. the fork's global per-side padding from the
+        // synced config moves onto every monitor known by name
+        var knownMonitors = Set(NSScreen.screens.map(\.localizedName))
+        knownMonitors.formUnion(resolved.maxSplits.keys)
+        knownMonitors.formUnion(resolved.disabled)
+        knownMonitors.formUnion(monitorConfig?.workspaceMonitors?.keys.map { $0 } ?? [])
+        knownMonitors.formUnion([monitorConfig?.gameMonitor, monitorConfig?.accordionMonitor].compactMap { $0 })
+        knownMonitors.formUnion(monitorConfig?.singleScreenRestore ?? [])
+        let padding = ConfigMigration.perMonitorPadding(legacy: savedConfig?.outerPaddingSides,
+                                                        existing: monitorConfig?.outerPaddingPerMonitor ?? [:],
+                                                        monitors: knownMonitors)
+        self.outerPaddingPerMonitor = padding.padding
+        self.workspaceMonitors = monitorConfig?.workspaceMonitors ?? [:]
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
         }
 
-        if resolved.needsLocalWrite {
-            store.writeSavedMonitorConfig(SavedMonitorConfig(
-                maxSplitsPerMonitor: resolved.maxSplits,
-                disabledMonitors: Array(resolved.disabled),
-                linkedMonitors: linkedMonitors))
+        if padding.migrated {
+            // both files: the overrides land locally and config.json drops
+            // the legacy key, so the migration runs once
+            hyprLog(.notice, .config, "outer padding: moved per-side padding onto "
+                    + "\(padding.padding.keys.sorted()) as per-monitor overrides")
+            store.writeSavedConfig(makeSavedConfig())
+            store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+        } else if resolved.needsLocalWrite {
+            store.writeSavedMonitorConfig(makeSavedMonitorConfig())
         }
 
         store.onFileChanged = { [weak self] in self?.reloadFromDisk() }
@@ -419,16 +457,30 @@ class UserConfig: ObservableObject {
 
     private func writeNow() {
         store.writeSavedConfig(makeSavedConfig())
-        store.writeSavedMonitorConfig(SavedMonitorConfig(
+        store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+    }
+
+    private func makeSavedMonitorConfig() -> SavedMonitorConfig {
+        // an entry with no side set is dropped, not saved
+        let savedPadding = outerPaddingPerMonitor.filter { !$0.value.isEmpty }
+        // same for a monitor with no workspaces; none at all is no mapping
+        let savedWorkspaces = workspaceMonitors.filter { !$0.value.isEmpty }
+        return SavedMonitorConfig(
             maxSplitsPerMonitor: maxSplitsPerMonitor,
             disabledMonitors: Array(disabledMonitors),
+            outerPaddingPerMonitor: savedPadding.isEmpty ? nil : savedPadding,
+            workspaceMonitors: savedWorkspaces.isEmpty ? nil : savedWorkspaces,
+            // off and empty write no key, so a machine that never opts in is unchanged
+            statusExportEnabled: statusExportEnabled ? true : nil,
+            statusHookCommand: statusHookCommand?.isEmpty == false ? statusHookCommand : nil,
+            externalControlEnabled: externalControlEnabled ? true : nil,
             linkedMonitors: linkedMonitors,
             accordionMode: accordionMode,
             accordionMonitor: accordionMonitor,
             accordionOverlap: accordionOverlap,
             singleScreenRestore: singleScreenRestore,
             gameMonitor: gameMonitor,
-            gameBundleIDs: gameBundleIDs.isEmpty ? nil : gameBundleIDs.sorted()))
+            gameBundleIDs: gameBundleIDs.isEmpty ? nil : gameBundleIDs.sorted())
     }
 
     private func persistRuntimeChange() {
@@ -467,12 +519,12 @@ class UserConfig: ObservableObject {
             windowCornerRadius: windowCornerRadiusOverride,
             scratchpadTileByDefault: scratchpadTileByDefault,
             scratchpadRegionInset: scratchpadRegionInset,
-            outerPaddingSides: outerPaddingSides == .none ? nil : outerPaddingSides,
             workspaceWallpapers: workspaceWallpapers.isEmpty ? nil : workspaceWallpapers,
             workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors,
             stickyWorkspaces: stickyWorkspaces.isEmpty ? nil : stickyWorkspaces.sorted(),
             restoreLayoutOnLaunch: restoreLayoutOnLaunch,
             windowRules: windowRules.isEmpty ? nil : windowRules,
+            workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames,
             appRules: appRules.isEmpty ? nil : appRules)
     }
 
@@ -496,6 +548,8 @@ class UserConfig: ObservableObject {
         singleScreenRestore = nil
         gameMonitor = nil
         gameBundleIDs = []
+        outerPaddingPerMonitor = [:]
+        workspaceMonitors = [:]
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
@@ -511,12 +565,15 @@ class UserConfig: ObservableObject {
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
         appRules = []
-        outerPaddingSides = .none
         workspaceWallpapers = [:]
         workspaceColors = [:]
         stickyWorkspaces = []
         restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = []
+        workspaceNames = [:]
+        statusExportEnabled = false
+        statusHookCommand = nil
+        externalControlEnabled = false
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -583,6 +640,11 @@ class UserConfig: ObservableObject {
     }
 
     func reloadFromDisk() {
+        // a coalesced save still pending holds changes newer than the file.
+        // reading the file first put the older value back in memory, and the
+        // pending save then wrote that older value out: a setting jumped
+        // back while its slider was still moving. write it, then read
+        flushPendingSave()
         guard let saved = store.loadSavedConfig() else { return }
 
         isReloading = true
@@ -611,12 +673,12 @@ class UserConfig: ObservableObject {
         scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
         appRules = saved.appRules ?? []
-        outerPaddingSides = saved.outerPaddingSides ?? .none
         workspaceWallpapers = saved.workspaceWallpapers ?? [:]
         workspaceColors = saved.workspaceColors ?? [:]
         stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
         restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = saved.windowRules ?? []
+        workspaceNames = saved.workspaceNames ?? [:]
 
         // monitor settings come from the local file, not the synced config
         if let mc = store.loadSavedMonitorConfig() {
@@ -629,6 +691,11 @@ class UserConfig: ObservableObject {
             singleScreenRestore = mc.singleScreenRestore
             gameMonitor = mc.gameMonitor
             gameBundleIDs = Set(mc.gameBundleIDs ?? [])
+            outerPaddingPerMonitor = mc.outerPaddingPerMonitor ?? [:]
+            workspaceMonitors = mc.workspaceMonitors ?? [:]
+            statusExportEnabled = mc.statusExportEnabled ?? false
+            statusHookCommand = mc.statusHookCommand
+            externalControlEnabled = mc.externalControlEnabled ?? false
         }
         // else keep current values — don't overwrite with synced defaults
 
@@ -671,6 +738,16 @@ extension SavedConfig {
             scratchpadTileByDefault: UserConfigDefaults.scratchpadTileByDefault,
             scratchpadRegionInset: UserConfigDefaults.scratchpadRegionInset,
             restoreLayoutOnLaunch: UserConfigDefaults.restoreLayoutOnLaunch)
+    }
+}
+
+extension UserConfig {
+    /// The custom name of `workspace`, or `fallback` ("Workspace N" by
+    /// default) when it has none. A blank name counts as none.
+    static func workspaceDisplayName(_ workspace: Int, names: [String: String],
+                                     fallback: String? = nil) -> String {
+        let name = names[String(workspace)]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? fallback ?? "Workspace \(workspace)" : name
     }
 }
 

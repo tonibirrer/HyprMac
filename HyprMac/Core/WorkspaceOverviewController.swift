@@ -53,11 +53,13 @@ enum WorkspaceOverviewPresentation {
             || (window.bundleID?.localizedCaseInsensitiveContains(needle) ?? false)
     }
 
-    static func visibleWorkspaces(_ snapshots: [WorkspaceSnapshot], query: String) -> [WorkspaceSnapshot] {
+    static func visibleWorkspaces(_ snapshots: [WorkspaceSnapshot], query: String,
+                                  names: [String: String]) -> [WorkspaceSnapshot] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return snapshots }
         return snapshots.filter { workspace in
             String(workspace.id).contains(needle)
+                || (cardName(workspace.id, names: names)?.localizedCaseInsensitiveContains(needle) ?? false)
                 || workspace.monitorName.localizedCaseInsensitiveContains(needle)
                 || workspace.windows.contains { windowMatches($0, query: needle) }
         }
@@ -98,10 +100,17 @@ enum WorkspaceOverviewPresentation {
         return min(maximum, max(320, grid + headerAndInsets + scratchpad))
     }
 
-    /// Everything the workspace-switch HUD says. Caption and number only —
-    /// the monitor name belongs to the overview, not to the switch flash.
-    static func switchHUDText(workspace: Int) -> (caption: String, number: String) {
-        ("WORKSPACE", "\(workspace)")
+    /// The custom name an overview card shows after its number, or nil.
+    static func cardName(_ workspace: Int, names: [String: String]) -> String? {
+        let name = UserConfig.workspaceDisplayName(workspace, names: names, fallback: "")
+        return name.isEmpty ? nil : name
+    }
+
+    /// Everything the workspace-switch HUD says. Caption and number (or the
+    /// custom name) only — the monitor name belongs to the overview, not to
+    /// the switch flash.
+    static func switchHUDText(workspace: Int, names: [String: String]) -> (caption: String, number: String) {
+        ("WORKSPACE", UserConfig.workspaceDisplayName(workspace, names: names, fallback: "\(workspace)"))
     }
 }
 
@@ -327,13 +336,16 @@ private struct WorkspaceSwitchHUD: View {
     private var palette: OverlayPalette { OverlayPalette(scheme: colorScheme) }
     let workspace: Int
     private var text: (caption: String, number: String) {
-        WorkspaceOverviewPresentation.switchHUDText(workspace: workspace)
+        WorkspaceOverviewPresentation.switchHUDText(workspace: workspace,
+                                                    names: UserConfig.shared.workspaceNames)
     }
     var body: some View {
         VStack(spacing: 5) {
             Text(text.caption).font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .tracking(2).foregroundStyle(Color.hyprMagenta)
+            // a custom name has no length limit; keep the panel on screen
             Text(text.number).font(.system(size: 40, weight: .bold, design: .rounded))
+                .lineLimit(1).frame(maxWidth: 480)
                 .foregroundStyle(.primary)
         }
         .padding(.horizontal, 26).padding(.vertical, 15)
@@ -370,7 +382,8 @@ struct WorkspaceOverviewView: View {
             }
             ScrollView {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top), count: WorkspaceOverviewPresentation.columnCount), spacing: 12) {
-                    ForEach(WorkspaceOverviewPresentation.visibleWorkspaces(model.snapshots, query: query)) { workspace in
+                    ForEach(WorkspaceOverviewPresentation.visibleWorkspaces(model.snapshots, query: query,
+                                                                                  names: config.workspaceNames)) { workspace in
                         WorkspaceCard(workspace: workspace,
                                       selectWorkspace: selectWorkspace,
                                       selectWindow: selectWindow)
@@ -458,8 +471,14 @@ private struct WorkspaceCard: View {
         VStack(alignment: .leading, spacing: 9) {
             Button { selectWorkspace(workspace.id) } label: {
                 HStack {
+                    let name = WorkspaceOverviewPresentation.cardName(workspace.id, names: config.workspaceNames)
+                    // the number stays: the overview's digit keys switch by it
                     Text("\(workspace.id)").font(.system(size: 20, weight: .bold, design: .rounded))
+                    if let name {
+                        Text(name).font(.system(size: 15, weight: .semibold, design: .rounded)).lineLimit(1)
+                    }
                     Text(workspace.monitorName).font(.system(size: 11, design: .monospaced)).lineLimit(1)
+                        .foregroundStyle(name == nil ? HierarchicalShapeStyle.primary : .secondary)
                     Spacer()
                     if workspace.isActive { Text("ACTIVE").font(.system(size: 9, weight: .bold, design: .monospaced)).foregroundStyle(Color.hyprCyan) }
                 }

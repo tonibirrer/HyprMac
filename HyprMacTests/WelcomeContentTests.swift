@@ -3,19 +3,12 @@ import XCTest
 import Carbon
 
 final class WelcomeContentTests: XCTestCase {
-    func testWhatsNewDescribesOnlyThe0180Changes() {
+    func testWhatsNewDescribesOnlyThe0201Changes() {
         let features = WhatsNewFeatures.current
 
-        XCTAssertEqual(features.map(\.title), [
-            "Steadier Tiling",
-            "Displays After Sleep",
-            "Frozen Apps Don't Stall Tiling",
-            "Live Overview",
-            "Your Floating Color Everywhere"
-        ])
-        XCTAssertEqual(features.compactMap(\.credit), Array(repeating: "@Amin-El-Sayed", count: 3))
-        XCTAssertEqual(features.filter { $0.tint == .magenta }.map(\.title), ["Your Floating Color Everywhere"])
-        XCTAssertFalse(features.map(\.title).contains("Pin Apps to Workspaces"))
+        XCTAssertEqual(features.map(\.title), ["No More Empty Gaps"])
+        XCTAssertEqual(features.compactMap(\.credit), [])
+        XCTAssertTrue(features.allSatisfy { $0.tint == .cyan })
         XCTAssertEqual(WelcomeContent.productURL.absoluteString, "https://hyprmac.app/")
     }
 

@@ -31,6 +31,81 @@ final class FrameReadbackPollerTests: XCTestCase {
         XCTAssertEqual(writes, ["position", "size", "size"])
     }
 
+    // issue #43, live trace 22:51:45: Ghostty parked at the hide corner with
+    // 1708x950, revealed into the Dell's bottom slot. Put at the slot origin
+    // with its old size it hangs below the screen, and the app ignores both
+    // size writes: `size→(-956,559,1708,905)`.
+    private final class Ghostty {
+        var frame: CGRect
+        var writes: [String] = []
+        var time: TimeInterval = 0
+        init(_ frame: CGRect) { self.frame = frame }
+
+        func io(screen: CGRect) -> FrameSizingIO {
+            FrameSizingIO(
+                setMessagingTimeout: { _, _ in .success },
+                writeSize: { [unowned self] _, size, _ in
+                    writes.append("size")
+                    if screen.contains(frame) { frame.size = size } else { frame.size.height = 905 }
+                    return .success
+                },
+                writePosition: { [unowned self] _, position, _ in
+                    writes.append("position"); frame.origin = position; return .success
+                },
+                readPosition: { [unowned self] _, _ in (.success, frame.origin) },
+                readSize: { [unowned self] _, _ in (.success, frame.size) },
+                now: { [unowned self] in time }, sleep: { [unowned self] in time += $0 },
+                currentGeneration: { 1 })
+        }
+    }
+
+    private let dellUsable = CGRect(x: -1920, y: 29, width: 1920, height: 1051)
+    private let parked = CGRect(x: 3439, y: 1472, width: 1708, height: 950)
+    private let bottomSlot = CGRect(x: -956, y: 558.5, width: 948, height: 513.5)
+
+    func testRevealStagesAParkedWindowWhoseOldSizeWouldHangOffTheScreen() {
+        let window = makeWindow(id: 43)
+        let app = Ghostty(parked)
+        let staging = TilingEngine.stagingOrigins(originals: [43: parked],
+                                                  targets: [(43, bottomSlot)],
+                                                  destination: dellUsable)
+        XCTAssertEqual(staging, [43: CGPoint(x: -1708, y: 130)])
+
+        let io = app.io(screen: dellUsable)
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyWorkspaceReveal([(window, bottomSlot)], positionFirstWindowIDs: [43],
+                                stagingOrigins: staging,
+                                usableFrame: dellUsable, gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertEqual(app.frame, bottomSlot)
+        XCTAssertEqual(app.writes, ["position", "size", "position", "size"])
+    }
+
+    func testStagingLeavesAWindowAloneWhenItsOldSizeStandsOnTheScreenOrCannot() {
+        let topSlot = CGRect(x: -1912, y: 37, width: 948, height: 1035)
+        let staging = TilingEngine.stagingOrigins(
+            originals: [1: CGRect(x: 3439, y: 1472, width: 1904, height: 950),
+                        2: CGRect(x: 3439, y: 1472, width: 3424, height: 950)],
+            targets: [(1, topSlot), (2, bottomSlot)],
+            destination: dellUsable)
+        XCTAssertEqual(staging, [:])
+    }
+
+    func testAPositionFirstRefusalIsMarkedSoItNeverBecomesTheAppsHint() {
+        let window = makeWindow(id: 44)
+        let app = Ghostty(parked)
+        let io = app.io(screen: dellUsable)
+
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyWorkspaceReveal([(window, bottomSlot)], positionFirstWindowIDs: [44],
+                                usableFrame: dellUsable, gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .rejected(.outsideUsableFrame(44)))
+        XCTAssertEqual(result.observations.map(\.positionFirst), [true])
+        XCTAssertEqual(app.frame.size, CGSize(width: 1708, height: 905))
+    }
+
     func testWorkspaceRevealStopsWhenSupersededWhilePositionSettles() {
         let window = makeWindow(id: 32)
         let target = CGRect(x: -1072, y: -88, width: 1064, height: 1874)

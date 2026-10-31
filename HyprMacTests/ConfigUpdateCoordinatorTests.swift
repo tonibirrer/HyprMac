@@ -30,6 +30,8 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         padding: CGFloat = 8,
         splits: [String: Int] = [:],
         disabled: Set<String> = [],
+        paddingOverrides: [String: EdgePadding] = [:],
+        workspaceMonitors: [String: [Int]] = [:],
         overlayAppearance: OverlayAppearance = .system,
         showBorder: Bool = true,
         focusColor: String? = nil,
@@ -48,6 +50,8 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             enabled: true, keybinds: [], hyprKey: .capsLock,
             gapSize: gap, outerPadding: padding,
             maxSplitsPerMonitor: splits, disabledMonitors: disabled,
+            outerPaddingPerMonitor: paddingOverrides,
+            workspaceMonitors: workspaceMonitors,
             overlayAppearance: overlayAppearance,
             showFocusBorder: showBorder, focusBorderColorHex: focusColor,
             floatingBorderColorHex: floatingColor,
@@ -70,6 +74,8 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         coordinator.onLayoutGeometry = { _, _ in effects += 1 }
         coordinator.onMaximumSplits = { _ in effects += 1 }
         coordinator.onDisabledMonitors = { _ in effects += 1 }
+        coordinator.onOuterPaddingOverride = { _ in effects += 1 }
+        coordinator.onWorkspaceMonitors = { _ in effects += 1 }
         coordinator.onChrome = { _, _ in effects += 1 }
         coordinator.onScratchpadRegion = { _ in effects += 1 }
         coordinator.onScratchpadEntryMode = { _ in effects += 1 }
@@ -77,6 +83,83 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
         coordinator.receive(original)
 
         XCTAssertEqual(effects, 0)
+    }
+
+    func testOuterPaddingOverrideChangeReachesOnlyItsRoute() {
+        let coordinator = ConfigUpdateCoordinator(initial: state())
+        var overrides: [[String: EdgePadding]] = []
+        var other = 0
+        coordinator.onOuterPaddingOverride = { overrides.append($0) }
+        coordinator.onLayoutGeometry = { _, _ in other += 1 }
+        coordinator.onMaximumSplits = { _ in other += 1 }
+        coordinator.onDisabledMonitors = { _ in other += 1 }
+        coordinator.onChrome = { _, _ in other += 1 }
+
+        coordinator.receive(state(paddingOverrides: ["Main": EdgePadding(top: 36)]))
+        coordinator.receive(state(paddingOverrides: ["Main": EdgePadding(top: 36)]))
+        // another side on the same monitor is a change too
+        coordinator.receive(state(paddingOverrides: ["Main": EdgePadding(top: 36, left: 12)]))
+        coordinator.receive(state())
+
+        XCTAssertEqual(overrides, [["Main": EdgePadding(top: 36)],
+                                   ["Main": EdgePadding(top: 36, left: 12)], [:]])
+        XCTAssertEqual(other, 0)
+    }
+
+    func testWorkspaceMappingChangeReachesOnlyItsRoute() {
+        let coordinator = ConfigUpdateCoordinator(initial: state())
+        var mappings: [[String: [Int]]] = []
+        var other = 0
+        coordinator.onWorkspaceMonitors = { mappings.append($0) }
+        coordinator.onLayoutGeometry = { _, _ in other += 1 }
+        coordinator.onMaximumSplits = { _ in other += 1 }
+        coordinator.onDisabledMonitors = { _ in other += 1 }
+        coordinator.onOuterPaddingOverride = { _ in other += 1 }
+        coordinator.onChrome = { _, _ in other += 1 }
+
+        coordinator.receive(state(workspaceMonitors: ["Left": [1, 2, 3]]))
+        coordinator.receive(state(workspaceMonitors: ["Left": [1, 2, 3]]))
+        coordinator.receive(state(workspaceMonitors: ["Left": [1, 2], "Right": [3]]))
+        coordinator.receive(state())
+
+        XCTAssertEqual(mappings, [["Left": [1, 2, 3]], ["Left": [1, 2], "Right": [3]], [:]])
+        XCTAssertEqual(other, 0)
+    }
+
+    // a Settings toggle is one assignment, so one reconcile, and the file
+    // holds the mapping until no monitor has a workspace left
+    func testSettingsWorkspaceToggleReachesTheRouteOnceAndPersists() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        let config = UserConfig()
+        config.workspaceMonitors = [:]
+        let coordinator = ConfigUpdateCoordinator(initial: RuntimeConfigState(config))
+        var mappings: [[String: [Int]]] = []
+        var disabled = 0
+        coordinator.onWorkspaceMonitors = { mappings.append($0) }
+        coordinator.onDisabledMonitors = { _ in disabled += 1 }
+        coordinator.observe(config)
+
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([1, 2, 3], for: "Left", in: config.workspaceMonitors)
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([3, 4], for: "Right", in: config.workspaceMonitors)
+
+        XCTAssertEqual(mappings, [["Left": [1, 2, 3]], ["Left": [1, 2], "Right": [3, 4]]])
+        XCTAssertEqual(disabled, 0)
+        let saved = try JSONDecoder().decode(SavedMonitorConfig.self,
+                                             from: Data(contentsOf: ConfigStore.monitorConfigPath))
+        XCTAssertEqual(saved.workspaceMonitors, ["Left": [1, 2], "Right": [3, 4]])
+
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([], for: "Left", in: config.workspaceMonitors)
+        config.workspaceMonitors = WorkspaceHomeResolver.setting([], for: "Right", in: config.workspaceMonitors)
+        XCTAssertEqual(mappings.last, [:])
+        let cleared = try JSONDecoder().decode(SavedMonitorConfig.self,
+                                               from: Data(contentsOf: ConfigStore.monitorConfigPath))
+        XCTAssertNil(cleared.workspaceMonitors)
     }
 
     func testEveryVisualChangeUsesOnlyChromeRoute() {
@@ -201,6 +284,33 @@ final class ConfigUpdateCoordinatorTests: XCTestCase {
             scratchpadTileByDefault: false, scratchpadRegionInset: 0.1))
 
         XCTAssertEqual([enabled, keybinds, keys, regions, modes], [1, 1, 1, 1, 1])
+    }
+
+    // per machine: lives in monitor-config.json, never config.json, and
+    // loading it at launch must not rewrite config.json (the #50 trap)
+    func testExternalControlLivesInMonitorConfigOnly() throws {
+        try requireIsolatedHome()
+        let configBefore = try? Data(contentsOf: ConfigStore.configPath)
+        let monitorBefore = try? Data(contentsOf: ConfigStore.monitorConfigPath)
+        defer {
+            restore(configBefore, to: ConfigStore.configPath)
+            restore(monitorBefore, to: ConfigStore.monitorConfigPath)
+        }
+        UserConfig().save()
+        try Data(#"{"externalControlEnabled":true}"#.utf8).write(to: ConfigStore.monitorConfigPath)
+        let configOnDisk = try Data(contentsOf: ConfigStore.configPath)
+
+        let config = UserConfig()
+        XCTAssertTrue(config.externalControlEnabled)
+        XCTAssertEqual(try Data(contentsOf: ConfigStore.configPath), configOnDisk)
+
+        config.externalControlEnabled = false
+        let monitor = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: ConfigStore.monitorConfigPath)) as? [String: Any])
+        XCTAssertNil(monitor["externalControlEnabled"])
+        let synced = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: ConfigStore.configPath)) as? [String: Any])
+        XCTAssertNil(synced["externalControlEnabled"])
     }
 
     func testProductionObservationIsInstalledOnlyOnceAndReadsStoredValue() throws {

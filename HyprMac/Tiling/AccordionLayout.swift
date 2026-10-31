@@ -26,9 +26,9 @@ enum AccordionLayout {
     /// inset rect minus a peek strip on both sides (a window in the middle
     /// of the stack). A window whose minimum fits this fits every slot of
     /// the accordion, whatever its position or the focus.
-    static func smallestFrameSize(in rect: CGRect, padding: OuterPadding,
+    static func smallestFrameSize(in rect: CGRect, padding: CGFloat,
                                   overlap: CGFloat) -> CGSize {
-        let inner = padding.inset(rect)
+        let inner = rect.insetBy(dx: padding, dy: padding)
         guard inner.width > 0, inner.height > 0 else { return .zero }
         let peek = clampedOverlap(overlap, innerWidth: inner.width)
         return CGSize(width: inner.width - 2 * peek, height: inner.height)
@@ -46,9 +46,9 @@ enum AccordionLayout {
     static func frames(order: [HyprWindow],
                        focusedID: CGWindowID?,
                        in rect: CGRect,
-                       padding: OuterPadding,
+                       padding: CGFloat,
                        overlap: CGFloat) -> [(HyprWindow, CGRect)] {
-        let inner = padding.inset(rect)
+        let inner = rect.insetBy(dx: padding, dy: padding)
         guard !order.isEmpty, inner.width > 0, inner.height > 0 else { return [] }
 
         let idx = focusedIndex(order: order, focusedID: focusedID)
@@ -152,9 +152,9 @@ enum AccordionLayout {
                          order: [HyprWindow],
                          focusedID: CGWindowID?,
                          in rect: CGRect,
-                         padding: OuterPadding,
+                         padding: CGFloat,
                          overlap: CGFloat) -> HyprWindow? {
-        let inner = padding.inset(rect)
+        let inner = rect.insetBy(dx: padding, dy: padding)
         guard !order.isEmpty, inner.contains(point) else { return nil }
         let idx = focusedIndex(order: order, focusedID: focusedID)
         let peek = clampedOverlap(overlap, innerWidth: inner.width)

@@ -1,7 +1,7 @@
 # HyprMac
 
 > [!WARNING]
-> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style per-app rules. It builds as **HyprMacExperiments** with its own bundle ID, its own config directory (`~/Library/Application Support/HyprMacExperiments/`, iCloud folder and IPC sockets included) so it can be installed and switched with a regular HyprMac install without the two ever sharing state — the first launch copies an existing HyprMac config over once. Auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
+> **This is an experimental fork** ([upstream: zacharytgray/HyprMac](https://github.com/zacharytgray/HyprMac)) used to try out some opinionated ideas — starting with Hyprland-style per-app rules. It builds as **HyprMacExperiments** with its own bundle ID, its own config directory (`~/Library/Application Support/HyprMacExperiments/`, iCloud folder and status bar state file included, plus its own `hyprmac-experiments://` link scheme) so it can be installed and switched with a regular HyprMac install without the two ever sharing state — the first launch copies an existing HyprMac config over once. Auto-updates are disabled, and there is no stability promise: features may change or disappear without notice.
 
 **A keyboard-driven tiling window manager for macOS, inspired by [Hyprland](https://hyprland.org).**
 Free, open source, and the first real job your Caps Lock key has ever had.
@@ -106,7 +106,7 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 |----------|--------|
 | `Hypr + ←/→/↑/↓` | Focus window in direction |
 | `Hypr + Shift + ←/→/↑/↓` | Swap window in direction |
-| `Hypr + Ctrl + ←/→` | Move window to adjacent monitor |
+| `Hypr + Ctrl + ←/→/↑/↓` | Move window to the adjacent monitor in that direction |
 | `Hypr + Ctrl + Shift + ←/→/↑/↓` | Resize focused window in direction |
 | `Hypr + 1–9` / `Hypr + 0` | Switch to workspace 1–9 / workspace 10 |
 | `Hypr + Shift + 1–9` / `Hypr + Shift + 0` | Move window to workspace 1–9 / workspace 10 |
@@ -165,9 +165,8 @@ What this fork adds on top of upstream HyprMac:
 - 🏛 **Full-Height Apps** — Per-app guarantee of a full-height column in the dwindle layout, master-layout style
 - 🔗 **Linked Monitors** — Toggle: all monitors show one workspace, tiles load-balanced across screens by size
 - 🪗 **Accordion Mode** — AeroSpace-style stacked layout when only the chosen screen (default: built-in) is connected, with configurable side peek; the tiled layout is kept in the background and restored when monitors return
-- 🔌 **IPC + sketchybar** — Hyprland-style event socket + `hyprmacctl`, clickable workspace indicators
+- 🔌 **sketchybar** — Ready-made bar on upstream's status export, with workspace accent colors and clickable indicators
 - 🎨 **Workspace Identity** — Per-workspace accent colors and wallpapers
-- 📐 **Per-Side Padding** — Top-only outer padding to reserve space for a status bar
 - 🖥 **Screen-Sharing Toggles** — `Hypr+M` collapses the desktop onto one monitor (and back), `Hypr+A` flips accordion mode
 
 ---
@@ -225,7 +224,6 @@ Semantics:
 - Capacity is respected: if the target workspace is already at its dwindle depth, the sticky tile stays behind (hidden) rather than being auto-floated.
 - Editing a rule or the opt-in list, "Retile All", startup, and monitor changes all run a reconcile that carries sticky windows onto the currently visible opted-in workspaces.
 - After a switch, focus goes to the workspace's own windows first — the sticky app was already in front of you.
-- IPC: `hyprmacctl workspaces` reports `"sticky": true` for opted-in workspaces and `hyprmacctl windows <ws>` marks sticky windows, so status bars can render them differently.
 
 ---
 
@@ -260,27 +258,23 @@ Known limits: keyboard swap (`Hypr+Shift+arrow`) stays within one screen; capaci
 
 ---
 
-### IPC & sketchybar *(fork feature)*
+### sketchybar *(fork feature)*
 
-HyprMac exposes its state the way Hyprland does — over unix sockets, not callbacks. `hyprmac.sock` answers queries; `hyprmac.events.sock` streams events to whoever connects (Hyprland's `.socket` / `.socket2` split). `scripts/hyprmacctl` wraps both:
-
-```sh
-hyprmacctl workspaces              # JSON: id, monitor, visible, focused, windows, color
-hyprmacctl windows 2               # JSON: app, bundleID, title per window
-hyprmacctl focused                 # JSON: focused workspace
-hyprmacctl dispatch workspace 3    # switch workspace (clickable indicators)
-hyprmacctl subscribe               # stream: workspace>>FOCUSED>>PREV / windowschanged>>
-```
+The bar runs on upstream's status export (`docs/status-bar.md`): HyprMac writes
+`state.json` on every change and runs a hook, and a click opens a link. The fork adds
+each workspace's accent `color` to `state.json`, counts native-fullscreen windows on
+their workspace, and registers its own link scheme, `hyprmac-experiments://`, so links
+never reach the stock app installed beside it.
 
 [`examples/sketchybar/`](examples/sketchybar/) has a ready-made integration: workspace indicators with per-workspace app icons (AeroSpace-setup parity), clickable to switch, highlighted in each workspace's accent color.
 
 ### Workspace Colors & Wallpapers *(fork feature)*
 
-Settings → Layout → Workspaces assigns each workspace an accent color and a wallpaper. The color tints the focus border while that workspace is focused and is served over IPC for status bars; the wallpaper swaps in per monitor the instant the workspace is shown (Hyprland needs hyprpaper + an IPC script for this — macOS lets HyprMac do it natively via `NSWorkspace.setDesktopImageURL`).
+Settings → Layout → Workspaces assigns each workspace an accent color and a wallpaper. The color tints the focus border while that workspace is focused and is written to `state.json` for status bars; the wallpaper swaps in per monitor the instant the workspace is shown (Hyprland needs hyprpaper + an IPC script for this — macOS lets HyprMac do it natively via `NSWorkspace.setDesktopImageURL`).
 
 Picking a wallpaper auto-derives the workspace's accent color from the image — the dominant hue, lifted into a vivid border-ready tone. Near-monochrome images keep the current color, and the guess can always be overridden with the color picker.
 
-Per-side outer padding lives in Settings → Layout → Gaps → "Per-side overrides" — e.g. top = 40 reserves space for sketchybar while the other sides keep the uniform padding (`"outerPaddingSides": {"top": 40}` in `config.json`).
+Space for a status bar is upstream's per-monitor edge padding: Settings → Layout → Per-Monitor Settings → Edge padding (e.g. top = 34 for sketchybar).
 
 ---
 
@@ -322,6 +316,7 @@ cp -r build/Build/Products/Debug/HyprMac.app /Applications/
 - [Architecture](docs/architecture.md): subsystems, ownership rules, threading
 - [Tiling algorithm](docs/tiling-algorithm.md): BSP dwindle, smart insert, two-pass layout
 - [Keybinds and actions](docs/keybinds-and-actions.md): the `Action` enum and its JSON schema
+- [Status bars](docs/status-bar.md): `state.json`, the change hook and `hyprmac://` links for sketchybar, turned on by hand in `monitor-config.json`
 - [Debugging](docs/debugging.md): Console filters, verbose logging, common recipes
 - [Release pipeline](docs/release.md): how a release is built, signed, and published
 

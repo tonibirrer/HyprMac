@@ -209,53 +209,67 @@ final class CommandRunner {
     /// press, so this never waits for the child.
     @discardableResult
     func run(command: String) -> ValidationError? {
-        let tokens: [String]
-        do {
-            tokens = try CommandLineParser.tokenize(command)
-        } catch CommandLineParser.ParseError.unterminatedQuote {
-            return .unterminatedQuote
-        } catch CommandLineParser.ParseError.trailingBackslash {
-            return .trailingBackslash
-        } catch {
-            return .empty
-        }
-        guard let program = tokens.first else { return .empty }
-
-        let executable: URL
-        do {
-            executable = try ProgramResolver.resolve(program)
-        } catch ProgramResolver.ResolveError.notExecutable {
-            return .programNotExecutable(program)
-        } catch {
-            return .programNotFound(program)
-        }
-
-        let process = Process()
-        process.executableURL = executable
-        process.arguments = Array(tokens.dropFirst())
-        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
-        // output is the user's business, not ours — discarding it keeps it
-        // out of the log file entirely.
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        process.terminationHandler = { finished in
+        let launched = launch(command: command) { finished in
             // only the exit status number, never the command or its output
             if finished.terminationStatus != 0 {
                 hyprLog(.notice, .lifecycle,
                         "runCommand exited with status \(finished.terminationStatus)")
             }
         }
+        if case .failure(let error) = launched { return error }
+        hyprLog(.debug, .lifecycle, "runCommand dispatched")
+        return nil
+    }
+
+    /// The launch behind `run`, for callers that need the child: the status
+    /// hook adds `environment` on top of the app's own, waits for `onExit`
+    /// and kills a child that hangs. Same tokenizing and lookup, no shell.
+    func launch(command: String, environment: [String: String] = [:],
+                logName: String = "runCommand",
+                onExit: @escaping (Process) -> Void) -> Result<Process, ValidationError> {
+        let tokens: [String]
+        do {
+            tokens = try CommandLineParser.tokenize(command)
+        } catch CommandLineParser.ParseError.unterminatedQuote {
+            return .failure(.unterminatedQuote)
+        } catch CommandLineParser.ParseError.trailingBackslash {
+            return .failure(.trailingBackslash)
+        } catch {
+            return .failure(.empty)
+        }
+        guard let program = tokens.first else { return .failure(.empty) }
+
+        let executable: URL
+        do {
+            executable = try ProgramResolver.resolve(program)
+        } catch ProgramResolver.ResolveError.notExecutable {
+            return .failure(.programNotExecutable(program))
+        } catch {
+            return .failure(.programNotFound(program))
+        }
+
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = Array(tokens.dropFirst())
+        process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+        if !environment.isEmpty {
+            process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
+        }
+        // output is the user's business, not ours — discarding it keeps it
+        // out of the log file entirely.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        process.terminationHandler = onExit
 
         do {
             try process.run()
         } catch {
             // the NSError code alone — the description carries the path
             hyprLog(.warning, .lifecycle,
-                    "runCommand launch failed (code \((error as NSError).code))")
-            return .programNotFound(program)
+                    "\(logName) launch failed (code \((error as NSError).code))")
+            return .failure(.programNotFound(program))
         }
-        hyprLog(.debug, .lifecycle, "runCommand dispatched")
-        return nil
+        return .success(process)
     }
 }

@@ -26,33 +26,9 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "rectangle.split.2x2",
-            title: "Steadier Tiling",
-            description: "Windows keep their tile when an app is slow to answer, splits survive a minimize, and saved layouts restore to the same shape.",
-            credit: "@Amin-El-Sayed"
-        ),
-        WhatsNewFeature(
-            icon: "display.2",
-            title: "Displays After Sleep",
-            description: "Workspaces come back on the right monitor after sleep or a reconnect, and Caps Lock stays your Hypr key.",
-            credit: "@Amin-El-Sayed"
-        ),
-        WhatsNewFeature(
-            icon: "hourglass",
-            title: "Frozen Apps Don't Stall Tiling",
-            description: "An app that stops answering no longer holds up switches, moves and layouts for everything else.",
-            credit: "@Amin-El-Sayed"
-        ),
-        WhatsNewFeature(
-            icon: "square.grid.3x3",
-            title: "Live Overview",
-            description: "The Hypr+O overview updates while it's open."
-        ),
-        WhatsNewFeature(
-            icon: "paintpalette",
-            title: "Your Floating Color Everywhere",
-            description: "Overlays mark floating windows in the floating color you picked in Settings.",
-            tint: .magenta
+            icon: "rectangle.split.2x1",
+            title: "No More Empty Gaps",
+            description: "When you close a window or move it to another workspace, the window next to it grows to fill the space. Dia windows used to stay half size."
         ),
     ]
 }

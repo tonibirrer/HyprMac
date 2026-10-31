@@ -40,10 +40,20 @@ class WindowManager {
     let keybindOverlay = KeybindOverlayController()
     let workspaceOverview = WorkspaceOverviewController()
 
+    // status bar export (state.json + hook). every publish point below ends
+    // in refreshWorkspaceOverview, which notes the change; focus notes its own
+    private let statusExporter: StatusExporter = {
+        // one publisher, so writes and the clear share a queue and a hook runner
+        let publisher = StatusFilePublisher()
+        return StatusExporter(
+            schedule: { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
+            publish: publisher.publish, clear: publisher.clear)
+    }()
+    private var statusConfigObservation: AnyCancellable?
+
     private(set) var workspaceManager: WorkspaceManager!
     private(set) var tilingEngine: TilingEngine!
     private(set) var wallpaperManager: WallpaperManager!
-    private(set) var ipcServer: IPCServer!
 
     // window-keyed state cache. owns all seven lifecycle/classification dicts:
     // knownWindowIDs, floatingWindowIDs, originalFrames, windowOwners, hiddenWindowIDs,
@@ -424,20 +434,7 @@ class WindowManager {
             // secure input keeps key events from, so one firing means the
             // session is in use again
             self.discovery.endSessionInterruption(evidence: "hotkey press")
-            if action == .toggleTiling {
-                self.config.enabled.toggle()
-                return
-            }
-            // screen-sharing toggles: available while paused, like the pause
-            // toggle itself, and handled here because they flip config
-            if action == .toggleSingleScreen { self.toggleSingleScreen(); return }
-            if action == .toggleAccordion { self.toggleAccordion(); return }
-            guard self.config.enabled || action == .showKeybinds || action == .showWorkspaceOverview else { return }
-            self.suppressions.suppress("mouse-focus", for: 0.15)
-            self.handleAction(action)
-            // a workspace switch or the scratchpad mid-drag changes where the
-            // drop would land, even with the pointer standing still
-            self.dropPreview.refresh()
+            self.performUserAction(action)
         }
 
         hotkeyManager.onHyprKeyDown = { [weak self] in
@@ -673,12 +670,28 @@ class WindowManager {
             self.workspaceOrchestrator.switchWorkspace(workspace, preferredWindowID: windowID)
         }
 
+        configureStatusExport()
         configureLiveConfigUpdates()
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
         hotkeyManager.start()
         hotkeyManager.updateTilingEnabled(config.enabled)
         hotkeyManager.start()
+    }
+
+    private func configureStatusExport() {
+        statusExporter.isEnabled = { [weak self] in
+            guard let self else { return false }
+            return self.isRunning && self.config.statusExportEnabled
+        }
+        statusExporter.hookCommand = { [weak self] in self?.config.statusHookCommand }
+        statusExporter.snapshot = { [weak self] in self?.statusSnapshot() }
+        focusController.onChange = { [weak self] in self?.statusExporter.noteChange() }
+        // workspace names, the toggle itself. objectWillChange fires before
+        // the write, so the note waits a turn to see the new value
+        statusConfigObservation = config.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.statusExporter.noteChange()
+        }
     }
 
     /// Observe the model's post-mutation signal once and route a complete
@@ -708,8 +721,7 @@ class WindowManager {
         coordinator.onLayoutGeometry = { [weak self] gap, padding in
             guard let self else { return }
             self.tilingEngine.gapSize = gap
-            _ = padding // uniform value; the fork resolves per-side overrides
-            self.tilingEngine.outerPadding = self.config.resolvedOuterPadding
+            self.tilingEngine.outerPadding = padding
             if self.isRunning { self.animatedRetile() }
         }
         coordinator.onMaximumSplits = { [weak self] splits in
@@ -725,6 +737,18 @@ class WindowManager {
             self.refreshGameScreen(reconcile: false)
             if self.isRunning { self.handleDisabledMonitorChange() }
             hyprLog(.debug, .lifecycle, "disabled monitors updated: \(disabled)")
+        }
+        coordinator.onOuterPaddingOverride = { [weak self] padding in
+            guard let self else { return }
+            self.tilingEngine.outerPaddingPerMonitor = padding
+            if self.isRunning { self.animatedRetile() }
+        }
+        coordinator.onWorkspaceMonitors = { [weak self] mapping in
+            guard let self else { return }
+            self.workspaceManager.workspaceMonitors = mapping
+            // homes moved, not windows: the same reconcile a monitor
+            // plug or unplug runs carries the trees to them
+            if self.isRunning { self.reconcileAfterDisplayChange() }
         }
         coordinator.onChrome = { [weak self] state, changes in
             self?.applyChromeConfig(state, changes: changes)
@@ -846,7 +870,7 @@ class WindowManager {
         }
 
         tilingEngine.gapSize = config.gapSize
-        tilingEngine.outerPadding = config.resolvedOuterPadding
+        tilingEngine.outerPadding = config.outerPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
         tilingEngine.accordionOverlap = config.accordionOverlap
         tilingEngine.accordionActive = { [weak self] screen in
@@ -921,19 +945,6 @@ class WindowManager {
                                             config: config)
         wallpaperManager.start()
 
-        ipcServer = IPCServer(workspaceManager: workspaceManager,
-                              displayManager: displayManager,
-                              stateCache: stateCache,
-                              config: config,
-                              focusedWorkspace: { [weak self] in
-                                  guard let self else { return 1 }
-                                  return self.workspaceManager.workspaceForScreen(self.screenUnderCursor())
-                              },
-                              switchWorkspace: { [weak self] ws in
-                                  self?.actionDispatcher.dispatch(.switchWorkspace(ws))
-                              })
-        ipcServer?.fullscreenWindows = { [weak self] ws in self?.fullscreen.members.members(onWorkspace: ws) ?? [] }
-        ipcServer.start()
         config.$workspaceWallpapers
             .dropFirst()
             .removeDuplicates()
@@ -942,6 +953,7 @@ class WindowManager {
                 // the next runloop turn so the manager reads the new value.
                 DispatchQueue.main.async { self?.wallpaperManager.configChanged() }
             }.store(in: &configObservers)
+        tilingEngine.outerPaddingPerMonitor = config.outerPaddingPerMonitor
         scratchpad.tiledRegionInset = config.scratchpadRegionInset
         scratchpad.tileNewMembers = config.scratchpadTileByDefault
         focusBorder.isEnabled = config.showFocusBorder
@@ -964,6 +976,7 @@ class WindowManager {
         // a game already running at launch reserves its screen before the
         // first snapshot tiles anything onto it
         refreshGameScreen(reconcile: false)
+        workspaceManager.workspaceMonitors = config.workspaceMonitors
         hotkeyManager.updateHyprKey(config.hyprKey)
         hotkeyManager.updateKeybinds(config.keybinds)
 
@@ -1080,18 +1093,6 @@ class WindowManager {
         // padding, splits, monitors, chrome, scratchpad) arrive through
         // ConfigUpdateCoordinator in configureLiveConfigUpdates.
 
-        // per-side overrides change the resolved padding without touching
-        // the uniform slider the coordinator watches.
-        config.$outerPaddingSides
-            .dropFirst()
-            .removeDuplicates()
-            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                self.tilingEngine.outerPadding = self.config.resolvedOuterPadding
-                if self.isRunning { self.animatedRetile() }
-            }.store(in: &configObservers)
-
         // linking/unlinking monitors changes which workspace every screen
         // shows and where each workspace's trees may live — run the same
         // reconcile as a monitor connect/disconnect: remap visible
@@ -1196,6 +1197,9 @@ class WindowManager {
     /// indicator. The hotkey tap stays available for the pause/resume binding
     /// unless this is final application teardown. Safe to call when not running.
     func stop(keepPauseShortcut: Bool = true) {
+        // before isRunning drops, while the export still counts as on.
+        // keepPauseShortcut false is the quit
+        statusExporter.clear(quitting: !keepPauseShortcut)
         isRunning = false
         hyprHeld = false
         focusBrackets.hide()
@@ -2654,7 +2658,7 @@ class WindowManager {
             engine: tilingEngine, orchestrator: workspaceOrchestrator,
             workspaceManager: workspaceManager, stateCache: stateCache,
             recovery: admissionRecovery,
-            isScratchpad: { [scratchpad] in scratchpad.contains($0) },
+            isScratchpad: { [scratchpad = scratchpad!] in scratchpad.contains($0) },
             isSticky: { [workspaceManager] in workspaceManager.isStickyWindow($0) },
             linkedMonitors: workspaceManager.linkedMonitors,
             ref: { [weak self] in self?.windowRef(for: $0) })
@@ -3583,7 +3587,99 @@ class WindowManager {
     /// Live overview: new windows, closes, moves and retiles show up while
     /// Hypr+O is open. No-op (and no AX walk) while it is closed.
     private func refreshWorkspaceOverview(windows: [HyprWindow]? = nil) {
+        // the switch, the poll and the position cache all end here, so a
+        // status bar hears of every change the overview would show
+        statusExporter.noteChange()
         workspaceOverview.refreshIfOpen { workspaceOverviewSnapshots(windows: windows) }
+    }
+
+    /// Read-only, no AX walk: workspace state plus app names from the owners.
+    private func statusSnapshot() -> StatusSnapshot {
+        var assigned = workspaceManager.regularWorkspaceWindowIDs()
+        // fork: a native-fullscreen window belongs to its workspace (PR 28)
+        // without being assigned there; a bar shows it like any window
+        for ws in Constants.workspaceRange {
+            let fullscreenIDs = fullscreen.members.members(onWorkspace: ws).map(\.windowID)
+            if !fullscreenIDs.isEmpty { assigned[ws, default: []].formUnion(fullscreenIDs) }
+        }
+        let members = scratchpad.members
+        let hidden = stateCache.hiddenWindowIDs
+        var apps: [CGWindowID: StatusSnapshot.Input.App] = [:]
+        for id in assigned.values.reduce(members, { $0.union($1) }).subtracting(hidden) {
+            let window = stateCache.cachedWindows[id]
+            let app = (stateCache.windowOwners[id] ?? window?.ownerPID)
+                .flatMap { NSRunningApplication(processIdentifier: $0) }
+            let bundleID = window?.bundleID ?? app?.bundleIdentifier
+            apps[id] = .init(name: app?.localizedName ?? bundleID ?? "Unknown app", bundleID: bundleID)
+        }
+        let screens = workspaceManager.enabledScreensLeftToRight()
+        return StatusSnapshot.build(.init(
+            screens: screens.map { .init(name: $0.localizedName, visibleWorkspace: workspaceManager.workspaceForScreen($0)) },
+            homeScreens: Dictionary(uniqueKeysWithValues: Constants.workspaceRange.compactMap { ws in
+                workspaceManager.homeScreenForWorkspace(ws).map { (ws, $0.localizedName) }
+            }),
+            assigned: assigned,
+            scratchpad: members,
+            scratchpadVisible: scratchpad.isVisible,
+            hidden: hidden,
+            floating: stateCache.floatingWindowIDs,
+            focusedWindowID: focusController.lastFocusedID,
+            cursorScreen: screens.isEmpty ? nil : screenUnderCursor().localizedName,
+            apps: apps,
+            names: config.workspaceNames,
+            colors: config.workspaceColors))
+    }
+
+    /// A keybind press or an action link. Pause and resume always work; the
+    /// rest need tiling on, except the two read-only overlays.
+    private func performUserAction(_ action: Action) {
+        if action == .toggleTiling {
+            config.enabled.toggle()
+            return
+        }
+        // screen-sharing toggles: available while paused, like the pause
+        // toggle itself, and handled here because they flip config
+        if action == .toggleSingleScreen { toggleSingleScreen(); return }
+        if action == .toggleAccordion { toggleAccordion(); return }
+        guard Self.runsWhilePaused(action) || config.enabled else { return }
+        suppressions.suppress("mouse-focus", for: 0.15)
+        handleAction(action)
+        // a workspace switch or the scratchpad mid-drag changes where the
+        // drop would land, even with the pointer standing still
+        dropPreview.refresh()
+    }
+
+    static func runsWhilePaused(_ action: Action) -> Bool {
+        action == .toggleTiling || action == .showKeybinds || action == .showWorkspaceOverview
+    }
+
+    /// A `hyprmac://` link from a status bar or another app. The status
+    /// links take the same paths as the switch keybind and the overview's
+    /// window pick; an action link runs exactly like its keybind.
+    func handleExternalURL(_ command: ExternalCommand) {
+        guard ExternalCommand.isAllowed(command, externalControl: config.externalControlEnabled,
+                                        statusExport: config.statusExportEnabled) else {
+            hyprLog(.debug, .lifecycle, "hyprmac:// link ignored: not turned on")
+            return
+        }
+        switch command {
+        case .workspace(let workspace):
+            guard isRunning else { return }
+            handleAction(.switchWorkspace(workspace))
+        case .focus(let workspace):
+            guard isRunning else { return }
+            // a repeat click cycles that workspace's windows
+            if !displayTransitionPending,
+               let next = ExternalCommand.nextFocusTarget(on: workspace, in: statusSnapshot()) {
+                scratchpad.hide(reason: .workspaceAction)
+                workspaceOrchestrator.switchWorkspace(workspace, preferredWindowID: next)
+            } else {
+                handleAction(.switchWorkspace(workspace))
+            }
+        case .action(let action):
+            hyprLog(.debug, .lifecycle, "hyprmac:// action \(ActionDispatcher.discriminator(for: action))")
+            performUserAction(action)
+        }
     }
 
     /// Workspaces that hold at least one live floating window.
@@ -3665,7 +3761,8 @@ class WindowManager {
                 animatedRetile(windows: allWindows)
                 retiled = true
             }
-            NotificationCenter.default.post(name: .hyprMacWindowsChanged, object: nil)
+            // status bars list fullscreen members on their workspace
+            statusExporter.noteChange()
         }
         // a tile a workspace switch dropped comes back with the window list
         workspaceOrchestrator.retileDroppedTiles("poll")
@@ -3793,6 +3890,12 @@ class WindowManager {
                 focusBorder.flashError(around: frame, windowID: id, window: window, message: message)
             }
         }
+        // the linked strip runs left to right; upstream's Hypr+Ctrl+↑/↓ has no
+        // neighbor in it and must not fall through to a move right
+        guard direction == .left || direction == .right else {
+            refuse("Linked screens move left or right")
+            return
+        }
         guard let workspace = workspaceManager.workspaceFor(id) else {
             refuse("Not on a workspace")
             return
@@ -3864,7 +3967,8 @@ class WindowManager {
     /// Nothing special: the same path a retile takes, down to the
     /// bookkeeping, so a refusal rolls back, marks the key, and hands
     /// whatever it stranded to the recovery exactly as it always would.
-    private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) {
+    @discardableResult
+    private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) -> TilingEngine.AdmissionResult? {
         let allWindows = accessibility.getAllWindows()
         tilingEngine.primeMinimumSizes(allWindows)
         for w in allWindows where stateCache.floatingWindowIDs.contains(w.windowID) {
@@ -3872,8 +3976,12 @@ class WindowManager {
         }
         let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
         let windows = allWindows.filter { assigned.contains($0.windowID) }
-        runAdmission(windows, onWorkspace: workspace, screen: screen)
+        // linked mode lays the workspace across every screen; the caller's
+        // screen keeps its own result
+        let results = runAdmission(windows, onWorkspace: workspace, screen: screen)
+        let result = results.first { $0.screen == screen } ?? results.first
         updatePositionCache(windows: allWindows)
+        return result
     }
 
     /// Park self-repair: a hidden-workspace window the OS (or its own app)
@@ -4515,8 +4623,6 @@ class WindowManager {
         displayManager.refreshedFingerprint()
     }
 
-    /// Handler for the `.hyprMacRetileAll` notification posted from the
-    /// menu bar's "Retile All" action.
     @objc private func tiledDropPreviewWorkspacesChanged() {
         dropPreview.refresh()
     }
@@ -4527,6 +4633,8 @@ class WindowManager {
         dropPreviewTargets = [:]
     }
 
+    /// Handler for Retile All: the `.hyprMacRetileAll` notification posted
+    /// from the menu bar and the `retileAll` keybind (Hypr+R).
     @objc private func retileAllRequested() {
         hyprLog(.debug, .lifecycle, "retile all spaces requested")
         scratchpad.hide(reason: .workspaceAction)
@@ -5200,6 +5308,14 @@ private extension WindowManager {
         }
         admissionRecovery.clearUnverified = { [weak self] workspace, screen in
             self?.tilingEngine.clearUnverifiedGeometry(forWorkspace: workspace, screen: screen)
+        }
+        // the same pass a drift re-apply runs, so anything it strands still
+        // reaches the newcomer recovery
+        admissionRecovery.retileVacated = { [weak self] workspace, screen in
+            self?.reapplyLayout(onWorkspace: workspace, screen: screen)
+        }
+        admissionRecovery.isLayoutSuspended = { [weak self] in
+            self?.driftMonitor.isSuspended() ?? true
         }
         admissionRecovery.retileAfterFallback = { [weak self] workspace, screen in
             guard let self else { return [] }
