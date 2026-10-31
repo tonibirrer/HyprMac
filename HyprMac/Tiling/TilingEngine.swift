@@ -254,9 +254,19 @@ class TilingEngine {
         didSet { if maxSplitsPerMonitor != oldValue { invalidatePendingLayout() } }
     }
 
-    /// Effective max depth for `screen`, honoring any per-screen
-    /// override.
+    /// Effective max depth for workspace trees on `screen`, honoring any
+    /// per-screen override. An accordion screen gets
+    /// `TilingConfig.accordionMaxDepth` instead: its members share one
+    /// near-fullscreen frame, so the tile-mode limit would refuse windows
+    /// the accordion has room for (and every capacity check built on this
+    /// value would refuse moves into the workspace).
     func maxDepth(for screen: NSScreen) -> Int {
+        accordionActive(screen) ? TilingConfig.accordionMaxDepth : configuredMaxDepth(for: screen)
+    }
+
+    /// The user's per-screen depth, ignoring accordion. The scratchpad
+    /// tiles as a real BSP layout on every screen, so it keeps this one.
+    func configuredMaxDepth(for screen: NSScreen) -> Int {
         maxSplitsPerMonitor[screen.localizedName] ?? TilingConfig.defaultMaxDepth
     }
 
@@ -273,9 +283,13 @@ class TilingEngine {
     /// toggle, the single-screen condition, and the selected monitor);
     /// defaults to never so tests and the scratchpad see plain tiling.
     ///
-    /// Accordion is presentation-only: tree membership, insertion, swap
-    /// and removal run identically to tile mode, so switching back to
-    /// tiling restores the exact BSP layout.
+    /// Accordion is presentation-only for the tree: swap, removal and
+    /// insertion order run as in tile mode, so switching back to tiling
+    /// keeps the BSP shape. Admission is the exception: it judges the
+    /// shared accordion frame rather than the tile slots (`fitMinimum`,
+    /// `maxDepth(for:)`), so a single screen takes every window the
+    /// accordion can show. When a second monitor returns, linked tiling
+    /// re-cuts the strip by each screen's capacity.
     var accordionActive: (NSScreen) -> Bool = { _ in false }
 
     /// Visible peek, in px, of the neighbor stacks on each side of the
@@ -754,7 +768,7 @@ class TilingEngine {
         var refusedIDs: [CGWindowID] = []
         for w in unnamed.filter({ incumbents.contains($0.windowID) })
                  + unnamed.filter({ !incumbents.contains($0.windowID) }) {
-            if smartInsertFitting(w, into: candidate, maxDepth: limit, rect: rect) {
+            if smartInsertFitting(w, into: candidate, maxDepth: limit, rect: rect, on: screen) {
                 insertedIDs.append(w.windowID)
             } else {
                 refusedIDs.append(w.windowID)
@@ -1413,7 +1427,7 @@ class TilingEngine {
                 var merged = 0
                 for w in donor.allWindows where !keepIDs.contains(w.windowID) {
                     if smartInsertFitting(w, into: keep,
-                                          maxDepth: maxDepth(for: newScreen), rect: rect) {
+                                          maxDepth: maxDepth(for: newScreen), rect: rect, on: newScreen) {
                         merged += 1
                     } else {
                         // depth or known-minimum refusal — the window keeps
@@ -2043,7 +2057,7 @@ class TilingEngine {
             return lhs.offset < rhs.offset
         }.map(\.element)
         for window in ordered {
-            guard smartInsertFitting(window, into: recovered, maxDepth: maxDepth, rect: rect) else {
+            guard smartInsertFitting(window, into: recovered, maxDepth: maxDepth, rect: rect, on: nil) else {
                 return nil
             }
         }
@@ -2282,17 +2296,44 @@ class TilingEngine {
 
 
     @discardableResult
+    /// `screen` is the screen the tree renders on, or nil for a tree that is
+    /// always a real BSP layout (scratchpad, topology recovery). It decides
+    /// which minimums the fit check judges (see `fitMinimum`).
     private func smartInsertFitting(_ window: HyprWindow, into tree: BSPTree,
-                                    maxDepth: Int, rect: CGRect) -> Bool {
+                                    maxDepth: Int, rect: CGRect, on screen: NSScreen?) -> Bool {
         layoutEngine.smartInsertFitting(window, into: tree, maxDepth: maxDepth,
-                                        rect: rect, minimumSize: minimumSize(for:))
+                                        rect: rect, minimumSize: fitMinimum(on: screen, in: rect))
     }
 
     private func fittingLeaf(for window: HyprWindow?, in tree: BSPTree,
-                             maxDepth: Int, rect: CGRect,
+                             maxDepth: Int, rect: CGRect, on screen: NSScreen?,
                              noting: ((LayoutEngine.SlotRefusal) -> Void)? = nil) -> BSPNode? {
         layoutEngine.fittingLeaf(for: window, in: tree, maxDepth: maxDepth,
-                                 rect: rect, minimumSize: minimumSize(for:), noting: noting)
+                                 rect: rect, minimumSize: fitMinimum(on: screen, in: rect),
+                                 noting: noting)
+    }
+
+    /// The minimum-size lookup a fit check on `screen` should judge with.
+    ///
+    /// On an accordion screen the BSP slot a window would get in tile mode
+    /// is never shown: every member gets the shared accordion frame. A
+    /// window whose minimum fits that frame therefore fits the workspace,
+    /// and its minimum reads as zero so only the depth limits the tree. A
+    /// minimum bigger than the frame is kept, so that window is still
+    /// refused. Judging the tile slots instead left every window past the
+    /// fourth or so on a laptop screen out of the tree after an unplug:
+    /// parked off-screen or floated over the stack, out of reach of the
+    /// accordion navigation.
+    private func fitMinimum(on screen: NSScreen?, in rect: CGRect) -> (HyprWindow?) -> CGSize {
+        guard let screen, accordionActive(screen) else { return minimumSize(for:) }
+        let frame = AccordionLayout.smallestFrameSize(in: rect, padding: outerPadding,
+                                                      overlap: accordionOverlap)
+        let slack = TilingConfig.rectComparisonSlackPx
+        return { window in
+            let minimum = self.minimumSize(for: window)
+            let fits = minimum.width <= frame.width + slack && minimum.height <= frame.height + slack
+            return fits ? .zero : minimum
+        }
     }
 
     private struct TileMembershipResult {
@@ -2394,7 +2435,7 @@ class TilingEngine {
         while !pending.isEmpty {
             if let index = pending.firstIndex(where: { w in
                 restoreRememberedSlot(for: w, in: t, key: key, rect: rect,
-                                      maxDepth: maxDepth(for: screen))
+                                      maxDepth: maxDepth(for: screen), on: screen)
             }) {
                 insertedWindows.append(pending.remove(at: index))
                 continue
@@ -2403,7 +2444,7 @@ class TilingEngine {
             // wherever it lands now is its place; the old one is spent
             slotMemory.removeValue(forKey: w.windowID)
             let insert = {
-                self.smartInsertFitting(w, into: t, maxDepth: self.maxDepth(for: screen), rect: rect)
+                self.smartInsertFitting(w, into: t, maxDepth: self.maxDepth(for: screen), rect: rect, on: screen)
             }
             // an unrelated newcomer must not inherit another request's bypass.
             let fits = minimaBypass?[w.windowID] == nil ? withoutMinimaBypass(insert) : insert()
@@ -2510,9 +2551,9 @@ class TilingEngine {
         let t = m.tree
         let rect = m.rect
 
-        // accordion mode: membership above ran identically (so the BSP
-        // tree stays tile-mode-correct in the background); only the frame
-        // application differs. the candidate publishes without a sizing
+        // accordion mode: membership above judged the accordion frame, not
+        // the tile slots (see fitMinimum); the tree keeps its BSP shape in
+        // the background and only the frame application differs. the candidate publishes without a sizing
         // transaction — every window gets a near-fullscreen rect, so a
         // minimum cannot refuse it and there is nothing to verify.
         if accordionActive(screen) {
@@ -3052,7 +3093,7 @@ class TilingEngine {
 
         var rejects: [HyprWindow] = []
         for w in windows where !treeIDs.contains(w.windowID) {
-            if !smartInsertFitting(w, into: t, maxDepth: maxDepth(for: screen), rect: rect) {
+            if !smartInsertFitting(w, into: t, maxDepth: configuredMaxDepth(for: screen), rect: rect, on: nil) {
                 hyprLog(.notice, .tiling, "scratchpad tile: no fitting slot for '\(w.title ?? "?")' (\(w.windowID)) — stays floating")
                 rejects.append(w)
             }
@@ -3617,7 +3658,7 @@ class TilingEngine {
         let depth = maxDepth(for: screen)
 
         var honoured: [FitRefusal] = []
-        if fittingLeaf(for: window, in: t, maxDepth: depth, rect: rect,
+        if fittingLeaf(for: window, in: t, maxDepth: depth, rect: rect, on: screen,
                        noting: { honoured.append(self.refusal($0, incoming: window)) }) != nil {
             logOutlook([], incoming: window.windowID, workspace: workspace, verdict: "fits")
             return .fits
@@ -3625,7 +3666,7 @@ class TilingEngine {
 
         var bypassed: [FitRefusal] = []
         let found: BSPNode? = withRevalidationBypass(incoming: [window.windowID], key: key) {
-            fittingLeaf(for: window, in: t, maxDepth: depth, rect: rect,
+            fittingLeaf(for: window, in: t, maxDepth: depth, rect: rect, on: screen,
                         noting: { bypassed.append(self.refusal($0, incoming: window)) })
         }
         if found != nil {
@@ -3797,7 +3838,8 @@ class TilingEngine {
     /// not in the tree it is kept: a window that left together with its
     /// neighbour tries again once the neighbour is back in.
     private func restoreRememberedSlot(for window: HyprWindow, in tree: BSPTree,
-                                       key: TilingKey, rect: CGRect, maxDepth: Int) -> Bool {
+                                       key: TilingKey, rect: CGRect, maxDepth: Int,
+                                       on screen: NSScreen) -> Bool {
         guard let memory = slotMemory[window.windowID] else { return false }
         guard memory.key == key else {
             slotMemory.removeValue(forKey: window.windowID)
@@ -3811,10 +3853,11 @@ class TilingEngine {
         let direction = memory.direction ?? target.direction(for: targetRect)
         // a minimum learned since it left can make the old pair impossible.
         // a subtree is judged by the largest minimum among its members
-        let tenantMinimum = target.allWindows().map { minimumSize(for: $0) }.reduce(CGSize.zero) {
+        let minimum = fitMinimum(on: screen, in: rect)
+        let tenantMinimum = target.allWindows().map { minimum($0) }.reduce(CGSize.zero) {
             CGSize(width: max($0.width, $1.width), height: max($0.height, $1.height))
         }
-        guard layoutEngine.pairFit(tenantMinimum, minimumSize(for: window),
+        guard layoutEngine.pairFit(tenantMinimum, minimum(window),
                                    in: targetRect, dir: direction).fits else { return false }
         tree.insert(window, beside: target, onLeft: memory.wasLeft, direction: direction,
                     automatic: memory.direction == nil || memory.directionIsAutomatic,
@@ -3910,7 +3953,7 @@ class TilingEngine {
             incoming: [window.windowID], key: key
         ) {
             guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen),
-                                     rect: layoutRect(for: key, screen: screen)) else { return nil }
+                                     rect: layoutRect(for: key, screen: screen), on: screen) else { return nil }
             return applyVerifiedLayout(
                 candidate, in: layoutRect(for: key, screen: screen), generation: generation,
                 originalFrames: [window.windowID: moverOriginal],
@@ -4109,7 +4152,7 @@ class TilingEngine {
         primeMinimumSizes(toPrime)
         let rect = displayManager.cgRect(for: screen)
         return withoutMinimaBypass {
-            fittingLeaf(for: window, in: t, maxDepth: maxDepth(for: screen), rect: rect) != nil
+            fittingLeaf(for: window, in: t, maxDepth: maxDepth(for: screen), rect: rect, on: screen) != nil
         }
     }
 
@@ -4154,7 +4197,7 @@ class TilingEngine {
         primeMinimumSizes(windows)
         let rect = layoutRect(for: key, screen: screen)
         for window in windows where !candidate.contains(window) {
-            guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else { return false }
+            guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect, on: screen) else { return false }
         }
         return true
     }
@@ -4191,7 +4234,7 @@ class TilingEngine {
         if live?.contains(window) == true { return .alreadyPresent }
         let candidate = live?.deepClone() ?? newTree()
 
-        guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect) else {
+        guard smartInsertFitting(window, into: candidate, maxDepth: maxDepth(for: screen), rect: rect, on: screen) else {
             return .failed(.noFittingSlot)
         }
 
@@ -4201,12 +4244,25 @@ class TilingEngine {
         let generation = invalidatePendingLayout()
         _ = consumePendingInserted(for: key, in: candidate)
         return commitForceInsert(candidate, live: live, key: key, rect: rect,
-                                 window: window, generation: generation, success: .inserted)
+                                 screen: screen, window: window, generation: generation,
+                                 success: .inserted)
     }
 
     private func commitForceInsert(_ candidate: BSPTree, live: BSPTree?, key: TilingKey,
-                                   rect: CGRect, window: HyprWindow, generation: UInt64,
-                                   success: ForceInsertResult) -> ForceInsertResult {
+                                   rect: CGRect, screen: NSScreen, window: HyprWindow,
+                                   generation: UInt64, success: ForceInsertResult) -> ForceInsertResult {
+        // accordion: publish without a sizing transaction, as tileWindows
+        // does. the candidate holds the windows the accordion admitted; a
+        // verified BSP pass over it would judge the tile slots again and
+        // refuse the toggle the accordion has room for.
+        if accordionActive(screen) {
+            guard layoutGeneration == generation else { return .failed(.layoutRejected(.superseded)) }
+            if let live { live.adopt(candidate) } else { trees[key] = candidate }
+            admit(candidate.allWindows.map(\.windowID), toWorkspace: key.workspace)
+            unverified.removeValue(forKey: key)
+            applyAccordionLayout(tree(for: key), rect: rect)
+            return success
+        }
         primeMinimumSizes(candidate.allWindows)
         candidate.root.resetSplitRatios()
         let outcome = applyTrackedLayout(candidate, in: rect, generation: generation, key: key,

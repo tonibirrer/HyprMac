@@ -22,6 +22,18 @@ enum AccordionLayout {
         max(0, min(overlap, innerWidth / 4))
     }
 
+    /// The smallest frame any accordion member can get inside `rect`: the
+    /// inset rect minus a peek strip on both sides (a window in the middle
+    /// of the stack). A window whose minimum fits this fits every slot of
+    /// the accordion, whatever its position or the focus.
+    static func smallestFrameSize(in rect: CGRect, padding: OuterPadding,
+                                  overlap: CGFloat) -> CGSize {
+        let inner = padding.inset(rect)
+        guard inner.width > 0, inner.height > 0 else { return .zero }
+        let peek = clampedOverlap(overlap, innerWidth: inner.width)
+        return CGSize(width: inner.width - 2 * peek, height: inner.height)
+    }
+
     /// Accordion frames for `order` (the tree's in-order window
     /// sequence) inside `rect` inset by `padding`.
     ///

@@ -340,6 +340,7 @@
 		F9DAC6038768E4C6FF5600CD /* LayoutMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 704DCC0F96A16AC32FD1A5C0 /* LayoutMatcher.swift */; };
 		FAD487A931194EE440A719EB /* SingleScreenMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4147EA62BB03B7B282443AEE /* SingleScreenMode.swift */; };
 		FB43061AE567B8BA3ABAFE11 /* CapsLockGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D57EA2F0D94B5301CBDDB5 /* CapsLockGuard.swift */; };
+		FE8B914FEEEA868885AE00B9 /* AccordionAdmissionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 422729199A5FAD970497513D /* AccordionAdmissionTests.swift */; };
 		FE951C34FB71D53A601F8EF3 /* AccordionLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6813E1F4A6CEFE29E90B0D /* AccordionLayout.swift */; };
 		FEB773771BE1F8545E28F580 /* ActivationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A583E7C1D53AE97EEFB1ADE /* ActivationGateTests.swift */; };
 		FF545C88698CCEFDF156CDFF /* RetileAllPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5211B4FC8814875264166E19 /* RetileAllPlanner.swift */; };
@@ -412,6 +413,7 @@
 		3F7802C236774AA24452B3E1 /* FrameSizingTransactionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSizingTransactionTests.swift; sourceTree = "<group>"; };
 		3FCF579F05A2DFBB28DF945A /* WorkspaceOrchestrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOrchestrator.swift; sourceTree = "<group>"; };
 		4147EA62BB03B7B282443AEE /* SingleScreenMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleScreenMode.swift; sourceTree = "<group>"; };
+		422729199A5FAD970497513D /* AccordionAdmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccordionAdmissionTests.swift; sourceTree = "<group>"; };
 		43D8A7DDD1BB3D497B6F88EF /* HandleDisplayChangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandleDisplayChangeTests.swift; sourceTree = "<group>"; };
 		4409646A5AA8442EA2A0A34C /* WorkspaceOverviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceOverviewController.swift; sourceTree = "<group>"; };
 		4461955B9373BBC5DD00DB15 /* ScratchpadController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScratchpadController.swift; sourceTree = "<group>"; };
@@ -818,6 +820,7 @@
 		B0A0AB76785D9D6DA70BB530 /* HyprMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				422729199A5FAD970497513D /* AccordionAdmissionTests.swift */,
 				D1BF4A13B8D8E5DDDD0DC479 /* AccordionLayoutTests.swift */,
 				D95B9944F99340F7EF2DB762 /* AccordionSwitchOrderTests.swift */,
 				9A583E7C1D53AE97EEFB1ADE /* ActivationGateTests.swift */,
@@ -1360,6 +1363,7 @@
 			files = (
 				9D51788040A2380139C79B56 /* AXFrameWriteBatchTests.swift in Sources */,
 				9540D5E1BBF47D714DEE6CD8 /* AXNotificationServiceTests.swift in Sources */,
+				FE8B914FEEEA868885AE00B9 /* AccordionAdmissionTests.swift in Sources */,
 				2FD561E33DCC0C12765F24AB /* AccordionLayoutTests.swift in Sources */,
 				9BC10CB51BD527531132C66D /* AccordionSwitchOrderTests.swift in Sources */,
 				FEB773771BE1F8545E28F580 /* ActivationGateTests.swift in Sources */,
