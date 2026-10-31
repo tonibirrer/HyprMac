@@ -89,6 +89,43 @@ final class FrameSizingTransactionTests: XCTestCase {
         XCTAssertEqual(fake.operations, ["timeout:7", "size:7", "timeout:7", "position:7", "timeout:7", "size:7", "timeout:7", "position-read:7", "timeout:7", "size-read:7", "timeout:7", "position-read:7", "timeout:7", "size-read:7"])
     }
 
+    func testTraceFrameReadsBeforeAndAfterEverySetterWithoutChangingTheVerdict() {
+        let id: CGWindowID = 43
+        let target = CGRect(x: 8, y: 8, width: 492, height: 784)
+        func run(traced: Bool) -> (FrameSizingAttempt.Result, Int) {
+            let fake = Fake()
+            fake.frames[id] = CGRect(x: 20, y: 20, width: 800, height: 700)
+            var probes = 0
+            var io = fake.io()
+            if traced {
+                io.traceFrame = { probes += 1; return fake.frames[$0] }
+            }
+            let result = FrameSizingAttempt(io: io).apply(
+                targets: [.init(windowID: id, frame: target)],
+                usableFrame: CGRect(x: 0, y: 0, width: 1000, height: 800), gap: 8, generation: 1)
+            return (result, probes)
+        }
+        let (plain, none) = run(traced: false)
+        let (probed, count) = run(traced: true)
+        XCTAssertEqual(none, 0)
+        XCTAssertEqual(count, 4, "before, size, position, size2")
+        XCTAssertEqual(probed.verdict, plain.verdict)
+        XCTAssertEqual(probed.actualFrames, plain.actualFrames)
+    }
+
+    // the probes are extra AX reads inside the write deadline. the Debug
+    // build keeps the file log on, so they must not ride along with it.
+    func testProductionIOTracesFramesOnlyWhenAskedTo() {
+        let key = LogConfig.frameWriteTraceKey
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(saved, forKey: key) }
+
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertNil(FrameSizingIO.accessibility(windows: [:], currentGeneration: { 0 }).traceFrame)
+        UserDefaults.standard.set(true, forKey: key)
+        XCTAssertNotNil(FrameSizingIO.accessibility(windows: [:], currentGeneration: { 0 }).traceFrame)
+    }
+
     func testDelayedAcceptancePollsWithinDeadline() {
         let fake = Fake()
         let id: CGWindowID = 8
@@ -1617,5 +1654,56 @@ final class FrameSizingTransactionTests: XCTestCase {
         report.candidate.readbackComplete = true
         report.candidate.readbackStable = false
         XCTAssertFalse(report.candidateVerified)
+    }
+}
+
+/// Dia reports the size it was last asked for, not the size its window has,
+/// and refuses a write equal to that with -25205 without resizing. Seen live
+/// 2026-10-30: AX 1496x839 while the window server had 688x446.
+final class RefusedSizeResendTests: XCTestCase {
+
+    /// A window whose AX size is the last size requested. A write equal to it
+    /// is refused; any other lands.
+    private final class StaleSizeWindow {
+        var reported: CGSize
+        var real: CGSize
+        var writes: [CGSize] = []
+        init(reported: CGSize, real: CGSize) { self.reported = reported; self.real = real }
+        func write(_ size: CGSize) -> AXError {
+            writes.append(size)
+            guard size != reported else { return .attributeUnsupported }
+            reported = size
+            real = size
+            return .success
+        }
+    }
+
+    func testARefusedSizeIsSentAgainAfterAOnePointNudge() {
+        let window = StaleSizeWindow(reported: CGSize(width: 1496, height: 839),
+                                     real: CGSize(width: 688, height: 446))
+        let target = CGSize(width: 1496, height: 839)
+
+        let first = window.write(target)
+        let error = HyprWindow.resendRefusedSize(target, write: window.write)
+
+        XCTAssertEqual(first, .attributeUnsupported)
+        XCTAssertEqual(error, .success)
+        XCTAssertEqual(window.real, target, "the window took the size it refused")
+        XCTAssertEqual(window.writes.dropFirst(), [CGSize(width: 1495, height: 839), target])
+    }
+
+    func testAResendThatIsRefusedAgainReportsTheRefusal() {
+        let error = HyprWindow.resendRefusedSize(CGSize(width: 744, height: 839)) { _ in .attributeUnsupported }
+        XCTAssertEqual(error, .attributeUnsupported)
+    }
+
+    func testANudgeThatFailsIsNotFollowedByTheTarget() {
+        var writes: [CGSize] = []
+        let error = HyprWindow.resendRefusedSize(CGSize(width: 744, height: 839)) { size in
+            writes.append(size)
+            return .cannotComplete
+        }
+        XCTAssertEqual(error, .cannotComplete)
+        XCTAssertEqual(writes, [CGSize(width: 743, height: 839)])
     }
 }

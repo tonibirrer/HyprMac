@@ -213,6 +213,23 @@ final class MinSizeMemoryTests: XCTestCase {
         XCTAssertEqual(second.minSizeProvenance, .appHint)
     }
 
+    // issue #43: a parked Ghostty window refused 1708x905 on its way across
+    // screens, and every Ghostty window opened after it started from that
+    func testARefusalNotSharedWithTheAppStaysWithItsWindow() {
+        let memory = MinSizeMemory()
+        let crossing = outlookWindow(130)
+        memory.recordObserved(crossing, target: CGSize(width: 948, height: 513.5),
+                              actual: CGSize(width: 1708, height: 905),
+                              widthConflict: true, heightConflict: true,
+                              phase: .candidate, sharedWithApp: false)
+
+        let sibling = outlookWindow(131)
+        memory.prime([sibling])
+
+        XCTAssertEqual(memory.minimumSize(for: crossing), CGSize(width: 1708, height: 905))
+        XCTAssertNil(memory.entry(for: 131))
+    }
+
     func testAnAppHintDoesNotReachAnotherApp() {
         let memory = MinSizeMemory()
         memory.recordObserved(outlookWindow(92), target: CGSize(width: 744, height: 841),

@@ -37,6 +37,9 @@ final class FocusStateController {
     /// is responsible for deferring any heavy work.
     var onFocusChanged: ((CGWindowID) -> Void)?
 
+    /// Fired after every focus transition (the status bar export listens).
+    var onChange: () -> Void = {}
+
     init(focusBorder: FocusBorder) {
         self.focusBorder = focusBorder
     }
@@ -57,5 +60,6 @@ final class FocusStateController {
         generation &+= 1
         hyprLog(.debug, .focus, "focus \(prev) → \(id) (\(reason))")
         onFocusChanged?(id)
+        onChange()
     }
 }

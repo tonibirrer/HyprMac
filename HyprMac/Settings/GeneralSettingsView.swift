@@ -3,7 +3,7 @@
 import SwiftUI
 
 /// "General" tab. Enable toggle, accessibility status,
-/// focus-follows-mouse, never-tile list, workspace pins, System panel
+/// focus-follows-mouse, never-tile list, workspace names, workspace pins, System panel
 /// (menu bar indicator, iCloud sync, launch-at-login), and a footer with
 /// replay-the-tour + reset.
 struct GeneralSettingsView: View {
@@ -11,12 +11,14 @@ struct GeneralSettingsView: View {
     @ObservedObject var config = UserConfig.shared
     @State private var accessibilityGranted = AccessibilityManager.isAccessibilityEnabled()
     @StateObject private var loginItem = LoginItemController()
+    @State private var showingWorkspaceNames = false
 
     var body: some View {
         VStack(spacing: HyprSpacing.lg) {
             statusPanel
             mousePanel
             neverTilePanel
+            workspaceNamesPanel
             workspacePinsPanel
             systemPanel
             layoutsPanel
@@ -144,6 +146,34 @@ struct GeneralSettingsView: View {
         }
     }
 
+    // MARK: workspace names
+
+    private var workspaceNamesPanel: some View {
+        HyprPanel("Workspace names",
+                  footer: "Names replace the numbers in the switch HUD, the menu bar and the workspace pickers.") {
+            HyprRow("Names", icon: "character.cursor.ibeam",
+                    subtitle: workspaceNamesSummary, divider: false) {
+                Button("Rename…") { showingWorkspaceNames = true }
+                    .controlSize(.small)
+            }
+        }
+        .sheet(isPresented: $showingWorkspaceNames) {
+            WorkspaceNamesSheet(config: config)
+        }
+    }
+
+    // "None, ..." or "3 named: web, term, music"
+    private var workspaceNamesSummary: String {
+        let named = Constants.workspaceRange.compactMap { workspace -> String? in
+            let name = config.workspaceNames[String(workspace)]?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return name.isEmpty ? nil : name
+        }
+        if named.isEmpty { return "None, workspaces show their numbers" }
+        let shown = named.prefix(4).joined(separator: ", ")
+        return "\(named.count) named: " + shown + (named.count > 4 ? ", …" : "")
+    }
+
     // MARK: workspace pins
 
     private var workspacePinsPanel: some View {
@@ -187,7 +217,9 @@ struct GeneralSettingsView: View {
                 get: { rule.workspace },
                 set: { setPinnedWorkspace($0, for: rule.bundleID) }
             )) {
-                ForEach(Constants.workspaceRange, id: \.self) { Text("Workspace \($0)").tag($0) }
+                ForEach(Constants.workspaceRange, id: \.self) {
+                    Text(UserConfig.workspaceDisplayName($0, names: config.workspaceNames)).tag($0)
+                }
             }
             .labelsHidden()
             .fixedSize()
@@ -223,6 +255,13 @@ struct GeneralSettingsView: View {
                   footer: loginItemFooter) {
             HyprRow("Menu bar workspace indicator", icon: "rectangle.fill.on.rectangle.fill") {
                 Toggle("", isOn: $config.showMenuBarIndicator)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+            }
+
+            HyprRow("Allow other apps to control HyprMac", icon: "link",
+                    subtitle: "Lets apps like BetterTouchTool run HyprMac actions with hyprmac:// links.") {
+                Toggle("", isOn: $config.externalControlEnabled)
                     .toggleStyle(HyprToggleStyle())
                     .labelsHidden()
             }

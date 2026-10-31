@@ -59,6 +59,15 @@ enum LogConfig {
         UserDefaults.standard.bool(forKey: "HyprMacVerboseLogging")
     }
 
+    /// Frame reads around every setter for the `frame write trace:` line.
+    /// They cost AX round trips inside the write deadline, so they are
+    /// opt-in in every build:
+    /// `defaults write <bundle id> HyprMacFrameWriteTrace -bool YES`.
+    static let frameWriteTraceKey = "HyprMacFrameWriteTrace"
+    static var frameWriteTrace: Bool {
+        UserDefaults.standard.bool(forKey: frameWriteTraceKey)
+    }
+
     /// Mirror every `hyprLog` call into `DebugLogFile`, at every level
     /// and category, ignoring the trace-tier gating above. On by default
     /// in DEBUG because os_log discards `.debug` before it persists, so

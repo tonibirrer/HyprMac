@@ -16,6 +16,11 @@ struct FrameReadbackPoller {
         let actual: CGSize
         let widthConflict: Bool
         let heightConflict: Bool
+        /// the window moved before it was sized: revealed from the hide
+        /// corner or crossing from a screen too small. its refusal may be
+        /// the crossing's, so it stays this window's and never becomes the
+        /// app's hint (issue #43)
+        var positionFirst = false
     }
 
     /// Why a window's apparent oversize teaches nothing. Each case is a
@@ -101,11 +106,13 @@ struct FrameReadbackPoller {
     /// screen too small for their target. See `positionSettleWindowIDs`.
     func applyWorkspaceReveal(_ layouts: [(HyprWindow, CGRect)],
                               positionFirstWindowIDs: Set<CGWindowID>,
+                              stagingOrigins: [CGWindowID: CGPoint] = [:],
                               usableFrame: CGRect, gap: CGFloat,
                               generation requestedGeneration: UInt64,
                               originalFrames: [CGWindowID: CGRect]? = nil) -> Result {
         var revealConfiguration = configuration
         revealConfiguration.positionSettleWindowIDs = positionFirstWindowIDs
+        revealConfiguration.stagingOrigins = stagingOrigins
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: revealConfiguration,
                            phase: .candidate, originalFrames: originalFrames)
@@ -293,7 +300,10 @@ struct FrameReadbackPoller {
                         observations.append(Observation(window: window, target: target.size,
                                                         actual: actual.size,
                                                         widthConflict: learnWidth,
-                                                        heightConflict: learnHeight))
+                                                        heightConflict: learnHeight,
+                                                        positionFirst: configuration
+                                                            .positionSettleWindowIDs
+                                                            .contains(window.windowID)))
                     }
                 }
                 hyprLog(.debug, .tiling, "min evidence: wid=\(window.windowID) "

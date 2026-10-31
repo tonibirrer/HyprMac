@@ -328,17 +328,39 @@ workspaces park their windows at a single global hide position: 1 px
 inside the bottom-right corner of the **rightmost** monitor (a 1 px
 sliver remains visible; macOS limitation). The rightmost edge has no
 neighbor, so the parked window's off-screen extension never overlaps
-another monitor and macOS's rescale-to-neighbor bug cannot fire.
+another monitor and macOS's rescale-to-neighbor bug cannot fire. When
+monitors share the rightmost edge, the lowest one holds the corner: a
+monitor below it would catch the extension, and macOS would pull the
+window onto it under its menu bar, shrunk to its height.
 
 Every workspace is **statically anchored** to a home screen:
 `enabledScreens[(N - 1) % enabledScreens.count]`, left to right.
 Two screens on one x, a stacked desk, keep the order `NSScreen.screens`
 lists them in, which puts the primary display first, so a stacked desk
 keeps the homes it had. Retile All fills the screens in the same order.
+
+The user can put workspaces on monitors by name (`workspaceMonitors` in
+`monitor-config.json`, Settings → Layout → Workspaces). One pure function,
+`WorkspaceHomeResolver.resolve`, decides every home from the enabled
+screens and that mapping, and `WorkspaceManager.homeScreenForWorkspace` and
+`workspacesAnchoredTo` are its only callers; every other consumer (Hypr+F,
+cycling, `initializeMonitors`, the overview, the menu bar, the switch HUD,
+moves, window rules, layout restore, Retile All) goes through those two. A
+workspace mapped to a connected, enabled monitor lives there. Every other
+one, unmapped or mapped to a monitor that is missing or disabled, keeps its
+formula home, so every workspace always has a home and an empty mapping is
+the formula exactly. A number under two monitors goes to the name that
+sorts first. Numbers outside 1–10 are ignored. Two displays that share a
+name take the mapping on the leftmost of them. If the mapping would leave an
+enabled monitor with no workspace, it is ignored for that layout and the
+formula decides everything; Settings says so in one line. A mapping change
+runs the same `reconcileAfterDisplayChange` as a monitor plug or unplug, so
+trees move to their new homes and window membership never changes.
 Switching to workspace N always lands on its home; workspaces cannot
 move between monitors, so workspace identity never drifts. The
-`moveWindowToMonitor` action (`Hypr+Ctrl+←/→`) moves the focused
-*window* to the adjacent monitor's visible workspace instead.
+`moveWindowToMonitor` action (`Hypr+Ctrl+arrow`) moves the focused
+*window* to the visible workspace of the nearest monitor in that
+direction instead.
 
 `Hypr+Shift+N` moves the focused window to workspace N and stays put,
 unless N is showing on another monitor, where focus follows the window.
@@ -358,8 +380,11 @@ while internal workspace 0 remains the scratchpad.
 
 The transfer captures source frames, verifies a private one-window candidate,
 then verifies position-only source-window parking before publishing destination membership.
-Parking accepts the macOS titlebar clamp only when every physical display sees
-at most the normal one-pixel right-edge sliver and the window size is preserved.
+Parking accepts the macOS titlebar clamp when every physical display sees
+at most the normal one-pixel right-edge sliver. A window taller than the corner
+screen comes back cut to that screen's height. The next show retiles it.
+A park counts as done after two hidden readbacks in a row that agree to one
+point, so a window macOS is still moving does not pass between two steps.
 Generation, display, and membership checks guard the commit. Ordinary failures
 restore captured geometry through verified AX writes. Superseded or changed
 display state must not receive stale-coordinate restoration. The mover is

@@ -283,8 +283,17 @@ class HotkeyManager {
     /// state still reports F18 as up (no physical F18 is held). Querying
     /// Caps Lock instead doesn't help — `kVK_CapsLock`'s session state
     /// tracks the lock toggle, not the press state.
-    private func isHyprKeyActuallyDown() -> Bool? {
+    ///
+    /// Native modifier Hypr keys answer from the keyDown's own flags. The
+    /// tap swallows their flagsChanged, and `combinedSessionState` then
+    /// often reports them up mid-chord (54 of 151 Left Control chords were
+    /// dropped on 0.18.0). The keyDown flags come from the HID layer, so a
+    /// dropped keyUp still shows as the flag missing.
+    private func isHyprKeyActuallyDown(eventFlags: CGEventFlags) -> Bool? {
         if hyprKey.usesCapsLockRemap { return nil }
+        if let nativeFlag = hyprKey.nativeModifierFlag {
+            return eventFlags.contains(nativeFlag)
+        }
         return CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(hyprKey.keyCode))
     }
 
@@ -327,7 +336,7 @@ class HotkeyManager {
         // so this stroke doesn't get routed as a chord. only runs when the
         // HID query is trustworthy — under the Caps→F18 remap it lies, so
         // we fall back to the sleep/wake/tap-disabled paths there.
-        if type == .keyDown, hyprKeyDown, isHyprKeyActuallyDown() == false {
+        if type == .keyDown, hyprKeyDown, isHyprKeyActuallyDown(eventFlags: event.flags) == false {
             hyprLog(.notice, .hotkey, "stale hyprKeyDown detected on keyCode=\(keyCode) — HID says \(hyprKey.displayName) is up; clearing")
             setHyprKeyDown(false)
         }

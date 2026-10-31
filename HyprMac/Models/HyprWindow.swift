@@ -207,10 +207,31 @@ class HyprWindow: Equatable, Hashable {
     }
 
     func writeSize(_ size: CGSize) -> AXError {
+        let error = setSize(size)
+        guard error == .attributeUnsupported else { return error }
+        let resent = Self.resendRefusedSize(size, write: setSize)
+        hyprLog(.notice, .tiling, "size write refused: wid=\(windowID) pid=\(ownerPID)"
+                + " size=\(Int(size.width))x\(Int(size.height)) — resent after a 1pt nudge: \(resent.rawValue)")
+        return resent
+    }
+
+    private func setSize(_ size: CGSize) -> AXError {
         var size = size
         guard let value = AXValueCreate(.cgSize, &size) else { return .illegalArgument }
         cachedFrame = nil
         return AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, value)
+    }
+
+    /// Some apps report the size they were last asked for, not the size the
+    /// window has, and refuse a write equal to it with -25205 without
+    /// resizing. Seen live with Dia: AX said 1496x839 while the window server
+    /// had 688x446, so the grow into a closed neighbour's slot never landed.
+    /// A size one point narrower is a real change; the target after it is
+    /// one too.
+    static func resendRefusedSize(_ size: CGSize, write: (CGSize) -> AXError) -> AXError {
+        let nudge = write(CGSize(width: max(size.width - 1, 1), height: size.height))
+        guard nudge == .success else { return nudge }
+        return write(size)
     }
 
     func readPosition() -> (AXError, CGPoint?) {
@@ -341,6 +362,12 @@ class HyprWindow: Equatable, Hashable {
             // .activateIgnoringOtherApps is the legacy option but still functions on Tahoe;
             // empty-options activate() is silently dropped from non-keyboard contexts.
             app?.activate(options: [.activateIgnoringOtherApps])
+            // macOS 27 drops that activate from an inactive accessory app, so
+            // the window gets AX focus while keys still go to the old app.
+            // SkyLight fronts the process the way focusWithoutRaise does.
+            if let sl = makeFrontAndKeyWithoutRaise() {
+                hyprLog(.debug, .focus, "focus(\(wid)) \(sl)")
+            }
             // verify activation actually flipped — if not, log it. isActive
             // follows the workspace notification, which lands well after
             // 10 ms when the main thread is busy with the frame writes that

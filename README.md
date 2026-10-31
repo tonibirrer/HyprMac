@@ -106,7 +106,7 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 |----------|--------|
 | `Hypr + ←/→/↑/↓` | Focus window in direction |
 | `Hypr + Shift + ←/→/↑/↓` | Swap window in direction |
-| `Hypr + Ctrl + ←/→` | Move window to adjacent monitor |
+| `Hypr + Ctrl + ←/→/↑/↓` | Move window to the adjacent monitor in that direction |
 | `Hypr + Ctrl + Shift + ←/→/↑/↓` | Resize focused window in direction |
 | `Hypr + 1–9` / `Hypr + 0` | Switch to workspace 1–9 / workspace 10 |
 | `Hypr + Shift + 1–9` / `Hypr + Shift + 0` | Move window to workspace 1–9 / workspace 10 |
@@ -322,6 +322,7 @@ cp -r build/Build/Products/Debug/HyprMac.app /Applications/
 - [Architecture](docs/architecture.md): subsystems, ownership rules, threading
 - [Tiling algorithm](docs/tiling-algorithm.md): BSP dwindle, smart insert, two-pass layout
 - [Keybinds and actions](docs/keybinds-and-actions.md): the `Action` enum and its JSON schema
+- [Status bars](docs/status-bar.md): `state.json`, the change hook and `hyprmac://` links for sketchybar, turned on by hand in `monitor-config.json`
 - [Debugging](docs/debugging.md): Console filters, verbose logging, common recipes
 - [Release pipeline](docs/release.md): how a release is built, signed, and published
 

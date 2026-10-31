@@ -122,6 +122,14 @@ final class AdmissionRecovery {
     /// float the same way.
     var narrowingRounds = 3
 
+    /// Delays between the passes a vacated key gets after its gap-filling
+    /// pass failed on an AX error, one entry per pass. Live, the window
+    /// that refused its grow took it on a retry 250 ms later.
+    var vacatedRetryDelays: [TimeInterval] = [0.25, 0.5, 1.0]
+    /// How long a vacated retry waits out a drag or a workspace transition
+    /// before it gives up on its pass, in waits of the first delay.
+    var vacatedSuspensionWaits = 8
+
     /// What one recovery attempt found out.
     struct AttemptResult {
         /// newcomers the attempt left in the published tree.
@@ -204,12 +212,36 @@ final class AdmissionRecovery {
     /// Ask the engine to drop the key's unverified mark. It refuses when a
     /// rollback on that key did not verify, so the answer is its to give.
     var clearUnverified: (Int, NSScreen) -> Void = { _, _ in }
+    /// One ordinary pass for a key a window left, after the pass that
+    /// should have filled the gap failed on an AX error. nil when there was
+    /// nothing to lay out.
+    var retileVacated: (_ workspace: Int, _ screen: NSScreen) -> TilingEngine.AdmissionResult? = { _, _ in nil }
+    /// a drag is in flight or a workspace transition is settling, the
+    /// times the drift re-apply also stays out. production hands it the
+    /// drift monitor's gate.
+    var isLayoutSuspended: () -> Bool = { false }
     var terminalOutcome: (_ workspace: Int, _ screen: NSScreen,
                           _ result: TilingEngine.AdmissionResult?) -> Void = { _, _, _ in }
 
     // MARK: - state
 
     private var records: [CGWindowID: Record] = [:]
+
+    /// A vacated key waiting on its next pass, by workspace.
+    private struct VacatedRetry {
+        let screen: NSScreen
+        /// passes run so far
+        var attempts = 0
+        /// times it found layout suspended and waited
+        var waits = 0
+        /// tells a timer still in flight that this retry is not its own
+        var token: UInt64
+    }
+    private var vacatedRetries: [Int: VacatedRetry] = [:]
+    private var vacatedToken: UInt64 = 0
+    /// set while a vacated retry's own pass runs, so the pass reporting
+    /// back through `note` does not arm a second one
+    private var runningVacatedRetry = false
     /// bumped by every cancellation, so a timer already in flight finds a
     /// stale token and does nothing.
     private var token: UInt64 = 0
@@ -239,6 +271,8 @@ final class AdmissionRecovery {
         // the scratchpad layer runs its own recovery and must never enter
         // this path
         guard result.workspace != TilingEngine.scratchpadWorkspace else { return }
+
+        noteVacated(result)
 
         for id in result.publishedIDs where records[id] != nil {
             resolve(id, reason: "tiled")
@@ -285,6 +319,10 @@ final class AdmissionRecovery {
     /// stale. Resize, swap and split toggle do not: see
     /// `WindowManager.cancelsPendingRecovery`.
     func cancelAll(reason: String) {
+        if !vacatedRetries.isEmpty {
+            hyprLog(.notice, .tiling, "vacated layout retry cancelled: ws\(vacatedRetries.keys.sorted()) reason=\(reason)")
+            vacatedRetries.removeAll()
+        }
         guard !records.isEmpty else { return }
         let ids = Set(records.keys)
         records.removeAll()
@@ -301,6 +339,105 @@ final class AdmissionRecovery {
     private func resolve(_ windowID: CGWindowID, reason: String) {
         guard records.removeValue(forKey: windowID) != nil else { return }
         hyprLog(.notice, .tiling, "admission recovery resolved: \(windowID) (\(reason))")
+    }
+
+    // MARK: - a key a window left
+
+    /// A pass on a key a window just left (closed, hidden, moved away) that
+    /// failed on an AX error rolled the neighbours back over the gap, and
+    /// no event that follows lays the key out again: the drift check skips
+    /// an unverified key and the admission retry only tracks newcomers. So
+    /// the key gets a few ordinary passes of its own, with backoff. A
+    /// geometric refusal gets none — the window answered, and the same
+    /// frames would only be refused again. A pass that also stranded a
+    /// newcomer is left to the newcomer's retry, so two timers never lay
+    /// out one key; that retry does not come back here if it fails too.
+    private func noteVacated(_ result: TilingEngine.AdmissionResult) {
+        guard !runningVacatedRetry else { return }
+        if result.published {
+            if vacatedRetries.removeValue(forKey: result.workspace) != nil {
+                hyprLog(.notice, .tiling, "vacated layout retry settled: ws\(result.workspace) — another pass filled it")
+            }
+            return
+        }
+        guard result.vacated, let failure = result.failure, failure.isAXFailure,
+              result.strandedIDs.isEmpty, vacatedRetries[result.workspace] == nil,
+              let delay = vacatedRetryDelays.first else { return }
+        vacatedToken &+= 1
+        vacatedRetries[result.workspace] = VacatedRetry(screen: result.screen, token: vacatedToken)
+        hyprLog(.notice, .tiling, "vacated layout retry scheduled: ws\(result.workspace)"
+                + " in \(Int((delay * 1000).rounded()))ms cause=\(failure.trace)")
+        armVacated(result.workspace, after: delay)
+    }
+
+    private func armVacated(_ workspace: Int, after delay: TimeInterval) {
+        guard let armed = vacatedRetries[workspace]?.token else { return }
+        schedule(delay) { [weak self] in
+            guard let self, self.vacatedRetries[workspace]?.token == armed else { return }
+            self.runVacated(workspace)
+        }
+    }
+
+    private func runVacated(_ workspace: Int) {
+        guard var retry = vacatedRetries[workspace] else { return }
+        // a key that is not on screen now gets its pass when it is shown, and
+        // a display change retiles every key once it settles
+        let dropped: String?
+        if !isWorkspaceVisible(workspace) {
+            dropped = "workspace hidden"
+        } else if homeScreenForWorkspace(workspace) != retry.screen {
+            dropped = "screen changed"
+        } else if isDisplayTransitionPending() {
+            dropped = "display transition"
+        } else if isSessionInterrupted() {
+            dropped = "session interrupted"
+        } else {
+            dropped = nil
+        }
+        if let dropped {
+            vacatedRetries.removeValue(forKey: workspace)
+            hyprLog(.notice, .tiling, "vacated layout retry dropped: ws\(workspace) — \(dropped)")
+            return
+        }
+        // a drag or a move's transition is still settling. a pass now would
+        // write under the user's hand or read stale frames
+        if isLayoutSuspended() {
+            guard retry.waits < vacatedSuspensionWaits, let wait = vacatedRetryDelays.first else {
+                vacatedRetries.removeValue(forKey: workspace)
+                hyprLog(.notice, .tiling, "vacated layout retry dropped: ws\(workspace) — layout stayed suspended")
+                return
+            }
+            retry.waits += 1
+            vacatedToken &+= 1
+            retry.token = vacatedToken
+            vacatedRetries[workspace] = retry
+            armVacated(workspace, after: wait)
+            return
+        }
+        retry.attempts += 1
+        runningVacatedRetry = true
+        let result = retileVacated(workspace, retry.screen)
+        runningVacatedRetry = false
+        guard let result, !result.published, result.vacated, result.strandedIDs.isEmpty,
+              let failure = result.failure, failure.isAXFailure else {
+            vacatedRetries.removeValue(forKey: workspace)
+            hyprLog(.notice, .tiling, "vacated layout retry \(retry.attempts): ws\(workspace) "
+                    + (result?.failure.map { "ended: \($0.trace)" } ?? "filled the gap"))
+            return
+        }
+        guard retry.attempts < vacatedRetryDelays.count else {
+            vacatedRetries.removeValue(forKey: workspace)
+            hyprLog(.notice, .tiling, "vacated layout retry gave up: ws\(workspace) after"
+                    + " \(retry.attempts) passes cause=\(failure.trace)")
+            return
+        }
+        let delay = vacatedRetryDelays[retry.attempts]
+        vacatedToken &+= 1
+        retry.token = vacatedToken
+        vacatedRetries[workspace] = retry
+        hyprLog(.notice, .tiling, "vacated layout retry \(retry.attempts) failed: ws\(workspace)"
+                + " cause=\(failure.trace) — again in \(Int((delay * 1000).rounded()))ms")
+        armVacated(workspace, after: delay)
     }
 
     // MARK: - the one retry

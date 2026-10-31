@@ -41,12 +41,16 @@ enum Action: Equatable {
 `Direction` is `enum Direction: String, Codable { left, right, up, down }`.
 
 `cycleWorkspace(Int)` takes `+1` (next occupied workspace on the
-current monitor) or `-1` (previous). `moveWindowToMonitor` accepts
-the full four-way `Direction` for symmetry, but the orchestrator
-only honors `.left` / `.right`. It moves the focused window to the
-adjacent monitor's visible workspace — the case was repurposed from
-the old workspace-to-monitor move, which static anchoring made a
-permanent no-op; its wire key is unchanged (see below).
+current monitor) or `-1` (previous). `moveWindowToMonitor` honors all
+four directions: it moves the focused window to the visible workspace of
+the nearest enabled monitor that lies wholly in that direction, left and
+right for side-by-side arrangements, up and down for stacked ones. The
+pick is `WorkspaceOrchestrator.nearestScreenIndex`, a pure function over
+`NSScreen.frame` rectangles: nearest along the axis wins, a tie goes to
+the monitor sharing the most extent with the source on the cross axis.
+Nothing that way beeps and flashes. Defaults are Hypr+Ctrl+arrow. The
+case was repurposed from the old workspace-to-monitor move, which static
+anchoring made a permanent no-op; its wire key is unchanged (see below).
 
 Fork: with linked monitors every screen shows the same workspace, so
 `moveWindowToMonitor` moves the focused tile to the neighboring screen
@@ -207,6 +211,25 @@ Downgrade: an older build sharing `config.json` over iCloud ignores
 pins are lost on every machine. Keep machines that share a config on a
 build with window rules. No `ConfigMigration` step is involved.
 
+## Workspace names
+
+`workspaceNames` in `config.json` gives workspaces 1–10 an optional name.
+Settings → General → "Workspace names" edits it:
+
+```
+"workspaceNames": { "4": "term" }
+```
+
+A set name replaces the number in the switch HUD, the menu bar panel
+(buttons, tooltips), the workspace pickers in Settings and the
+"is full" flash. Overview cards show it after the number (the digit
+keys still switch by number) and its search matches it. The menu bar
+glyphs, the keybind list and log lines keep the number. All readers go through
+`UserConfig.workspaceDisplayName`; a missing or blank name falls back to
+the number. Keys other than "1"…"10" and empty names are dropped on load,
+and an unreadable value costs only the names. An older build ignores the
+key and drops it on its next save. No `ConfigMigration` step is involved.
+
 ## JSON wire format
 
 The `Codable` implementation in `Models/Action.swift` preserves the
@@ -256,6 +279,10 @@ alias entry rather than break the wire format.
 
 A case added later is frozen at the key it first shipped with, such as
 `moveToNextEmptyWorkspace`, `moveToWorkspaceAndFollow` or `retileAll`.
+
+The `hyprmac://action/<name>` link names (`ExternalCommand.actionNames`,
+`docs/external-control.md`) are a second frozen list. They use the Swift
+case names, not these wire keys, and `ExternalCommandTests` pins them.
 
 ## `AnyKey`
 
@@ -366,15 +393,33 @@ Two on-disk files:
   from a one-time read-only import on first launch.
 - `~/Library/Application Support/HyprMacExperiments/monitor-config.json` —
   per-machine settings. Local only, never synced.
-  `maxSplitsPerMonitor` and `disabledMonitors` live here. These
+  `maxSplitsPerMonitor`, `disabledMonitors`,
+  `outerPaddingPerMonitor` and `workspaceMonitors` live here. The first two
   used to live in `config.json`, but per-machine settings round-tripping
-  through iCloud Drive clobbered each machine's setup.
+  through iCloud Drive clobbered each machine's setup. The status bar
+  export keys `statusExportEnabled` and `statusHookCommand` live here
+  too, set by hand with no Settings UI (see [status-bar.md](status-bar.md)).
+  The file watcher follows only `config.json`, so quit HyprMac before
+  editing this file and reopen it after.
 
 `ConfigMigration.resolveMonitorConfig` handles the migration: if
 the local file is absent and the synced config has the old fields,
 it adopts the synced values and returns `needsLocalWrite: true` so
 the caller persists a local file. After one launch, the local file
 is the source of truth and the synced fields are ignored.
+
+`workspaceMonitors` is optional and maps a monitor name
+(`NSScreen.localizedName`) to the workspaces that live on it, e.g.
+`{"DELL U3225QE": [1, 2, 3], "LG HDR 4K": [4, 5], "Built-in Retina Display": [6, 7]}`.
+Absent or empty means the formula homes, `(N - 1) % enabledMonitorCount`.
+Unlisted workspaces, and workspaces listed under a monitor that is not
+connected or is disabled, keep their formula home. A number listed twice
+goes to the name that sorts first, with one notice in the log. Numbers
+outside 1–10 are ignored. A mapping that would leave an enabled monitor
+with no workspace is ignored for that layout. Keys 1–9 and 0 still mean
+workspaces 1–10. It decodes tolerantly like the other monitor fields: a
+value this build can't read costs only `workspaceMonitors`. It was
+local-only from the start, so there is no `ConfigMigration` step.
 
 ## Default keybinds
 
@@ -512,7 +557,11 @@ Config lives at `~/Library/Application Support/HyprMacExperiments/config.json`
 { "keyCode": 123, "modifiers": 1, "action": { "focusDirection": { "_0": "left" } } }
 ```
 
-Restart HyprMac after editing. Example — bind Hypr+B to launch Safari:
+`ConfigStore` watches the file and reloads it on change. After an atomic
+save (most editors, `mv tmp config.json`) the file has a new inode, so the
+watcher re-opens the path, retries while the path is briefly missing, and
+reloads once more so a save in that gap is not lost. If an edit does not
+show up, restart HyprMac. Example — bind Hypr+B to launch Safari:
 
 ```json
 { "keyCode": 11, "modifiers": 1, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }
@@ -552,6 +601,13 @@ every JSON example in this file.
 tile — auto-float on discovery, and Hypr+T refuses to tile them),
 `windowRules` (per-app workspace pins, see "Window rules"), `disabledMonitors` (monitor names
 matching `NSScreen.localizedName`, excluded from tiling entirely),
+`outerPaddingPerMonitor` (in `monitor-config.json`: per-side outer
+padding per monitor name, e.g.
+`{"DELL U3225QE": {"top": 37, "left": 8}, "Built-in Retina Display": {"right": 60}}`;
+`top`, `left`, `bottom` and `right` are each optional, and a missing side
+or monitor uses `outerPadding`. An unreleased build wrote a top-only
+`topPaddingPerMonitor` map; it still loads as top overrides when
+`outerPaddingPerMonitor` is absent, and the next save drops it),
 `scratchpadTileByDefault` (windows sent to the scratchpad tile into
 the layer instead of floating; no-fit windows float regardless),
 `scratchpadRegionInset` (per-edge inset fraction of the scratchpad's

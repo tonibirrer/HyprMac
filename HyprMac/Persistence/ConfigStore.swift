@@ -35,11 +35,15 @@ final class ConfigStore {
         .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         .appendingPathComponent(AppIdentity.upstreamDirectoryName, isDirectory: true)
 
-    init() {
+    init(localConfigURL: URL = ConfigStore.configPath) {
+        self.localConfigURL = localConfigURL
         // first launch with a dedicated directory: carry the config over
         // from the shared one so the switch is invisible; the stock app
-        // keeps its files untouched.
-        ConfigMigration.importUpstreamDirectory(from: Self.upstreamConfigDir, to: Self.configDir)
+        // keeps its files untouched. a store on another file (the watcher
+        // tests) never touches the real directory
+        if localConfigURL == Self.configPath {
+            ConfigMigration.importUpstreamDirectory(from: Self.upstreamConfigDir, to: Self.configDir)
+        }
     }
 
     // main config — may be a symlink to iCloud when sync is on
@@ -55,8 +59,10 @@ final class ConfigStore {
         return iCloudDir.appendingPathComponent("config.json")
     }
 
-    var localConfigURL: URL { Self.configPath }
+    let localConfigURL: URL
     var monitorConfigURL: URL { Self.monitorConfigPath }
+
+    /// `localConfigURL` is injectable so tests can watch a scratch file.
 
     var isICloudDriveAvailable: Bool {
         FileManager.default.fileExists(atPath:
@@ -72,6 +78,9 @@ final class ConfigStore {
 
     private var fileWatcherSource: DispatchSourceFileSystemObject?
     private var fileWatcherFD: Int32 = -1
+    // bumped by stopFileWatcher so a pending re-arm retry knows it's stale
+    private var rearmGeneration = 0
+    private static let rearmMaxDelay: TimeInterval = 4
 
     // MARK: - load
 
@@ -188,8 +197,17 @@ final class ConfigStore {
             eventMask: [.write, .rename, .delete],
             queue: .main
         )
-        source.setEventHandler { [weak self] in
-            self?.onFileChanged?()
+        source.setEventHandler { [weak self, unowned source] in
+            guard let self else { return }
+            let replaced = !source.data.isDisjoint(with: [.rename, .delete])
+            self.onFileChanged?()
+            // an atomic save (most editors, `mv tmp config.json`) swaps in a
+            // new inode and leaves this fd on the unlinked old one, which
+            // never fires again. re-open the path so later edits still land
+            if replaced {
+                hyprLog(.notice, .config, "config file replaced on disk, re-arming watcher")
+                self.rearmAfterReplace()
+            }
         }
         source.setCancelHandler {
             close(fd)
@@ -198,10 +216,34 @@ final class ConfigStore {
         fileWatcherSource = source
     }
 
+    var isWatchingFile: Bool { fileWatcherSource != nil }
+
     func stopFileWatcher() {
         fileWatcherSource?.cancel()
         fileWatcherSource = nil
         fileWatcherFD = -1
+        rearmGeneration += 1
+    }
+
+    // re-open the path after the file was replaced. editors that rename the
+    // old file away before writing the new one leave nothing to open for a
+    // moment, so keep retrying with backoff. once the new file is watched,
+    // reload again: a save that landed in the gap fired no event.
+    private func rearmAfterReplace(delay: TimeInterval = 0.5) {
+        stopFileWatcher()
+        let generation = rearmGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, generation == self.rearmGeneration else { return }
+            self.startFileWatcher()
+            if self.isWatchingFile {
+                self.onFileChanged?()
+            } else {
+                if delay == 0.5 {
+                    hyprLog(.notice, .config, "config file missing at re-arm, retrying")
+                }
+                self.rearmAfterReplace(delay: min(delay * 2, Self.rearmMaxDelay))
+            }
+        }
     }
 
     func restartFileWatcher() {
@@ -264,6 +306,7 @@ struct SavedConfig: Codable {
     // trailing optional — existing `SavedConfig(...)` call sites keep compiling.
     var restoreLayoutOnLaunch: Bool? = nil
     var windowRules: [WindowRule]? = nil
+    var workspaceNames: [String: String]? = nil
     // fork: per-app effects beside upstream's pins (see AppRule)
     var appRules: [AppRule]? = nil
 }
@@ -310,6 +353,7 @@ extension SavedConfig {
         case appRules = "experimentsAppRules"
         case restoreLayoutOnLaunch
         case windowRules
+        case workspaceNames
     }
 
     init(from decoder: Decoder) throws {
@@ -383,6 +427,7 @@ extension SavedConfig {
         self.stickyWorkspaces = Self.tolerant(c, .stickyWorkspaces)
         self.restoreLayoutOnLaunch = Self.tolerant(c, .restoreLayoutOnLaunch)
         let windowRules = Self.tolerantWindowRules(c)
+        self.workspaceNames = Self.tolerantWorkspaceNames(c)
         if c.contains(.appRules) {
             self.windowRules = windowRules
             self.appRules = Self.tolerant(c, .appRules)
@@ -396,6 +441,15 @@ extension SavedConfig {
                 ? windowRules
                 : windowRules?.filter { Constants.workspaceRange.contains($0.workspace) }
         }
+    }
+
+    // keys "1"…"10" with a non-empty name; anything else is dropped, so a
+    // hand edit can't leave a stray key that nothing ever shows
+    private static func tolerantWorkspaceNames(_ c: KeyedDecodingContainer<CodingKeys>) -> [String: String]? {
+        let valid = Set(Constants.workspaceRange.map(String.init))
+        let names: [String: String]? = tolerant(c, .workspaceNames)
+        let kept = names?.filter { valid.contains($0.key) && !$0.value.isEmpty }
+        return kept?.isEmpty == false ? kept : nil
     }
 
     // the fork's effects inside legacy windowRules entries, one AppRule per
@@ -488,10 +542,52 @@ private struct FailableWindowRule: Decodable {
     }
 }
 
+// per-side outer padding override for one monitor. a nil side uses the
+// shared outerPadding
+struct EdgePadding: Codable, Equatable {
+    var top: CGFloat? = nil
+    var left: CGFloat? = nil
+    var bottom: CGFloat? = nil
+    var right: CGFloat? = nil
+
+    var isEmpty: Bool { top == nil && left == nil && bottom == nil && right == nil }
+}
+
+// tolerant per side: a hand-edited bad value costs only that side
+extension EdgePadding {
+    private enum CodingKeys: String, CodingKey {
+        case top, left, bottom, right
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func side(_ key: CodingKeys) -> CGFloat? {
+            do {
+                return try c.decodeIfPresent(CGFloat.self, forKey: key)
+            } catch {
+                hyprLog(.notice, .config,
+                        "monitor-config.json has a \(key.stringValue) padding this build can't read; using outer padding")
+                return nil
+            }
+        }
+        self.init(top: side(.top), left: side(.left), bottom: side(.bottom), right: side(.right))
+    }
+}
+
 // monitor-specific settings — stored locally, never synced via iCloud
 struct SavedMonitorConfig: Codable {
     let maxSplitsPerMonitor: [String: Int]?
     let disabledMonitors: [String]?
+    // a monitor without an entry pads every edge with outerPadding
+    var outerPaddingPerMonitor: [String: EdgePadding]? = nil
+    // monitor name → workspaces that live there. nil = the formula homes
+    var workspaceMonitors: [String: [Int]]? = nil
+    // status bar export, see docs/status-bar.md. per machine since the bar
+    // and its hook are set up per Mac. no Settings UI, hand-edited
+    var statusExportEnabled: Bool? = nil
+    var statusHookCommand: String? = nil
+    // hyprmac://action/… links, see docs/external-control.md. per machine
+    var externalControlEnabled: Bool? = nil
     // fork fields default to nil so upstream's call sites compile unchanged
     var linkedMonitors: Bool? = nil
     // accordion mode (single-screen stacked layout). accordionMonitor nil
@@ -507,4 +603,55 @@ struct SavedMonitorConfig: Codable {
     // Info.plist declares no game category.
     var gameMonitor: String? = nil
     var gameBundleIDs: [String]? = nil
+}
+
+// per-field tolerant like SavedConfig: a hand-edited bad value costs only
+// its field. strict decoding failed the whole file, and the next save then
+// wrote every monitor setting away.
+extension SavedMonitorConfig {
+    private enum CodingKeys: String, CodingKey {
+        case maxSplitsPerMonitor, disabledMonitors, outerPaddingPerMonitor, workspaceMonitors,
+             statusExportEnabled, statusHookCommand, externalControlEnabled,
+             // fork (HyprMacExperiments)
+             linkedMonitors, accordionMode, accordionMonitor, accordionOverlap,
+             singleScreenRestore, gameMonitor, gameBundleIDs
+    }
+
+    // unreleased top-only shape from PR #51. read once, never written back
+    private enum LegacyKeys: String, CodingKey {
+        case topPaddingPerMonitor
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func tolerant<T: Decodable, K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) -> T? {
+            do {
+                return try c.decodeIfPresent(T.self, forKey: key)
+            } catch {
+                hyprLog(.notice, .config,
+                        "monitor-config.json has a \(key.stringValue) value this build can't read; using the default")
+                return nil
+            }
+        }
+        var padding: [String: EdgePadding]? = tolerant(c, .outerPaddingPerMonitor)
+        if !c.contains(.outerPaddingPerMonitor) {
+            let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+            let top: [String: CGFloat]? = tolerant(legacy, .topPaddingPerMonitor)
+            padding = top?.mapValues { EdgePadding(top: $0) }
+        }
+        self.init(maxSplitsPerMonitor: tolerant(c, .maxSplitsPerMonitor),
+                  disabledMonitors: tolerant(c, .disabledMonitors),
+                  outerPaddingPerMonitor: padding,
+                  workspaceMonitors: tolerant(c, .workspaceMonitors),
+                  statusExportEnabled: tolerant(c, .statusExportEnabled),
+                  statusHookCommand: tolerant(c, .statusHookCommand),
+                  externalControlEnabled: tolerant(c, .externalControlEnabled),
+                  linkedMonitors: tolerant(c, .linkedMonitors),
+                  accordionMode: tolerant(c, .accordionMode),
+                  accordionMonitor: tolerant(c, .accordionMonitor),
+                  accordionOverlap: tolerant(c, .accordionOverlap),
+                  singleScreenRestore: tolerant(c, .singleScreenRestore),
+                  gameMonitor: tolerant(c, .gameMonitor),
+                  gameBundleIDs: tolerant(c, .gameBundleIDs))
+    }
 }

@@ -10,6 +10,10 @@ struct TiledDragContext: Equatable {
     let memberIDs: Set<CGWindowID>
     let floatingIDs: Set<CGWindowID>
     let fingerprint: BSPTree.StructuralFingerprint
+    // what a rollback verifies against. it covers the unpadded screen too:
+    // tiles laid out before a padding change still stand in the old strip.
+    // nil means usableFrame
+    var restorationFrame: CGRect? = nil
 }
 
 enum TiledDragMode {
@@ -395,6 +399,7 @@ struct TiledDragTransaction {
             targets: layouts.map { .init(windowID: $0.0.windowID, frame: $0.1) },
             originalFrames: snapshot.originalFrames,
             usableFrame: snapshot.context.usableFrame,
+            restorationUsableFrame: snapshot.context.restorationFrame,
             gap: snapshot.context.gap,
             generation: snapshot.generation
         )
@@ -842,7 +847,7 @@ struct TiledDragTransaction {
                          attempt: FrameSizingAttempt) -> TiledDragDropOutcome {
         let result = sizing(attempt).restore(
             originalFrames: snapshot.originalFrames,
-            usableFrame: snapshot.context.usableFrame,
+            usableFrame: snapshot.context.restorationFrame ?? snapshot.context.usableFrame,
             gap: snapshot.context.gap,
             generation: snapshot.generation
         )
@@ -872,12 +877,14 @@ struct TiledDragTransaction {
                                cross: TiledDragCrossTree) -> TiledDragDropOutcome {
         let restorer = sizing(attempt)
         let source = restorer.restore(originalFrames: snapshot.originalFrames,
-                                      usableFrame: snapshot.context.usableFrame,
+                                      usableFrame: snapshot.context.restorationFrame
+                                          ?? snapshot.context.usableFrame,
                                       gap: snapshot.context.gap,
                                       generation: snapshot.generation)
         if Self.failure(of: source.verdict) == .superseded { return .superseded }
         let arriving = restorer.restore(originalFrames: targetOriginals,
-                                        usableFrame: target.context.usableFrame,
+                                        usableFrame: target.context.restorationFrame
+                                            ?? target.context.usableFrame,
                                         gap: target.context.gap,
                                         generation: snapshot.generation)
         if Self.failure(of: arriving.verdict) == .superseded { return .superseded }
