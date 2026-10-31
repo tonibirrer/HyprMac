@@ -54,7 +54,6 @@ class WindowManager {
     private(set) var workspaceManager: WorkspaceManager!
     private(set) var tilingEngine: TilingEngine!
     private(set) var wallpaperManager: WallpaperManager!
-    private(set) var ipcServer: IPCServer!
 
     // window-keyed state cache. owns all seven lifecycle/classification dicts:
     // knownWindowIDs, floatingWindowIDs, originalFrames, windowOwners, hiddenWindowIDs,
@@ -946,19 +945,6 @@ class WindowManager {
                                             config: config)
         wallpaperManager.start()
 
-        ipcServer = IPCServer(workspaceManager: workspaceManager,
-                              displayManager: displayManager,
-                              stateCache: stateCache,
-                              config: config,
-                              focusedWorkspace: { [weak self] in
-                                  guard let self else { return 1 }
-                                  return self.workspaceManager.workspaceForScreen(self.screenUnderCursor())
-                              },
-                              switchWorkspace: { [weak self] ws in
-                                  self?.actionDispatcher.dispatch(.switchWorkspace(ws))
-                              })
-        ipcServer?.fullscreenWindows = { [weak self] ws in self?.fullscreen.members.members(onWorkspace: ws) ?? [] }
-        ipcServer.start()
         config.$workspaceWallpapers
             .dropFirst()
             .removeDuplicates()
@@ -3609,7 +3595,13 @@ class WindowManager {
 
     /// Read-only, no AX walk: workspace state plus app names from the owners.
     private func statusSnapshot() -> StatusSnapshot {
-        let assigned = workspaceManager.regularWorkspaceWindowIDs()
+        var assigned = workspaceManager.regularWorkspaceWindowIDs()
+        // fork: a native-fullscreen window belongs to its workspace (PR 28)
+        // without being assigned there; a bar shows it like any window
+        for ws in Constants.workspaceRange {
+            let fullscreenIDs = fullscreen.members.members(onWorkspace: ws).map(\.windowID)
+            if !fullscreenIDs.isEmpty { assigned[ws, default: []].formUnion(fullscreenIDs) }
+        }
         let members = scratchpad.members
         let hidden = stateCache.hiddenWindowIDs
         var apps: [CGWindowID: StatusSnapshot.Input.App] = [:]
@@ -3634,7 +3626,8 @@ class WindowManager {
             focusedWindowID: focusController.lastFocusedID,
             cursorScreen: screens.isEmpty ? nil : screenUnderCursor().localizedName,
             apps: apps,
-            names: config.workspaceNames))
+            names: config.workspaceNames,
+            colors: config.workspaceColors))
     }
 
     /// A keybind press or an action link. Pause and resume always work; the
@@ -3768,7 +3761,8 @@ class WindowManager {
                 animatedRetile(windows: allWindows)
                 retiled = true
             }
-            NotificationCenter.default.post(name: .hyprMacWindowsChanged, object: nil)
+            // status bars list fullscreen members on their workspace
+            statusExporter.noteChange()
         }
         // a tile a workspace switch dropped comes back with the window list
         workspaceOrchestrator.retileDroppedTiles("poll")

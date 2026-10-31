@@ -1,23 +1,23 @@
 #!/bin/bash
 # HyprMac workspaces for sketchybar — drop-in replacement for the popular
-# aerospace integration, driven by HyprMac's Hyprland-style IPC via
-# `hyprmacctl` (workspace indicators, per-workspace app icons, click to
-# switch, per-workspace accent colors).
+# aerospace integration, driven by HyprMac's status export: state.json
+# written on every change, a hook that triggers hyprmac_change, and
+# hyprmac-experiments:// links for clicks (workspace indicators,
+# per-workspace app icons, click to switch, per-workspace accent colors).
 #
-# Requires: hyprmacctl on PATH, jq, and the hyprmac_* plugins next to
-# your other sketchybar plugins.
+# Requires: jq, and plugins/hyprmac.sh + plugins/hyprmac_hook.sh next to
+# your other sketchybar plugins. See README.md for the monitor-config.json
+# keys that turn the export on.
 
-sketchybar --add event hyprmac_workspace_change
-sketchybar --add event hyprmac_update_windows
+sketchybar --add event hyprmac_change
 
 # HyprMac has a fixed set of workspaces, so the items do not depend on
 # HyprMac running: sketchybar usually loads first at login. They start
-# hidden; the listener paints them once it reaches HyprMac.
+# hidden; plugins/hyprmac.sh paints them from state.json.
 WORKSPACE_COUNT=10
 
 for sid in $(seq 1 "$WORKSPACE_COUNT"); do
   sketchybar --add item space.$sid left \
-    --subscribe space.$sid hyprmac_workspace_change \
     --set space.$sid \
     drawing=off \
     background.color=0x44ffffff \
@@ -32,10 +32,11 @@ for sid in $(seq 1 "$WORKSPACE_COUNT"); do
     label.padding_right=20 \
     label.padding_left=0 \
     label.y_offset=-1 \
-    click_script="hyprmacctl dispatch workspace $sid" \
-    script="$PLUGIN_DIR/hyprmac.sh $sid"
+    click_script="open -g 'hyprmac-experiments://workspace?n=$sid'"
 done
 
+# one script repaints every workspace item from state.json, so a change
+# reads the file once
 sketchybar --add item space_separator left \
   --set space_separator icon="􀆊" \
   icon.font="$FONT:Heavy:16.0" \
@@ -44,20 +45,9 @@ sketchybar --add item space_separator left \
   padding_right=15 \
   label.drawing=off \
   background.drawing=off \
-  script="$PLUGIN_DIR/hyprmac_windows.sh" \
-  --subscribe space_separator hyprmac_update_windows \
-  --subscribe space_separator hyprmac_workspace_change
+  script="$PLUGIN_DIR/hyprmac.sh" \
+  --subscribe space_separator hyprmac_change
 
-# relay daemon: streams HyprMac IPC events into the sketchybar triggers
-# and paints the items above. started last, so they exist by then.
-# restart it on every sketchybar reload so exactly one instance runs.
-# pkill -f is async (returns before the target actually exits), so wait for
-# it to actually die before spawning the replacement -- otherwise a fast
-# reload can leave two listeners racing on the same socket.
-pkill -f "plugins/hyprmac_listener.sh" 2>/dev/null
-for i in $(seq 1 20); do
-  pgrep -f "plugins/hyprmac_listener.sh" >/dev/null || break
-  sleep 0.1
-done
-pkill -9 -f "plugins/hyprmac_listener.sh" 2>/dev/null
-nohup "$PLUGIN_DIR/hyprmac_listener.sh" >/dev/null 2>&1 &
+# HyprMac may already be running (a sketchybar reload): paint from the
+# state file it last wrote
+sketchybar --trigger hyprmac_change

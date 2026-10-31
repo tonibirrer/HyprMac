@@ -30,6 +30,9 @@ struct StatusSnapshot: Codable, Equatable {
         let monitor: String?
         let visible: Bool
         let windows: [Window]
+        // fork: the workspace's accent color, "#RRGGBB" (Settings > Layout >
+        // Workspaces). absent when none is set
+        var color: String? = nil
     }
 
     var version = 1
@@ -61,6 +64,8 @@ struct StatusSnapshot: Codable, Equatable {
         var cursorScreen: String?
         var apps: [CGWindowID: App]
         var names: [String: String]
+        // fork: workspace number as a string → accent color hex, no "#"
+        var colors: [String: String] = [:]
     }
 
     /// Hidden windows are left out everywhere, as in the menu bar: a ghost
@@ -92,9 +97,11 @@ struct StatusSnapshot: Codable, Equatable {
         let workspaces = Constants.workspaceRange.compactMap { ws -> Workspace? in
             guard let monitor = input.homeScreens[ws] else { return nil }
             let name = input.names[String(ws)]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return Workspace(id: ws, name: name?.isEmpty == false ? name : nil, monitor: monitor,
-                             visible: visible.contains(ws),
-                             windows: live(input.assigned[ws] ?? []).map { window($0, detailed: true) })
+            var workspace = Workspace(id: ws, name: name?.isEmpty == false ? name : nil, monitor: monitor,
+                                      visible: visible.contains(ws),
+                                      windows: live(input.assigned[ws] ?? []).map { window($0, detailed: true) })
+            workspace.color = input.colors[String(ws)].map { "#\($0)" }
+            return workspace
         }
         return StatusSnapshot(
             focusedWorkspace: focusScreen?.visibleWorkspace,
