@@ -641,6 +641,11 @@ class UserConfig: ObservableObject {
     }
 
     func reloadFromDisk() {
+        // a coalesced save still pending holds changes newer than the file.
+        // reading the file first put the older value back in memory, and the
+        // pending save then wrote that older value out: a setting jumped
+        // back while its slider was still moving. write it, then read
+        flushPendingSave()
         guard let saved = store.loadSavedConfig() else { return }
 
         isReloading = true
