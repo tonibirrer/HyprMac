@@ -10,7 +10,7 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
         let usable = CGRect(x: -1080, y: -96, width: 1080, height: 1890)
         let parked = CGRect(x: 3439, y: 1347, width: 1064, height: 900)
         let target = tree.layout(in: usable, gap: TilingConfig.defaultGap,
-                                 padding: OuterPadding(uniform: TilingConfig.defaultOuterPadding))[0].1
+                                 padding: TilingConfig.defaultOuterPadding)[0].1
         var frame = parked
         var destinationReady = false
         var writes: [String] = []
@@ -639,7 +639,7 @@ final class TilingEngineVerifiedLayoutTests: XCTestCase {
             trace.onFirstRead = {
                 switch change {
                 case .gap: engine.gapSize += 1
-                case .padding: engine.outerPadding = engine.outerPadding + 1
+                case .padding: engine.outerPadding += 1
                 case .removeWindow: engine.removeWindowID(second.windowID)
                 case .display: engine.handleDisplayChange(currentScreens: [], homeScreensForWorkspace: { _ in [] })
                 case .prepareToggle:
@@ -871,7 +871,7 @@ private func timeoutRecoveryFixture(
         901: CGRect(x: -648, y: -88, width: 640, height: 933)
     ]
     let targets = Dictionary(uniqueKeysWithValues: tree.layout(
-        in: usable, gap: TilingConfig.defaultGap, padding: OuterPadding(uniform: TilingConfig.defaultOuterPadding)
+        in: usable, gap: TilingConfig.defaultGap, padding: TilingConfig.defaultOuterPadding
     ).map { ($0.0.windowID, $0.1) })
     let trace = TimeoutRecoveryTrace(frames: originals, original: originals[901]!,
                                      target: targets[901]!, mode: mode)

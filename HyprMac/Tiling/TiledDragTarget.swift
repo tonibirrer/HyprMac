@@ -135,7 +135,7 @@ struct TiledDropPlanner {
     /// both pick the release screen's target from these, never from a live
     /// read, so both see the same tiles.
     static func slots(of tree: BSPTree, in usableFrame: CGRect, gap: CGFloat,
-                      padding: OuterPadding) -> [CGWindowID: CGRect] {
+                      padding: CGFloat) -> [CGWindowID: CGRect] {
         Dictionary(tree.layout(in: usableFrame, gap: gap, padding: padding)
             .map { ($0.0.windowID, $0.1) }, uniquingKeysWith: { first, _ in first })
     }

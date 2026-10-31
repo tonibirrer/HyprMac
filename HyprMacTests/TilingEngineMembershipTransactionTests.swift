@@ -123,7 +123,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let rect = engine.displayManager.cgRect(for: screen)
         for w in [a, b] { trace.frames[w.windowID] = rect.insetBy(dx: 100, dy: 100) }
         // the 50/50 slot is 948 wide; the app answers with one cell more
-        let slot = (rect.width - engine.outerPadding.left - engine.outerPadding.right - engine.gapSize) / 2
+        let slot = (rect.width - 2 * engine.outerPadding - engine.gapSize) / 2
         trace.minSize[a.windowID] = CGSize(width: slot + 8, height: 0)
 
         let result = engine.tileWindows([a, b], onWorkspace: 1, screen: screen)

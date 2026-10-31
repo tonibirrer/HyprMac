@@ -5,7 +5,7 @@ struct TiledDragContext: Equatable {
     let physicalDisplayID: CGDirectDisplayID
     let usableFrame: CGRect
     let gap: CGFloat
-    let padding: OuterPadding
+    let padding: CGFloat
     let maxDepth: Int
     let memberIDs: Set<CGWindowID>
     let floatingIDs: Set<CGWindowID>

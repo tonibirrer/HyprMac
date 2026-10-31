@@ -5,7 +5,7 @@ import XCTest
 final class AccordionLayoutTests: XCTestCase {
 
     private let rect = CGRect(x: 0, y: 0, width: 1000, height: 600)
-    private let pad = OuterPadding(uniform: 10)
+    private let pad: CGFloat = 10
     private let overlap: CGFloat = 50
 
     private func frames(_ order: [HyprWindow], focused: CGWindowID?) -> [CGWindowID: CGRect] {

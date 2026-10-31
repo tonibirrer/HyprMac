@@ -175,11 +175,6 @@ class UserConfig: ObservableObject {
     @Published var appRules: [AppRule] {
         didSet { if !isReloading { save() } }
     }
-    // per-side overrides of `outerPadding` (nil side = uniform value);
-    // e.g. top-only padding to reserve space for sketchybar
-    @Published var outerPaddingSides: PaddingSides {
-        didSet { if !isReloading { save() } }
-    }
     // per-workspace wallpaper image paths, keyed by workspace number as a
     // string ("1"..."9"). workspaces without an entry keep the current
     // desktop image.
@@ -206,15 +201,6 @@ class UserConfig: ObservableObject {
         if let workspace, let hex = workspaceColors[String(workspace)],
            let c = NSColor.fromHex(hex) { return c }
         return resolvedFocusBorderColor
-    }
-
-    /// The uniform slider value with per-side overrides applied — what the
-    /// tiling engine actually consumes.
-    var resolvedOuterPadding: OuterPadding {
-        OuterPadding(top: outerPaddingSides.top ?? outerPadding,
-                     left: outerPaddingSides.left ?? outerPadding,
-                     bottom: outerPaddingSides.bottom ?? outerPadding,
-                     right: outerPaddingSides.right ?? outerPadding)
     }
 
     // restore the saved layout for this display setup at launch. saved to
@@ -321,7 +307,6 @@ class UserConfig: ObservableObject {
             self.scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
             self.appRules = saved.appRules ?? []
-            self.outerPaddingSides = saved.outerPaddingSides ?? .none
             self.workspaceWallpapers = saved.workspaceWallpapers ?? [:]
             self.workspaceColors = saved.workspaceColors ?? [:]
             self.stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
@@ -354,7 +339,6 @@ class UserConfig: ObservableObject {
             self.scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
             self.scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
             self.appRules = []
-            self.outerPaddingSides = .none
             self.workspaceWallpapers = [:]
             self.workspaceColors = [:]
             self.stickyWorkspaces = []
@@ -377,15 +361,32 @@ class UserConfig: ObservableObject {
         self.singleScreenRestore = monitorConfig?.singleScreenRestore
         self.gameMonitor = monitorConfig?.gameMonitor
         self.gameBundleIDs = Set(monitorConfig?.gameBundleIDs ?? [])
-        // local-only from the start, so the synced config has nothing to migrate
-        self.outerPaddingPerMonitor = monitorConfig?.outerPaddingPerMonitor ?? [:]
+        // local-only upstream. the fork's global per-side padding from the
+        // synced config moves onto every monitor known by name
+        var knownMonitors = Set(NSScreen.screens.map(\.localizedName))
+        knownMonitors.formUnion(resolved.maxSplits.keys)
+        knownMonitors.formUnion(resolved.disabled)
+        knownMonitors.formUnion(monitorConfig?.workspaceMonitors?.keys.map { $0 } ?? [])
+        knownMonitors.formUnion([monitorConfig?.gameMonitor, monitorConfig?.accordionMonitor].compactMap { $0 })
+        knownMonitors.formUnion(monitorConfig?.singleScreenRestore ?? [])
+        let padding = ConfigMigration.perMonitorPadding(legacy: savedConfig?.outerPaddingSides,
+                                                        existing: monitorConfig?.outerPaddingPerMonitor ?? [:],
+                                                        monitors: knownMonitors)
+        self.outerPaddingPerMonitor = padding.padding
         self.workspaceMonitors = monitorConfig?.workspaceMonitors ?? [:]
 
         if iCloudSyncEnabled {
             store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
         }
 
-        if resolved.needsLocalWrite {
+        if padding.migrated {
+            // both files: the overrides land locally and config.json drops
+            // the legacy key, so the migration runs once
+            hyprLog(.notice, .config, "outer padding: moved per-side padding onto "
+                    + "\(padding.padding.keys.sorted()) as per-monitor overrides")
+            store.writeSavedConfig(makeSavedConfig())
+            store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+        } else if resolved.needsLocalWrite {
             store.writeSavedMonitorConfig(makeSavedMonitorConfig())
         }
 
@@ -518,7 +519,6 @@ class UserConfig: ObservableObject {
             windowCornerRadius: windowCornerRadiusOverride,
             scratchpadTileByDefault: scratchpadTileByDefault,
             scratchpadRegionInset: scratchpadRegionInset,
-            outerPaddingSides: outerPaddingSides == .none ? nil : outerPaddingSides,
             workspaceWallpapers: workspaceWallpapers.isEmpty ? nil : workspaceWallpapers,
             workspaceColors: workspaceColors.isEmpty ? nil : workspaceColors,
             stickyWorkspaces: stickyWorkspaces.isEmpty ? nil : stickyWorkspaces.sorted(),
@@ -565,7 +565,6 @@ class UserConfig: ObservableObject {
         scratchpadTileByDefault = UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = UserConfigDefaults.scratchpadRegionInset
         appRules = []
-        outerPaddingSides = .none
         workspaceWallpapers = [:]
         workspaceColors = [:]
         stickyWorkspaces = []
@@ -674,7 +673,6 @@ class UserConfig: ObservableObject {
         scratchpadTileByDefault = saved.scratchpadTileByDefault ?? UserConfigDefaults.scratchpadTileByDefault
         scratchpadRegionInset = saved.scratchpadRegionInset ?? UserConfigDefaults.scratchpadRegionInset
         appRules = saved.appRules ?? []
-        outerPaddingSides = saved.outerPaddingSides ?? .none
         workspaceWallpapers = saved.workspaceWallpapers ?? [:]
         workspaceColors = saved.workspaceColors ?? [:]
         stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])

@@ -722,8 +722,7 @@ class WindowManager {
         coordinator.onLayoutGeometry = { [weak self] gap, padding in
             guard let self else { return }
             self.tilingEngine.gapSize = gap
-            _ = padding // uniform value; the fork resolves per-side overrides
-            self.tilingEngine.outerPadding = self.config.resolvedOuterPadding
+            self.tilingEngine.outerPadding = padding
             if self.isRunning { self.animatedRetile() }
         }
         coordinator.onMaximumSplits = { [weak self] splits in
@@ -872,7 +871,7 @@ class WindowManager {
         }
 
         tilingEngine.gapSize = config.gapSize
-        tilingEngine.outerPadding = config.resolvedOuterPadding
+        tilingEngine.outerPadding = config.outerPadding
         tilingEngine.maxSplitsPerMonitor = config.maxSplitsPerMonitor
         tilingEngine.accordionOverlap = config.accordionOverlap
         tilingEngine.accordionActive = { [weak self] screen in
@@ -1107,18 +1106,6 @@ class WindowManager {
         // fork-only settings. the shared ones (keybinds, gaps, uniform
         // padding, splits, monitors, chrome, scratchpad) arrive through
         // ConfigUpdateCoordinator in configureLiveConfigUpdates.
-
-        // per-side overrides change the resolved padding without touching
-        // the uniform slider the coordinator watches.
-        config.$outerPaddingSides
-            .dropFirst()
-            .removeDuplicates()
-            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self else { return }
-                self.tilingEngine.outerPadding = self.config.resolvedOuterPadding
-                if self.isRunning { self.animatedRetile() }
-            }.store(in: &configObservers)
 
         // linking/unlinking monitors changes which workspace every screen
         // shows and where each workspace's trees may live — run the same

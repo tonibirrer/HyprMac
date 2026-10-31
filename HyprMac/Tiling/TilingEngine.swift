@@ -247,9 +247,7 @@ class TilingEngine {
 
     /// Padding between tiles and the screen edge, in pixels.
     /// Runtime-tunable.
-    /// Per-side outer padding (fork): the uniform slider plus optional
-    /// per-edge overrides, resolved by `UserConfig.resolvedOuterPadding`.
-    var outerPadding = OuterPadding(uniform: TilingConfig.defaultOuterPadding) {
+    var outerPadding: CGFloat = TilingConfig.defaultOuterPadding {
         didSet { if outerPadding != oldValue { invalidatePendingLayout() } }
     }
 
@@ -423,7 +421,7 @@ class TilingEngine {
         // out of place: every raise of a background tile covers the front
         // window until the front is raised again.
         let desired = raiseOrder.map(\.windowID)
-        let peek = AccordionLayout.clampedOverlap(accordionOverlap, innerWidth: outerPadding.inset(rect).width)
+        let peek = AccordionLayout.clampedOverlap(accordionOverlap, innerWidth: rect.insetBy(dx: outerPadding, dy: outerPadding).width)
         let toRaise: Set<CGWindowID>
         if let current = accordionCurrentZOrder(Set(desired)) {
             if peek == 0, let front = desired.last, current.contains(front) {
@@ -3212,9 +3210,7 @@ class TilingEngine {
         if key.workspace == Self.scratchpadWorkspace, let region = scratchpadRegions[key] {
             return region
         }
-        // merge bridge: the fork's per-side OuterPadding is replaced by
-        // upstream's per-monitor overrides in the commit after this merge
-        return Self.tilingRect(displayManager.cgRect(for: screen), outerPadding: outerPadding.maxSide,
+        return Self.tilingRect(displayManager.cgRect(for: screen), outerPadding: outerPadding,
                                padding: outerPaddingPerMonitor[screen.localizedName])
     }
 
@@ -3223,7 +3219,7 @@ class TilingEngine {
     /// back there. Any other rect (a scratchpad region) is its own reach.
     private func restorationRect(for rect: CGRect) -> CGRect {
         guard let screen = displayManager.screens.first(where: {
-            Self.tilingRect(displayManager.cgRect(for: $0), outerPadding: outerPadding.maxSide,
+            Self.tilingRect(displayManager.cgRect(for: $0), outerPadding: outerPadding,
                             padding: outerPaddingPerMonitor[$0.localizedName]) == rect
         }) else { return rect }
         return rect.union(displayManager.cgRect(for: screen))

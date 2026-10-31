@@ -1562,7 +1562,7 @@ final class TiledDragTransactionTests: XCTestCase {
                              displayID: CGDirectDisplayID? = nil,
                              usableFrame: CGRect? = nil,
                              gap: CGFloat? = nil,
-                             padding: OuterPadding? = nil,
+                             padding: CGFloat? = nil,
                              maxDepth: Int? = nil,
                              memberIDs: Set<CGWindowID>? = nil,
                              floatingIDs: Set<CGWindowID>? = nil,

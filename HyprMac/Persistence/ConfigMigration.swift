@@ -93,6 +93,34 @@ enum ConfigMigration {
         return (maxSplits, disabled, needsWrite)
     }
 
+    /// The fork's global per-side padding (`outerPaddingSides` in the
+    /// synced config.json) as upstream's per-monitor overrides.
+    ///
+    /// The fork padded every monitor the same, e.g. `top: 34` for
+    /// sketchybar. Upstream pads per monitor, so each monitor HyprMac knows
+    /// by name gets the legacy sides. A side a monitor already overrides
+    /// keeps its own value. A monitor never seen before gets no override;
+    /// it is set in Settings > Layout once it is connected.
+    ///
+    /// - Returns: the merged overrides and `migrated`, true when there was
+    ///   a legacy side to carry over (the caller then writes both files, so
+    ///   config.json drops the legacy key).
+    static func perMonitorPadding(legacy: PaddingSides?,
+                                  existing: [String: EdgePadding],
+                                  monitors: Set<String>) -> (padding: [String: EdgePadding], migrated: Bool) {
+        guard let legacy, legacy != .none else { return (existing, false) }
+        var padding = existing
+        for name in monitors where !name.isEmpty {
+            var entry = padding[name] ?? EdgePadding()
+            entry.top = entry.top ?? legacy.top
+            entry.left = entry.left ?? legacy.left
+            entry.bottom = entry.bottom ?? legacy.bottom
+            entry.right = entry.right ?? legacy.right
+            padding[name] = entry
+        }
+        return (padding, true)
+    }
+
     /// Name of the stamp written into the dedicated directory once the
     /// import decision has been made. Its presence, not the presence of
     /// `config.json`, gates the import — otherwise "delete config.json to

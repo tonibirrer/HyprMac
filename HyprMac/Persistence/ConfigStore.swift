@@ -311,9 +311,9 @@ struct SavedConfig: Codable {
     var appRules: [AppRule]? = nil
 }
 
-/// Optional per-side overrides for the uniform `outerPadding`. A nil side
-/// follows the uniform value; e.g. `{"top": 40}` reserves space for a
-/// status bar while the other three sides keep the slider value.
+/// The fork's retired global per-side padding (`outerPaddingSides`). Read
+/// once so `ConfigMigration.perMonitorPadding` can move it onto upstream's
+/// per-monitor overrides; never written again.
 struct PaddingSides: Codable, Equatable {
     var top: CGFloat?
     var left: CGFloat?

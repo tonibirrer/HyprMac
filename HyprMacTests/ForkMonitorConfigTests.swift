@@ -51,3 +51,40 @@ final class ForkMonitorConfigTests: XCTestCase {
         XCTAssertEqual(decoded.accordionMode, true)
     }
 }
+
+// The fork's global per-side padding (config.json `outerPaddingSides`) moves
+// onto upstream's per-monitor overrides once.
+
+final class ForkPaddingMigrationTests: XCTestCase {
+
+    func testLegacySidesLandOnEveryKnownMonitor() {
+        let result = ConfigMigration.perMonitorPadding(
+            legacy: PaddingSides(top: 34, left: nil, bottom: nil, right: nil),
+            existing: [:], monitors: ["Built-in Retina Display", "AW3425DW", "DELL S3220DGF"])
+
+        XCTAssertTrue(result.migrated)
+        XCTAssertEqual(result.padding, [
+            "Built-in Retina Display": EdgePadding(top: 34),
+            "AW3425DW": EdgePadding(top: 34),
+            "DELL S3220DGF": EdgePadding(top: 34),
+        ])
+    }
+
+    func testAMonitorsOwnSideWins() {
+        let result = ConfigMigration.perMonitorPadding(
+            legacy: PaddingSides(top: 34, left: 4, bottom: nil, right: nil),
+            existing: ["AW3425DW": EdgePadding(top: 50)], monitors: ["AW3425DW"])
+
+        XCTAssertEqual(result.padding["AW3425DW"], EdgePadding(top: 50, left: 4))
+    }
+
+    func testNothingToMoveLeavesTheOverridesAlone() {
+        let existing = ["AW3425DW": EdgePadding(bottom: 60)]
+
+        for legacy in [nil, PaddingSides.none] {
+            let result = ConfigMigration.perMonitorPadding(legacy: legacy, existing: existing, monitors: ["AW3425DW", "X"])
+            XCTAssertFalse(result.migrated)
+            XCTAssertEqual(result.padding, existing)
+        }
+    }
+}
