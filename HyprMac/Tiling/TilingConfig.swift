@@ -23,6 +23,12 @@ enum TilingConfig {
     // 3 → 1/8 of the screen; beyond this, windows auto-float.
     static let defaultMaxDepth: Int = 3
 
+    // BSP depth ceiling while a screen renders as an accordion. every member
+    // gets the same near-fullscreen frame there, so the tile-mode depth says
+    // nothing about how many windows fit. 7 is the clamp
+    // `RetileAllPlanner.workspaceCapacity` already applies (128 windows).
+    static let accordionMaxDepth: Int = 7
+
     // smart-insert backtracking threshold (px). when splitting a leaf would
     // create children below this on either axis, smart insert backtracks to a
     // shallower leaf. produces 2x2 grids on vertical monitors.
