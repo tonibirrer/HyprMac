@@ -101,6 +101,9 @@ final class ActionDispatcher {
 
     // closure handles for WM-side helpers
     var currentFocusedWindow: () -> HyprWindow? = { nil }
+    /// The frontmost app's AX focused window id, read fresh. Unlike
+    /// `currentFocusedWindow` it can name a window discovery only just admitted.
+    var appFocusedWindowID: () -> CGWindowID? = { nil }
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
     var updatePositionCache: () -> Void = {}
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
@@ -218,10 +221,12 @@ final class ActionDispatcher {
         // workspace assignment for new windows that didn't auto-float onto a
         // disabled monitor. assigning by physical screen — cursor-based was
         // unreliable under multi-monitor + display-reconfig churn.
-        let pinFollow = assignNewWindows(
-            changes.newWindows.filter { !changes.newOnDisabledMonitor.contains($0.windowID) },
-            fullyForgottenIDs: changes.fullyForgottenIDs
-        )
+        let assignable = changes.newWindows.filter { !changes.newOnDisabledMonitor.contains($0.windowID) }
+        let pinFollow = assignNewWindows(assignable, fullyForgottenIDs: changes.fullyForgottenIDs)
+
+        // before the retile: an accordion stack puts the focused window in
+        // front, and the old front was raised over the new one
+        let adoptedFocus = adoptAppFocusedNewWindow(assignable)
 
         // engine/workspace/focus cleanup for ids the service forgot. out of
         // its tree first: the removal remembers the window's slot and the
@@ -283,6 +288,8 @@ final class ActionDispatcher {
             // animate surrounding windows sliding to fill gaps / make room.
             retileResults = animatedRetile(allWindows)
         }
+        // after the retile, so the border lands on the window's final frame
+        if let adoptedFocus { updateFocusBorder(adoptedFocus) }
 
         // if the FFM-tracked window disappeared, refocus to whatever tiled window
         // is under the cursor now. without this, focus gets stuck because
@@ -435,6 +442,36 @@ final class ActionDispatcher {
     /// pointing at a workspace the user has not touched in days.
     ///
     /// - Returns: the pinned window to follow onto its workspace, if any.
+    /// Record focus on a new window its app already focused.
+    ///
+    /// An app focuses a new window (Cmd-N) before discovery knows it, so
+    /// the AX focus event for it resolved to no tracked window and focus
+    /// stayed on the previous window. Returns the adopted window so the
+    /// caller can move the border after its retile.
+    private func adoptAppFocusedNewWindow(_ windows: [HyprWindow]) -> HyprWindow? {
+        guard hasCompletedInitialDiscovery, !windows.isEmpty, scratchpadLayer() == nil else { return nil }
+        guard let id = Self.newWindowFocusToAdopt(
+            newWindowIDs: windows.map(\.windowID),
+            appFocusedID: appFocusedWindowID(),
+            currentFocusID: focusController.lastFocusedID,
+            isVisible: workspaceManager.isWindowVisible
+        ), let window = windows.first(where: { $0.windowID == id }) else { return nil }
+        hyprLog(.notice, .focus, "new window \(id) already focused by its app — adopting focus")
+        focusController.recordFocus(id, reason: "newWindow-appFocused")
+        return window
+    }
+
+    /// The new window to take focus, if any: the app's focused window, when
+    /// it is one of `newWindowIDs`, not already current, and on a visible
+    /// workspace (a pin may have parked it on a hidden one).
+    static func newWindowFocusToAdopt(newWindowIDs: [CGWindowID], appFocusedID: CGWindowID?,
+                                      currentFocusID: CGWindowID,
+                                      isVisible: (CGWindowID) -> Bool) -> CGWindowID? {
+        guard let appFocusedID, appFocusedID != currentFocusID,
+              newWindowIDs.contains(appFocusedID), isVisible(appFocusedID) else { return nil }
+        return appFocusedID
+    }
+
     private func assignNewWindows(_ windows: [HyprWindow], fullyForgottenIDs: Set<CGWindowID>) -> PinnedLanding? {
         let admittedIDs = Set(Self.newWindowIDsForAdmission(
             windows.map(\.windowID), workspaceFor: workspaceManager.workspaceFor
