@@ -619,6 +619,21 @@ class AccessibilityManager {
         return getAllWindows().first { CFEqual($0.element, focusedAX) }
     }
 
+    /// The `CGWindowID` of the frontmost app's AX focused window, or nil.
+    ///
+    /// Two AX calls and no window walk, so discovery can ask on every pass
+    /// that found a new window. No filters: the caller matches the id
+    /// against windows it already admitted.
+    func frontmostAppFocusedWindowID() -> CGWindowID? {
+        guard AXIsProcessTrusted(),
+              let frontApp = NSWorkspace.shared.frontmostApplication else { return nil }
+        let appRef = AXUIElementCreateApplication(frontApp.processIdentifier)
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(appRef, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return windowID(for: value as! AXUIElement)
+    }
+
     /// Resolve the keyboard-focused window without consulting discovery's
     /// cache. Workspace transfer uses this stricter path because the cursor
     /// and the internal focus tracker may belong to another display.

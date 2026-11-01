@@ -617,6 +617,7 @@ class WindowManager {
             config: config
         )
         actionDispatcher.currentFocusedWindow = { [weak self] in self?.currentFocusedWindow() }
+        actionDispatcher.appFocusedWindowID = { [weak self] in self?.accessibility.frontmostAppFocusedWindowID() }
         actionDispatcher.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
         actionDispatcher.updatePositionCache = { [weak self] in self?.updatePositionCache() }
         actionDispatcher.screenUnderCursor = { [weak self] in self?.screenUnderCursor() ?? NSScreen.main! }
