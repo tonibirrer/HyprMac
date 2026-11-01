@@ -55,16 +55,29 @@ final class GameScreenController {
     /// set changed.
     @discardableResult
     func refresh(extraBundleIDs: Set<String>, terminatedPID: pid_t? = nil) -> Bool {
-        let games = Set(NSWorkspace.shared.runningApplications.filter { app in
+        let apps = NSWorkspace.shared.runningApplications.filter { app in
             app.activationPolicy == .regular && !app.isTerminated
                 && app.processIdentifier != terminatedPID
                 && GameDetection.isGame(info: app.bundleURL.flatMap { Bundle(url: $0)?.infoDictionary },
                                         bundleID: app.bundleIdentifier, extraBundleIDs: extraBundleIDs)
-        }.map(\.processIdentifier))
+        }
+        // the process table is read only when a record lost its pid
+        let processes = apps.contains { $0.processIdentifier <= 0 } ? Self.runningProcesses() : []
+        var names: [pid_t: String] = [:]
+        for app in apps {
+            let pids = Self.resolvedPIDs(recordPID: app.processIdentifier, bundlePath: app.bundleURL?.path,
+                                         processes: processes)
+            for pid in pids where pid != terminatedPID {
+                names[pid] = app.bundleIdentifier ?? "pid \(pid)"
+                if app.processIdentifier != pid {
+                    hyprLog(.debug, .lifecycle, "game \(names[pid]!) lists pid \(app.processIdentifier) — its process is \(pid)")
+                }
+            }
+        }
+        let games = Set(names.keys)
         guard games != gamePIDs else { return false }
         for pid in games.subtracting(gamePIDs) {
-            let name = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "pid \(pid)"
-            hyprLog(.notice, .lifecycle, "game running: \(name)")
+            hyprLog(.notice, .lifecycle, "game running: \(names[pid] ?? "pid \(pid)") (pid \(pid))")
         }
         if !gamePIDs.subtracting(games).isEmpty {
             hyprLog(.notice, .lifecycle, "game quit — \(games.count) game(s) still running")
@@ -72,6 +85,34 @@ final class GameScreenController {
         gamePIDs = games
         if games.isEmpty { settledWindowIDs.removeAll() }
         return true
+    }
+
+    /// The processes behind one running-app record.
+    ///
+    /// A Steam-launched game's record can drop to pid -1 while its process
+    /// keeps running and owning its windows (seen with Factorio once it went
+    /// fullscreen; Steam's own record shows -1 throughout). Such a record is
+    /// matched to the processes whose executable lives inside its bundle.
+    static func resolvedPIDs(recordPID: pid_t, bundlePath: String?,
+                             processes: [(pid: pid_t, path: String)]) -> Set<pid_t> {
+        if recordPID > 0 { return [recordPID] }
+        guard let bundlePath, !bundlePath.isEmpty else { return [] }
+        let prefix = bundlePath.hasSuffix("/") ? bundlePath : bundlePath + "/"
+        return Set(processes.filter { $0.pid > 0 && $0.path.hasPrefix(prefix) }.map(\.pid))
+    }
+
+    /// Every process with a readable executable path.
+    static func runningProcesses() -> [(pid: pid_t, path: String)] {
+        let capacity = proc_listallpids(nil, 0)
+        guard capacity > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: Int(capacity) + 64)
+        let count = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard count > 0 else { return [] }
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        return pids.prefix(Int(count)).compactMap { pid in
+            guard pid > 0, proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+            return (pid, String(cString: buffer))
+        }
     }
 
     /// Carry game windows to `screen` now and over the next seconds — a

@@ -109,6 +109,39 @@ final class GameScreenTests: XCTestCase {
         XCTAssertTrue(WorkspaceManager.nearestScreen(to: game, among: [far, near]) === near)
         XCTAssertNil(WorkspaceManager.nearestScreen(to: game, among: []))
     }
+
+    // MARK: - a record without a pid
+
+    private let factorio = "/Users/u/Library/Application Support/Steam/steamapps/common/Factorio/factorio.app"
+
+    func testARecordWithAPidKeepsIt() {
+        XCTAssertEqual(GameScreenController.resolvedPIDs(recordPID: 812, bundlePath: factorio, processes: []), [812])
+    }
+
+    // Factorio's record dropped to pid -1 once it went fullscreen while its
+    // process kept running; the game's Space then joined a workspace
+    func testARecordAtMinusOneResolvesToTheProcessInsideItsBundle() {
+        let processes: [(pid: pid_t, path: String)] = [
+            (69857, factorio + "/Contents/MacOS/factorio"),
+            (16295, "/Users/u/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steam_osx"),
+            (501, factorio + "-other/Contents/MacOS/factorio"),
+        ]
+        XCTAssertEqual(GameScreenController.resolvedPIDs(recordPID: -1, bundlePath: factorio, processes: processes),
+                       [69857])
+        XCTAssertEqual(GameScreenController.resolvedPIDs(recordPID: -1, bundlePath: factorio + "/", processes: processes),
+                       [69857])
+    }
+
+    func testARecordAtMinusOneWithNoProcessOrBundleResolvesToNothing() {
+        XCTAssertEqual(GameScreenController.resolvedPIDs(recordPID: -1, bundlePath: factorio, processes: []), [])
+        XCTAssertEqual(GameScreenController.resolvedPIDs(recordPID: -1, bundlePath: nil,
+                                                         processes: [(1, factorio + "/Contents/MacOS/factorio")]), [])
+    }
+
+    func testTheProcessTableListsThisProcess() {
+        let me = ProcessInfo.processInfo.processIdentifier
+        XCTAssertTrue(GameScreenController.runningProcesses().contains { $0.pid == me && !$0.path.isEmpty })
+    }
 }
 
 private final class GameTestScreen: NSScreen {
