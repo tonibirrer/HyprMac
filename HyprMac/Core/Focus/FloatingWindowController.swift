@@ -245,12 +245,14 @@ final class FloatingWindowController {
     private let displayManager: DisplayManager
     private let accessibility: AccessibilityManager
     private let cursorManager: CursorManager
+    /// What a maximized floater goes back to, and the frame it was given.
+    private var maximizedFrames: [CGWindowID: (restore: CGRect, full: CGRect)] = [:]
     private let focusController: FocusStateController
     private let focusBorder: FocusBorder
     private let dimmingOverlay: DimmingOverlay
 
     // closure handles for WM-side helpers used by toggle/cycle/raise.
-    var animatedRetile: ((@escaping () -> Void) -> Void)?
+    var retile: ((@escaping () -> Void) -> Void)?
     var updateFocusBorder: ((HyprWindow) -> Void)?
     var updatePositionCache: (() -> Void)?
     var isMenuTracking: () -> Bool = { false }
@@ -357,9 +359,8 @@ final class FloatingWindowController {
     ///
     /// A Quick Look preview is refused with the red shake and stays
     /// floating. On disabled monitors the call is a no-op — everything
-    /// floats there by definition. The actual retile is wrapped in
-    /// `animatedRetile` so the surrounding tiles slide instead of
-    /// snapping.
+    /// floats there by definition. The change runs inside `retile`,
+    /// which retiles the surrounding tiles.
     func toggle(_ window: HyprWindow, on screen: NSScreen, in workspace: Int) {
         if workspaceManager.isMonitorDisabled(screen) {
             hyprLog(.debug, .floating, "toggle: monitor disabled, no tiling available")
@@ -385,13 +386,13 @@ final class FloatingWindowController {
             }
             return
         }
-        guard let animatedRetile = animatedRetile else { return }
+        guard let retile = retile else { return }
 
         if wasFloating {
-            // floating → tiled: animate surrounding windows making room.
+            // floating → tiled: retile so the surrounding windows make room.
             // reassign workspace in case the window was dragged to a different monitor while floating.
             workspaceManager.moveWindow(window.windowID, toWorkspace: workspace)
-            animatedRetile { [self] in
+            retile { [self] in
                 stateCache.setFloating(false, window: window)
 
                 switch forceInsert(window, workspace: workspace, screen: screen) {
@@ -405,10 +406,10 @@ final class FloatingWindowController {
                 }
             }
         } else {
-            // tiled → floating: animate remaining windows filling the gap.
+            // tiled → floating: retile so the remaining windows fill the gap.
             focusBorder.hide()
             dimmingOverlay.hideAll()
-            animatedRetile { [self] in
+            retile { [self] in
                 stateCache.setFloating(true, window: window)
                 tilingEngine.removeWindow(window, fromWorkspace: workspace)
 
@@ -426,7 +427,7 @@ final class FloatingWindowController {
                                          reason: "float toggle, centered (no usable original)",
                                          on: screen, from: current, displayManager: displayManager)
                 } else {
-                    // unreadable frame: move only, as before. there is no
+                    // unreadable frame: move only. there is no
                     // real size to write or clamp
                     let size = window.size ?? CGSize(width: 800, height: 600)
                     window.position = CGPoint(x: screenRect.midX - size.width / 2,
@@ -436,6 +437,56 @@ final class FloatingWindowController {
                 }
             }
         }
+    }
+
+    // MARK: - maximize
+
+    func isMaximized(_ id: CGWindowID) -> Bool { maximizedFrames[id] != nil }
+
+    var maximizedIDs: Set<CGWindowID> { Set(maximizedFrames.keys) }
+
+    /// Fill the display with a floater, or put it back where it was. Moved
+    /// to another display since, it fills that one instead: the saved frame
+    /// belongs to the display it left. Returns whether it's maximized now,
+    /// nil when nothing changed.
+    func toggleMaximized(_ window: HyprWindow, fullFrame: CGRect, on screen: NSScreen) -> Bool? {
+        let current = window.frame
+        if let saved = maximizedFrames.removeValue(forKey: window.windowID),
+           displayManager.screen(containingMostOf: saved.restore) == screen {
+            window.placeFloating(saved.restore, reason: "maximize ended", on: screen, from: current,
+                                 displayManager: displayManager)
+            return false
+        }
+        guard let current else { return nil }
+        maximizedFrames[window.windowID] = (restore: current, full: fullFrame)
+        window.placeFloating(fullFrame, reason: "maximized", on: screen, from: current,
+                             displayManager: displayManager)
+        return true
+    }
+
+    /// Stop treating a floater the user dragged or resized as maximized. It
+    /// stays where they put it. Returns the ids that were dropped.
+    func forgetMaximizedIfMoved(liveFrame: (CGWindowID) -> CGRect?) -> [CGWindowID] {
+        var moved: [CGWindowID] = []
+        for (id, frames) in maximizedFrames {
+            guard let live = liveFrame(id) else { continue }
+            if abs(live.minX - frames.full.minX) > TiledDriftMonitor.positionTolerance
+                || abs(live.minY - frames.full.minY) > TiledDriftMonitor.positionTolerance
+                || abs(live.width - frames.full.width) > TiledDriftMonitor.sizeTolerance
+                || abs(live.height - frames.full.height) > TiledDriftMonitor.sizeTolerance {
+                moved.append(id)
+            }
+        }
+        moved.forEach { maximizedFrames.removeValue(forKey: $0) }
+        return moved
+    }
+
+    func forgetMaximized(_ id: CGWindowID) {
+        maximizedFrames.removeValue(forKey: id)
+    }
+
+    func forgetAllMaximized() {
+        maximizedFrames.removeAll()
     }
 
     /// The float→tile insertion, with one explicit revalidation behind it.

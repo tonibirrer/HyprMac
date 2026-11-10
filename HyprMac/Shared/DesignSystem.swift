@@ -25,6 +25,15 @@ extension Color {
     // signature accents — used sparingly
     static let hyprCyan = Color(nsColor: .hyprCyan)
     static let hyprMagenta = Color(nsColor: .hyprMagenta)
+
+    // overlay accents: the user's one accent when set, else the brand pair.
+    // read per draw, so views observing UserConfig pick up a change at once
+    static var overlayPrimary: Color {
+        UserConfig.shared.overlayAccentHex.flatMap(NSColor.fromHex).map { Color(nsColor: $0) } ?? .hyprCyan
+    }
+    static var overlaySecondary: Color {
+        UserConfig.shared.overlayAccentHex.flatMap(NSColor.fromHex).map { Color(nsColor: $0) } ?? .hyprMagenta
+    }
 }
 
 extension UserConfig {
@@ -99,6 +108,32 @@ class OverlayHostingView<Content: View>: NSHostingView<Content> {
 
     required init?(coder: NSCoder) { nil }
     override var isOpaque: Bool { false }
+}
+
+/// Panel for click-through overlays (focus border, dim, brackets, drop
+/// preview). `ignoresMouseEvents` does not stop AppKit from routing
+/// enter/exit through the panel when it moves under the cursor or the
+/// cursor crosses it, and each one resets the cursor to the arrow. With a
+/// customized accessibility pointer that reset re-renders the pointer
+/// image every time, which made hover focus changes expensive.
+///
+/// These panels are also hidden from screen capture. A window picker took
+/// the dim panel for the inactive window under the pointer, so the shot came
+/// out as an empty gray square of dim.
+final class ClickThroughPanel: NSPanel {
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask,
+                  backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style,
+                   backing: backingStoreType, defer: flag)
+        sharingType = .none
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .mouseEntered, .mouseExited, .cursorUpdate: return
+        default: super.sendEvent(event)
+        }
+    }
 }
 
 struct OverlayPalette {

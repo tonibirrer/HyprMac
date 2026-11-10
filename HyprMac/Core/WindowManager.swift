@@ -33,6 +33,7 @@ class WindowManager {
     let focusBorder = FocusBorder()
     let focusBrackets = FocusBrackets()
     let dimmingOverlay = DimmingOverlay()
+    private let screenshotPicker = ScreenshotPickerWatcher()
     let mouseTracker = MouseTrackingManager()
     let keybindOverlay = KeybindOverlayController()
     let workspaceOverview = WorkspaceOverviewController()
@@ -240,7 +241,7 @@ class WindowManager {
     ///
     /// Construction is in three layers:
     /// 1. Build sub-managers that take only static dependencies.
-    /// 2. Build the orchestration layer (`floatingController`,
+    /// 2. Build the orchestration layer (including `floatingController`,
     ///    `workspaceOrchestrator`, `pollingScheduler`, `tiledDrag`,
     ///    `actionDispatcher`) and attach the closure handles each one
     ///    needs from `WindowManager`-local helpers.
@@ -255,6 +256,7 @@ class WindowManager {
         self.workspaceManager = WorkspaceManager(displayManager: displayManager)
         self.workspaceManager.onParkFailed = { [weak self] in self?.pollingScheduler.schedule(after: 0.3) }
         self.tilingEngine = TilingEngine(displayManager: displayManager)
+        self.tilingEngine.keepFixedSizeHints(in: .shared)
         self.discovery = WindowDiscoveryService(
             stateCache: stateCache,
             accessibility: accessibility,
@@ -287,6 +289,9 @@ class WindowManager {
             revalidation: minimaRevalidation
         )
         self.workspaceOrchestrator.screenUnderCursor = { [weak self] in self?.displayManager.screenUnderCursor() ?? NSScreen.main! }
+        self.workspaceOrchestrator.keepsCursorOnSwitch = { [weak self] in
+            self?.config.keepCursorOnWorkspaceSwitch ?? false
+        }
         self.workspaceOrchestrator.currentFocusedWindow = { [weak self] in self?.focusResolver.currentFocusedWindow() }
         self.workspaceOrchestrator.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
         self.workspaceOrchestrator.updatePositionCache = { [weak self] in self?.updatePositionCache() }
@@ -305,8 +310,8 @@ class WindowManager {
         self.workspaceOrchestrator.leaveFullscreenSpaces = { [weak self] ws, focused, refocus in
             self?.leaveFullscreenSpaces(for: ws, focused: focused, refocus: refocus)
         }
-        self.workspaceOrchestrator.animatedRetile = { [weak self] prepare, completion in
-            self?.animatedRetile(prepare: prepare, completion: completion)
+        self.workspaceOrchestrator.retile = { [weak self] prepare, completion in
+            self?.retile(prepare: prepare, completion: completion)
         }
         // the HUD goes up before the hide/retile/focus pass, not after it.
         // the switch is also the freshest statement of where the user
@@ -360,8 +365,8 @@ class WindowManager {
         scratchpad.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
         scratchpad.refocusUnderCursor = { [weak self] in self?.mouseTracker.refocusUnderCursor() }
         scratchpad.isNeverTile = { [weak self] w in self?.floatingController.isNeverTile(w) ?? false }
-        scratchpad.animatedRetile = { [weak self] prepare, completion in
-            self?.animatedRetile(prepare: prepare, completion: completion)
+        scratchpad.retile = { [weak self] prepare, completion in
+            self?.retile(prepare: prepare, completion: completion)
         }
         scratchpad.raiseScrim = { [weak self] in
             guard let self else { return }
@@ -393,6 +398,13 @@ class WindowManager {
             // session is in use again
             self.discovery.endSessionInterruption(evidence: "hotkey press")
             self.performUserAction(action)
+        }
+
+        hotkeyManager.sharesHomeMonitor = { [weak self] a, b in
+            guard let wm = self?.workspaceManager,
+                  let sa = wm.homeScreenForWorkspace(a),
+                  let sb = wm.homeScreenForWorkspace(b) else { return false }
+            return wm.screenID(for: sa) == wm.screenID(for: sb)
         }
 
         hotkeyManager.onHyprKeyDown = { [weak self] in
@@ -433,6 +445,13 @@ class WindowManager {
                 for: self?.config.mouseHoverPollHz ?? UserConfigDefaults.mouseHoverPollHz))
         }
         mouseTracker.isMouseButtonDown = { [weak self] in self?.mouseButtonDown ?? false }
+        mouseTracker.onStalePress = { [weak self] in self?.clearStalePress() }
+        mouseTracker.mouseTargetAt = { [weak self] point in
+            guard let self else { return 0 }
+            let number = NSWindow.windowNumber(at: self.displayManager.flippedY(point),
+                                               belowWindowWithWindowNumber: 0)
+            return CGWindowID(clamping: number)
+        }
         mouseTracker.primaryScreenHeight = { [weak self] in self?.displayManager.primaryScreenHeight ?? 0 }
         mouseTracker.screenAt = { [weak self] pt in self?.displayManager.screen(at: pt) }
         mouseTracker.floatingWindowIDs = { [weak self] in self?.stateCache.floatingWindowIDs ?? [] }
@@ -467,8 +486,8 @@ class WindowManager {
         capsLockGuard.start()
 
         // wire up floating controller — closure handles for WM-side helpers.
-        floatingController.animatedRetile = { [weak self] prepare in
-            self?.animatedRetile(prepare: prepare)
+        floatingController.retile = { [weak self] prepare in
+            self?.retile(prepare: prepare)
         }
         floatingController.updateFocusBorder = { [weak self] w in self?.updateFocusBorder(for: w) }
         floatingController.updatePositionCache = { [weak self] in self?.updatePositionCache() }
@@ -558,7 +577,7 @@ class WindowManager {
                 || self.suppressions.isSuppressed(.workspaceTransition)
         }
 
-        // action dispatcher — owns the per-Action routing previously in handleAction.
+        // action dispatcher — owns the per-Action routing.
         self.actionDispatcher = ActionDispatcher(
             stateCache: stateCache,
             accessibility: accessibility,
@@ -581,8 +600,8 @@ class WindowManager {
         actionDispatcher.screenUnderCursor = { [weak self] in self?.displayManager.screenUnderCursor() ?? NSScreen.main! }
         actionDispatcher.applyForgottenIDCleanup = { [weak self] id in self?.applyForgottenIDExternalCleanup(id) }
         actionDispatcher.hideChromeForGoneWindow = { [weak self] id in self?.hideChromeForGoneWindow(id) }
-        actionDispatcher.animatedRetile = { [weak self] windows in
-            self?.animatedRetile(windows: windows) ?? []
+        actionDispatcher.retile = { [weak self] windows in
+            self?.retile(windows: windows) ?? []
         }
         actionDispatcher.refocusUnderCursor = { [weak self] in self?.mouseTracker.refocusUnderCursor() }
         // a menu or an overlay popover (Control Center, Dock…) is up
@@ -609,6 +628,10 @@ class WindowManager {
             self?.scratchpad.refocusMember(reason: "ensureInvariant-scratchpad")
         }
         actionDispatcher.admitToScratchpad = { [weak self] w in self?.scratchpad.admitNewWindow(w) ?? false }
+        actionDispatcher.adoptPinnedToScratchpad = { [weak self] w in
+            guard let self else { return }
+            self.scratchpad.adoptPinned(w, summon: !self.displayTransitionPending)
+        }
         actionDispatcher.scratchpadDiscovery = { [weak self] gone, returned in
             self?.scratchpad.noteDiscovery(goneIDs: gone, returned: returned)
         }
@@ -682,7 +705,21 @@ class WindowManager {
         }
         statusExporter.hookCommand = { [weak self] in self?.config.statusHookCommand }
         statusExporter.snapshot = { [weak self] in self?.statusPresenter.statusSnapshot() }
-        focusController.onChange = { [weak self] in self?.statusExporter.noteChange() }
+        focusController.onChange = { [weak self] in
+            self?.statusExporter.noteChange()
+            self?.endMaximizeIfFocusLeft()
+        }
+        tilingEngine.onMaximizeChanged = { [weak self] workspace, screen, isOn in
+            guard let self, self.isRunning, !self.displayTransitionPending else { return }
+            self.statusPresenter.updateMenuBarState()
+            guard let screen, self.workspaceManager.isWorkspaceVisible(workspace) else { return }
+            self.workspaceOverview.showFullscreenHUD(isOn: isOn, screen: screen)
+        }
+        statusPresenter.maximizedFloaterIDs = { [weak self] in self?.floatingController.maximizedIDs ?? [] }
+        actionDispatcher.onFloaterMaximizeChanged = { [weak self] screen, isOn in
+            self?.workspaceOverview.showFullscreenHUD(isOn: isOn, screen: screen)
+            self?.statusPresenter.updateMenuBarState()
+        }
         // workspace names, the toggle itself. objectWillChange fires before
         // the write, so the note waits a turn to see the new value
         statusConfigObservation = config.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
@@ -718,7 +755,7 @@ class WindowManager {
             guard let self else { return }
             self.tilingEngine.gapSize = gap
             self.tilingEngine.outerPadding = padding
-            if self.isRunning { self.animatedRetile() }
+            if self.isRunning { self.retile() }
         }
         coordinator.onMaximumSplits = { [weak self] splits in
             guard let self else { return }
@@ -737,7 +774,7 @@ class WindowManager {
         coordinator.onOuterPaddingOverride = { [weak self] padding in
             guard let self else { return }
             self.tilingEngine.outerPaddingPerMonitor = padding
-            if self.isRunning { self.animatedRetile() }
+            if self.isRunning { self.retile() }
         }
         coordinator.onWorkspaceMonitors = { [weak self] mapping in
             guard let self else { return }
@@ -857,7 +894,7 @@ class WindowManager {
                 // live window — so a Cmd-Tab right after a switch left the
                 // old window outlined until the mouse moved.
                 self.followSystemFocus(reason: "ax-focused-window-changed")
-                self.pollingScheduler.schedule(after: 0.15)
+                self.scheduleFocusPoll(pid: pid, via: "axFocus", after: 0.15)
                 self.scheduleRestackRefresh(after: 0.05)
             case .mainWindowChanged:
                 // a new main window usually came forward; nothing to discover
@@ -998,7 +1035,7 @@ class WindowManager {
             )
             // start the reconcile timer only after the initial tile so
             // pollWindowChanges can't race against snapshotAndTile, claim all
-            // windows as new, and trigger an animation that blocks the correct
+            // windows as new, and trigger a retile that blocks the correct
             // initial distribution. the timer is now a slow (10s) safety net;
             // AX notifications above are the primary trigger.
             self.pollingScheduler.start()
@@ -1015,6 +1052,15 @@ class WindowManager {
         dumpStateSignalSource = dumpSignal
 
         startMouseTracking()
+        screenshotPicker.onChange = { [weak self] open in
+            guard let self, self.isRunning else { return }
+            if open {
+                self.dimmingOverlay.hideImmediately()
+            } else {
+                self.refreshDimming()
+            }
+        }
+        screenshotPicker.start()
 
         let wsnc = NSWorkspace.shared.notificationCenter
         wsnc.addObserver(self, selector: #selector(appDidActivate(_:)),
@@ -1112,7 +1158,7 @@ class WindowManager {
             .removeDuplicates()
             .sink { [weak self] on in
                 guard let self = self else { return }
-                self.animatedRetile()
+                self.retile()
                 hyprLog(.notice, .lifecycle, "accordion mode \(on ? "enabled" : "disabled") — retiled")
             }.store(in: &configObservers)
         config.$accordionOverlap
@@ -1122,7 +1168,7 @@ class WindowManager {
             .sink { [weak self] overlap in
                 guard let self = self else { return }
                 self.tilingEngine.accordionOverlap = overlap
-                self.animatedRetile()
+                self.retile()
             }.store(in: &configObservers)
         // @Published emits in willSet — hop a runloop so the refresh reads
         // the new value
@@ -1142,7 +1188,7 @@ class WindowManager {
             .dropFirst()
             .removeDuplicates()
             .sink { [weak self] _ in
-                self?.animatedRetile()
+                self?.retile()
             }.store(in: &configObservers)
 
         // sort-priority edits reorder existing tiles, so a rule change
@@ -1159,7 +1205,7 @@ class WindowManager {
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.reconcileStickyWindows()
-                self.animatedRetile()
+                self.retile()
                 hyprLog(.debug, .lifecycle, "app rules updated — retiled visible workspaces")
             }.store(in: &configObservers)
 
@@ -1173,7 +1219,7 @@ class WindowManager {
                 guard let self else { return }
                 self.workspaceManager.stickyWorkspaces = workspaces
                 self.reconcileStickyWindows()
-                self.animatedRetile()
+                self.retile()
                 hyprLog(.notice, .lifecycle, "sticky workspaces updated: \(workspaces.sorted())")
             }.store(in: &configObservers)
 
@@ -1208,10 +1254,13 @@ class WindowManager {
         tiledDrag.cancel()
         tiledDrag.endTiledDropPreview()
         tiledDragFeedback.reset()
+        tilingEngine.endAllMaximized()
+        floatingController.forgetAllMaximized()
         _ = tilingEngine.beginLayoutGeneration()
         restoreAllWindows()
         axNotifications.detachAll()
         pollingScheduler.stop()
+        screenshotPicker.stop()
         stopMouseTracking()
         if !keepPauseShortcut { hotkeyManager.stop() }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -1379,6 +1428,7 @@ class WindowManager {
             var floaterDragged = false
             // the drop decides now; the preview has said all it can
             self?.tiledDrag.endTiledDropPreview()
+            if shouldDetectDrag { self?.endMaximizeIfMoved() }
             if let self {
                 let primaryHeight = self.displayManager.primaryScreenHeight
                 let releasePoint = TiledDragEvent.point(event: event, primaryHeight: primaryHeight)
@@ -1495,6 +1545,20 @@ class WindowManager {
         dimDrag.finish()
     }
 
+    /// Drops a press whose mouse-up never arrived. Hover found the state
+    /// down with no button held.
+    private func clearStalePress() {
+        mouseDragLifecycle.finishPress()
+        tiledDrag.cancel()
+        tiledDrag.endTiledDropPreview()
+        mouseDownPointCG = nil
+        mouseDownFloatingWindowID = 0
+        mouseDownFloatingFrame = nil
+        realClickInProgress = false
+        dimDrag.finish()
+        mouseTracker.invalidateWindowListCache()
+    }
+
     /// `true` for a mouse event HyprMac posted itself, such as the hover
     /// path's synthetic click. Those never count as the user's click.
     static func isOwnSyntheticEvent(_ event: NSEvent) -> Bool {
@@ -1586,13 +1650,6 @@ class WindowManager {
         }
     }
 
-    /// Reposition the focus border around `window`, refresh the floating
-    /// outlines, and rebuild the dim mask for the new focused window.
-    ///
-    /// The border and dim paths are independent: each respects its own
-    /// config toggle. Disabling the border doesn't disable dim (and vice
-    /// versa) — `refreshDimming` always runs and reads
-    /// `config.dimInactiveWindows` itself.
     /// `true` when a fullscreen window is currently driving the active Space.
     /// Checks `window` first (commonly the new focus target), falls back to
     /// the active app's focused-window AX query. Results are not cached:
@@ -1618,6 +1675,13 @@ class WindowManager {
         return false
     }
 
+    /// Reposition the focus border around `window`, refresh the floating
+    /// outlines, and rebuild the dim mask for the new focused window.
+    ///
+    /// The border and dim paths are independent: each respects its own
+    /// config toggle. Disabling the border doesn't disable dim (and vice
+    /// versa) — `refreshDimming` always runs and reads
+    /// `config.dimInactiveWindows` itself.
     /// - Parameter settled: re-show the border in its outline-only state
     ///   without replaying the active tint. Use when the border is coming
     ///   back after being hidden for a mechanical reason (drag, menu), not
@@ -1888,6 +1952,11 @@ class WindowManager {
     ///   `focusBorder.trackedWindowID`, then `focusController.lastFocusedID`.
     private func refreshDimming(focusedID: CGWindowID? = nil,
                                 tiledRectsOverride: [CGWindowID: CGRect]? = nil) {
+        // the dim stays down while a screenshot picker is up
+        if screenshotPicker.isOpen {
+            dimmingOverlay.hideImmediately()
+            return
+        }
         // scratchpad scrim: dim every monitor edge-to-edge at .normal level.
         // members are raised ABOVE it at show time (stack recency, not
         // carve-outs), so nothing is carved and member drags never touch the
@@ -2493,9 +2562,8 @@ class WindowManager {
     }
 
     /// Run `prepare`, retile every visible workspace, run `completion`.
-    /// There is no animation; the name is historical.
     @discardableResult
-    private func animatedRetile(
+    private func retile(
         windows: [HyprWindow]? = nil,
         prepare: (() -> Void)? = nil,
         completion: (() -> Void)? = nil
@@ -2619,6 +2687,7 @@ class WindowManager {
         admissionRecovery.forget(id)
         minimaRevalidation.forget(id)
         driftMonitor.forget(id)
+        floatingController.forgetMaximized(id)
         tilingEngine.forgetMinimumSize(windowID: id)
         workspaceManager.removeWindow(id)
         scratchpad.forget(id)
@@ -2668,7 +2737,7 @@ class WindowManager {
         // poll's diff returns no changes and needsRetile is false. apply new
         // frames here so the surrounding tiles expand into the freed slot
         // instead of waiting for the next user action to trigger a retile.
-        animatedRetile()
+        retile()
     }
 
 
@@ -2705,7 +2774,8 @@ class WindowManager {
             guard workspaceManager.isWindowVisible(w.windowID) else { continue }
             stateCache.cachedWindows[w.windowID] = w
             guard let frame = w.cachedFrame ?? w.frame else { continue }
-            if stateCache.floatingWindowIDs.contains(w.windowID) {
+            if stateCache.floatingWindowIDs.contains(w.windowID)
+                || tilingEngine.isCoveredByMaximized(w.windowID) {
                 continue
             } else {
                 stateCache.tiledPositions[w.windowID] = frame
@@ -2819,6 +2889,43 @@ class WindowManager {
         workspaceOverview.refreshIfOpen { statusPresenter.workspaceOverviewSnapshots(windows: windows) }
     }
 
+    /// Focus reached a tile under a maximized window: another app was
+    /// activated, a directional move, or a pick in the overview. That tile
+    /// is on top now, so the layout comes back. Off the focus path, since
+    /// this writes frames.
+    private func endMaximizeIfFocusLeft() {
+        let id = focusController.lastFocusedID
+        guard id != 0, !tilingEngine.isMaximized(id),
+              tilingEngine.maximizeLocation(involving: id) != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.focusController.lastFocusedID == id,
+                  !self.tilingEngine.isMaximized(id),
+                  let location = self.tilingEngine.maximizeLocation(involving: id) else { return }
+            self.tilingEngine.endMaximize(onWorkspace: location.workspace, screen: location.screen)
+            self.updatePositionCache()
+        }
+    }
+
+    /// A maximized window the user just dragged or resized goes back to its
+    /// tile. Only visible ones: a hidden one is parked in the corner.
+    private func endMaximizeIfMoved() {
+        let moved = tilingEngine.maximizedOffTarget(liveFrame: { WindowStacking.bounds(of: $0) })
+            .filter { workspaceManager.isWorkspaceVisible($0.workspace) }
+        for location in moved {
+            tilingEngine.endMaximize(onWorkspace: location.workspace, screen: location.screen)
+        }
+        // a floater has no tile to go back to. it stays where it was dropped
+        let movedFloaters = floatingController.forgetMaximizedIfMoved(liveFrame: { id in
+            self.workspaceManager.isWindowVisible(id) ? WindowStacking.bounds(of: id) : nil
+        })
+        if let id = movedFloaters.first, let frame = WindowStacking.bounds(of: id),
+           let screen = displayManager.screen(containingMostOf: frame) {
+            workspaceOverview.showFullscreenHUD(isOn: false, screen: screen)
+        }
+        guard !moved.isEmpty || !movedFloaters.isEmpty else { return }
+        updatePositionCache()
+    }
+
     /// A keybind press or an action link. Pause and resume always work; the
     /// rest need tiling on, except the two read-only overlays.
     private func performUserAction(_ action: Action) {
@@ -2927,14 +3034,14 @@ class WindowManager {
         let released = tilingEngine.releaseHeldWindows(readable: Set(allWindows.map(\.windowID)))
         if !released.isEmpty, !retiled {
             hyprLog(.notice, .discovery, "held windows readable again: \(released.sorted()) — retiling")
-            animatedRetile(windows: allWindows)
+            retile(windows: allWindows)
             retiled = true
         }
         // a fullscreen window that came or went changes the screens its
         // workspace tiles on
         if fullscreenRefresh.membershipChanged {
             if !retiled {
-                animatedRetile(windows: allWindows)
+                retile(windows: allWindows)
                 retiled = true
             }
             // status bars list fullscreen members on their workspace
@@ -2968,6 +3075,23 @@ class WindowManager {
         }
     }
 
+    /// Poll after a focus change unless it landed on a window discovery
+    /// already manages on screen (`FocusPollGate`).
+    private func scheduleFocusPoll(pid: pid_t, via: String, after delay: TimeInterval) {
+        let focused = accessibility.focusedWindowID(ofPID: pid)
+        let needed = FocusPollGate.needsPoll(
+            focusedID: focused,
+            scratchpadUp: scratchpad.isVisible,
+            known: stateCache.knownWindowIDs,
+            hidden: stateCache.hiddenWindowIDs,
+            onVisibleWorkspace: { workspaceManager.workspaceFor($0).map(workspaceManager.isWorkspaceVisible) ?? false })
+        if needed {
+            pollingScheduler.schedule(after: delay)
+        } else {
+            hyprLog(.debug, .discovery, "focus poll skipped: wid=\(focused ?? 0) via=\(via)")
+        }
+    }
+
     /// Same-screen drift: hand this poll's tiled frames to the monitor and
     /// carry out whatever it decides.
     ///
@@ -2985,6 +3109,7 @@ class WindowManager {
                   workspace != ScratchpadController.workspace,
                   workspaceManager.isWorkspaceVisible(workspace),
                   !isFloating(window.windowID),
+                  !tilingEngine.isMaximized(window.windowID),
                   let rect = intended[window.windowID],
                   let screen = workspaceManager.homeScreenForWorkspace(workspace),
                   let actual = window.cachedFrame ?? window.frame
@@ -3139,10 +3264,6 @@ class WindowManager {
         return results
     }
 
-    /// One ordinary verified layout pass for a key whose windows drifted.
-    /// Nothing special: the same path a retile takes, down to the
-    /// bookkeeping, so a refusal rolls back, marks the key, and hands
-    /// whatever it stranded to the recovery exactly as it always would.
     /// What every pass needs first: walk (unless the caller already did),
     /// prime minima, stamp floaters. A pass that skips one drops tiles.
     private func freshWalk(_ windows: [HyprWindow]? = nil) -> [HyprWindow] {
@@ -3152,6 +3273,10 @@ class WindowManager {
         return allWindows
     }
 
+    /// One ordinary verified layout pass for a key whose windows drifted.
+    /// Nothing special: the same path a retile takes, down to the
+    /// bookkeeping, so a refusal rolls back, marks the key, and hands
+    /// whatever it stranded to the recovery exactly as it always would.
     @discardableResult
     private func reapplyLayout(onWorkspace workspace: Int, screen: NSScreen) -> TilingEngine.AdmissionResult? {
         let allWindows = freshWalk()
@@ -3480,7 +3605,13 @@ class WindowManager {
             }
         }
 
-        pollingScheduler.schedule()
+        // our own activation lands on a window we chose; only the user's can
+        // bring one discovery has not seen
+        if causedByHyprMac, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+            scheduleFocusPoll(pid: app.processIdentifier, via: "activation", after: 0.2)
+        } else {
+            pollingScheduler.schedule()
+        }
         // activation brings windows forward; floater cutouts follow the new stack
         scheduleRestackRefresh(after: 0.1)
 

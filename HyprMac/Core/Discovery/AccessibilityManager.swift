@@ -222,6 +222,21 @@ class AccessibilityManager {
         return err == .success && wid != 0 ? wid : nil
     }
 
+    /// `CGWindowID` of `pid`'s AX-focused window, or nil when AX cannot
+    /// say. Two round-trips to that one app, no walk.
+    func focusedWindowID(ofPID pid: pid_t) -> CGWindowID? {
+        // a stalled app would time out here on every hover; nil polls, and
+        // the walk skips it
+        if stallBackoff.isBackingOff(pid, now: Date()) { return nil }
+        let appRef = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appRef, Self.discoveryMessagingTimeout)
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(appRef, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let val = value,
+              CFGetTypeID(val) == AXUIElementGetTypeID() else { return nil }
+        return windowID(for: val as! AXUIElement)
+    }
+
     /// Resolve one `CGWindowID` to its AX element and owner pid.
     ///
     /// Same pairing path as `getAllWindows` — owner from the CG window
@@ -378,7 +393,7 @@ class AccessibilityManager {
         for app in apps {
             let pid = app.processIdentifier
             let bundle = app.bundleIdentifier ?? "pid \(pid)"
-            // layer-0 entries feed ordinary matching exactly as before. the
+            // layer-0 entries feed ordinary matching. the
             // floating layer is only ever matched to a quick look panel, by
             // that panel's own id.
             let cgEntries = cgWindows[pid] ?? []
@@ -442,7 +457,7 @@ class AccessibilityManager {
                 if let min = minimized as? Bool, min { continue }
 
                 // subrole and modal only matter for a window, so a role drop
-                // costs one read, as before
+                // costs one read
                 let role = stringAttribute(axWin, kAXRoleAttribute)
                 let isWindowRole = role == kAXWindowRole as String
                 let subrole = isWindowRole ? stringAttribute(axWin, kAXSubroleAttribute) : nil

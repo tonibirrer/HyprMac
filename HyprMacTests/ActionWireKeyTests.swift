@@ -20,6 +20,7 @@ final class ActionWireKeyTests: XCTestCase {
         case .focusMenuBar: "focusMenuBar"
         case .focusFloating: "focusFloating"
         case .moveToNextEmptyWorkspace: "moveToNextEmptyWorkspace"
+        case .toggleMaximize: "toggleMaximize"
         case .closeWindow: "closeWindow"
         case .cycleWorkspace: "cycleWorkspace"
         case .toggleScratchpad: "toggleScratchpad"
@@ -51,6 +52,7 @@ final class ActionWireKeyTests: XCTestCase {
         (.focusMenuBar, #"{"focusMenuBar":{}}"#),
         (.focusFloating, #"{"focusFloating":{}}"#),
         (.moveToNextEmptyWorkspace, #"{"moveToNextEmptyWorkspace":{}}"#),
+        (.toggleMaximize, #"{"toggleMaximize":{}}"#),
         (.closeWindow, #"{"closeWindow":{}}"#),
         (.cycleWorkspace(-1), #"{"cycleWorkspace":{"_0":-1}}"#),
         (.toggleScratchpad, #"{"toggleScratchpad":{}}"#),
@@ -68,7 +70,7 @@ final class ActionWireKeyTests: XCTestCase {
 
     func testTableCoversEveryKeyOnce() {
         XCTAssertEqual(Set(Self.table.map { Self.wireKey($0.action) }).count, Self.table.count)
-        XCTAssertEqual(Self.table.count, 24 + 2) // + the fork's two
+        XCTAssertEqual(Self.table.count, 25 + 2) // + the fork's two
     }
 
     func testEveryActionEncodesToItsFrozenJSON() throws {

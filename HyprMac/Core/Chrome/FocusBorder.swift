@@ -463,9 +463,11 @@ class FocusBorder {
     /// would violate min-size constraints, move to a full workspace).
     /// The border auto-hides after the shake completes.
     ///
-    /// - Parameter window: unused. Error feedback never moves the actual
-    ///   window because verified geometry must remain unchanged after a
-    ///   rejection or restoration.
+    /// Error feedback never moves the actual window, because verified
+    /// geometry must remain unchanged after a rejection or restoration.
+    ///
+    /// - Parameter windowID: the flashed window; its corner radius shapes
+    ///   the border.
     /// - Parameter message: short reason shown as a pill centered in the
     ///   flashed window — e.g. "Not enough room to swap".
     @discardableResult
@@ -734,9 +736,9 @@ class FocusBorder {
     }
 
     private func makeBasePanel(frame: NSRect) -> NSPanel {
-        let p = NSPanel(contentRect: frame,
-                        styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered, defer: false)
+        let p = ClickThroughPanel(contentRect: frame,
+                                  styleMask: [.borderless, .nonactivatingPanel],
+                                  backing: .buffered, defer: false)
         p.isFloatingPanel = true
         // .floating keeps borders above the dim panel (.floating - 1, or
         // .normal in scrim mode) and above all .normal-level app windows.

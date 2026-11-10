@@ -30,7 +30,7 @@ enum LogLevel: Int, Comparable {
 enum LogCategory: String, CaseIterable {
     case orchestration, state, focus, tiling, workspace, discovery
     case input, mouse, drag, hotkey, floating
-    case ui, animator, border, dimming, overlay
+    case ui, border, dimming, overlay
     case config, persistence, migration, sync
     case lifecycle, accessibility, space, display
 }
@@ -45,7 +45,7 @@ private let loggers: [LogCategory: Logger] = Dictionary(
 
 /// Runtime knobs for the logger.
 ///
-/// `traceMinimum` is the `.debug`/`.info` ceiling honored in DEBUG;
+/// `traceMinimum` is the lowest `.debug`/`.info` level honored in DEBUG;
 /// `enabledCategories` filters trace output by category;
 /// `verboseInRelease` reads the `HyprMacVerboseLogging` `UserDefault`
 /// so a user can flip on trace logging in a Release build for a

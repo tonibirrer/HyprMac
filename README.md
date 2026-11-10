@@ -83,7 +83,8 @@ You'll feel at home. The differences are mostly macOS being macOS:
   **Hypr + O**. macOS has no public API for this, so HyprMac keeps its own virtual workspaces and
   hides the other workspaces' windows when you switch.
 - **Hypr + F:** native macOS fullscreen spawns its own Space and wrecks the layout, so HyprMac
-  gives the window a dedicated empty workspace on its display instead.
+  fills the display with the window over its workspace instead. Press it again and the window
+  goes back to its tile.
 - **Focus follows mouse:** on by default, with an adjustable hover rate.
 - **Hypr key:** Caps Lock by default. Settings → Keys also offers backslash, F13–F20, and
   Option or Command on either side. If you pick the left Option or Command key, that key plus
@@ -94,7 +95,8 @@ You'll feel at home. The differences are mostly macOS being macOS:
   says why it is no longer recommended.
 - **Config:** everything, including the Hypr key itself, lives in Settings and is saved as JSON
   at `~/Library/Application Support/HyprMac/config.json`. The schema is in
-  [Keybinds and actions](docs/keybinds-and-actions.md).
+  [Keybinds and actions](docs/keybinds-and-actions.md). A config file HyprMac can't decode is
+  copied to `config.json.unreadable` before a save overwrites it.
 - **Your own tools:** Settings → Keys → Add → Command… binds a chord to any program or script.
   It runs directly, not through a shell, so keep pipes and redirects inside a script.
 
@@ -113,7 +115,7 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 | `Hypr + Shift + 1–9` / `Hypr + Shift + 0` | Move window to workspace 1–9 / workspace 10 |
 | `Hypr + Ctrl + Shift + 1–9` / `Hypr + Ctrl + Shift + 0` | Move window to workspace 1–9 / 10 and switch there with it |
 | `Hypr + Tab` / `Hypr + Shift + Tab` | Cycle occupied workspaces on this monitor |
-| `Hypr + F` | Move window to a dedicated workspace on its display |
+| `Hypr + F` | Maximize the window, or put it back |
 | `Hypr + T` | Toggle floating and tiled |
 | `Hypr + Shift + T` | Cycle focus through floating windows |
 | `Hypr + J` | Toggle split direction |
@@ -131,8 +133,9 @@ Everything below is configurable in Settings → Keys. The full reference lives 
 
 ## Pinning apps to workspaces
 
-Settings → General → "Pin apps to workspaces" sends an app to a workspace of your choice. Every
-new window of a pinned app opens there, and HyprMac switches to that workspace with it. If the
+Settings → General → "Pin apps" sends an app to a workspace of your choice, or to the scratchpad.
+Every new window of a pinned app opens there, and HyprMac shows it. An app pinned to the scratchpad
+also goes back there at launch and on **Hypr + R**, with the scratchpad left closed. If a pinned
 workspace is full, the window goes to the next one with room. **Hypr + R** (Retile all
 spaces) also moves a pinned app's open windows back to its workspace. An app in "Never tile"
 can be pinned too: it goes to its workspace and stays floating.

@@ -134,6 +134,35 @@ final class WindowStackingTests: XCTestCase {
                        "another app's unmanaged panel is still looked through")
     }
 
+    func testOverlayPanelsAreHiddenFromScreenCapture() {
+        let panel = ClickThroughPanel(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
+                                      styleMask: [.borderless, .nonactivatingPanel],
+                                      backing: .buffered, defer: true)
+        XCTAssertEqual(panel.sharingType, .none)
+    }
+
+    func testClickThroughRaisedWindowOfFrontAppDoesNotBlock() {
+        let point = CGPoint(x: 100, y: 100)
+        let frontPID: pid_t = 10
+        let overlay = StackedWindow(windowID: 5, ownerPID: frontPID, layer: 26,
+                                    bounds: CGRect(x: 0, y: 0, width: 3440, height: 1440))
+        let tile = StackedWindow(windowID: 6, ownerPID: frontPID,
+                                 bounds: CGRect(x: 0, y: 0, width: 800, height: 800))
+
+        XCTAssertEqual(WindowStacking.hitTest(point, in: [overlay, tile], frontmostPID: frontPID,
+                                              ownPID: 1, mouseTarget: { _ in 6 }),
+                       .window(6), "the window server gives the click to the tile below")
+        XCTAssertEqual(WindowStacking.hitTest(point, in: [overlay, tile], frontmostPID: frontPID,
+                                              ownPID: 1, mouseTarget: { _ in 5 }),
+                       .blocked(overlay), "a raised window that takes the click still blocks")
+        XCTAssertEqual(WindowStacking.hitTest(point, in: [overlay, tile], frontmostPID: frontPID,
+                                              ownPID: 1, mouseTarget: { _ in 0 }),
+                       .blocked(overlay), "no answer from the window server keeps it blocking")
+        XCTAssertEqual(WindowStacking.hitTest(point, in: [overlay, tile], frontmostPID: frontPID,
+                                              ownPID: 1, mouseTarget: { _ in 99 }),
+                       .blocked(overlay), "a target the list does not show keeps it blocking")
+    }
+
     func testAFloaterAtTheFloatingLevelKeepsItsWholeCutout() {
         let tileA = CGRect(x: 0, y: 0, width: 400, height: 400)
         let panel = CGRect(x: 300, y: 100, width: 200, height: 200)
@@ -506,7 +535,7 @@ final class MouseTrackingPopupTests: XCTestCase {
     }
 }
 
-/// Zach's desk: the built-in panel at 2x, the S34C65xT ultrawide and the
+/// A real desk: the built-in panel at 2x, the S34C65xT ultrawide and the
 /// BL450 portrait at 1x, left to right.
 private final class DeskScreen: SyntheticScreen {
     private let bounds: NSRect
@@ -550,7 +579,7 @@ final class FloatingFramePlacementTests: XCTestCase {
 
     func testAFrameThreeTimesTheUltrawideIsShrunkIntoItsUsableFrame() {
         let usable = ultrawideUsable
-        // the portrait's width scaled by 3440/1080, the shape Zach saw
+        // the portrait's width scaled by 3440/1080, the shape seen live
         let huge = CGRect(x: usable.minX + 200, y: usable.minY + 40,
                           width: usable.width * 3.19, height: usable.height + 600)
 

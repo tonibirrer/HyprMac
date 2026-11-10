@@ -138,14 +138,19 @@ enum WindowStacking {
     /// Front-to-back hit test at `point` (CG coordinates).
     ///
     /// Our own windows and invisible windows are skipped. Other apps'
-    /// raised windows are skipped too, as before, so a click-through
+    /// raised windows are skipped too, so a click-through
     /// overlay cannot kill focus-follows-mouse. A managed floater raised
     /// to the floating level is a hit on that floater, whichever app is in
-    /// front; any other raised window of the frontmost app blocks.
+    /// front; any other raised window of the frontmost app blocks, unless
+    /// it is click-through. `mouseTarget` is the window the window server
+    /// would give a click at the point. When that sits below a raised window,
+    /// the raised one takes no mouse and is skipped too. Dia leaves a
+    /// display-sized one up, and it froze hover whenever Dia was in front.
     static func hitTest(_ point: CGPoint, in windows: [StackedWindow],
                         frontmostPID: pid_t?, ownPID: pid_t,
-                        managedFloaters: Set<CGWindowID> = []) -> Hit {
-        for window in windows {
+                        managedFloaters: Set<CGWindowID> = [],
+                        mouseTarget: ((CGPoint) -> CGWindowID)? = nil) -> Hit {
+        for (index, window) in windows.enumerated() {
             guard window.ownerPID != ownPID, window.alpha > 0.01,
                   let bounds = window.bounds, bounds.contains(point) else { continue }
             if window.layer == 0 {
@@ -156,6 +161,10 @@ enum WindowStacking {
             }
             if let frontmostPID, window.ownerPID == frontmostPID,
                isAppRaisedLayer(window.layer) {
+                if let target = mouseTarget?(point),
+                   windows[(index + 1)...].contains(where: { $0.windowID == target }) {
+                    continue
+                }
                 return .blocked(window)
             }
         }
@@ -201,7 +210,7 @@ enum WindowStacking {
     ///
     /// The dim cuts a floater's hole only where the floater is in front, so
     /// these come back out of the hole. A floater the list does not show
-    /// gets no entry and keeps its whole hole, as before, and so does a
+    /// gets no entry and keeps its whole hole, and so does a
     /// floater at the floating level, which is above every layer-0 window.
     /// Covers count only on layer 0.
     static func occluders(ofFloaters floaterFrames: [CGWindowID: CGRect],

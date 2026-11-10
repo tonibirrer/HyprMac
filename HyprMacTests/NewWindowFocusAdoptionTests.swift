@@ -44,7 +44,7 @@ final class NewWindowFocusAdoptionTests: XCTestCase {
 
         env.dispatcher.appFocusedWindowID = { new.windowID }
         var focusAtRetile: CGWindowID?
-        env.dispatcher.animatedRetile = { _ in
+        env.dispatcher.retile = { _ in
             focusAtRetile = env.focus.lastFocusedID
             return []
         }

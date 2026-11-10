@@ -22,6 +22,20 @@ enum MinSizeProvenance: String {
     case seeded, observed, appHint
 }
 
+/// A length a window kept on one axis while it took every other part of its
+/// frame: a fixed or maximum size no larger slot can hold. Raycast's
+/// Settings window stays 960 wide whatever it is asked.
+struct FixedSize: Equatable, Codable {
+    enum Axis: String, Codable { case width, height }
+    let bundleID: String?
+    let axis: Axis
+    let length: CGFloat
+
+    func matches(_ size: CGSize) -> Bool {
+        abs((axis == .width ? size.width : size.height) - length) <= 1
+    }
+}
+
 /// Per-window min-size memory.
 ///
 /// macOS apps with hard minimums (Spotify, Messages, Xcode) refuse to
@@ -50,8 +64,8 @@ enum MinSizeProvenance: String {
 ///   accepts cannot ratchet the floor down.
 ///
 /// The memory is mirrored back onto each `HyprWindow.observedMinSize` and
-/// `HyprWindow.minSizeProvenance` so other subsystems (drag-swap fit
-/// checks) see consistent values.
+/// `HyprWindow.minSizeProvenance`. Only this class reads the mirror: `prime`
+/// seeds from it for a window with no entry, and `minimumSize` falls back to it.
 class MinSizeMemory {
     /// One remembered minimum and what kind of evidence produced it.
     struct Entry: Equatable {
@@ -64,6 +78,24 @@ class MinSizeMemory {
     /// produced, keyed by bundle id. Memory only: a restart starts over,
     /// because a floor depends on the UI state the window was in.
     private var appHints: [String: CGSize] = [:]
+    /// Windows that kept their own length on an axis, see `FixedSize`.
+    private var fixedWindows: [CGWindowID: FixedSize] = [:]
+    /// Unproven evidence waiting for the retry to show it again.
+    private var fixedSuspects: [CGWindowID: FixedSize] = [:]
+    /// The same evidence per app: a new window of that app opening at that
+    /// length floats without a write. Kept across restarts when the engine
+    /// is given a store, oldest out past the cap.
+    private(set) var fixedAppHints: [FixedSize] = [] {
+        didSet {
+            if fixedAppHints != oldValue { onFixedAppHintsChanged?(fixedAppHints) }
+        }
+    }
+    var onFixedAppHintsChanged: (([FixedSize]) -> Void)?
+    static let fixedAppHintCap = 64
+
+    func restoreFixedAppHints(_ hints: [FixedSize]) {
+        fixedAppHints = Array(hints.filter { $0.bundleID != nil }.suffix(Self.fixedAppHintCap))
+    }
 
     /// Everything currently remembered, for the state dump.
     var snapshot: [CGWindowID: Entry] { known }
@@ -102,6 +134,49 @@ class MinSizeMemory {
 
     func forget(windowID: CGWindowID) {
         known.removeValue(forKey: windowID)
+        fixedWindows.removeValue(forKey: windowID)
+        fixedSuspects.removeValue(forKey: windowID)
+    }
+
+    func recordFixedSize(_ window: HyprWindow, axis: FixedSize.Axis, length: CGFloat,
+                         target: CGSize, proven: Bool = true) {
+        let bundleID = window.bundleID.flatMap { $0.isEmpty ? nil : $0 }
+        let fixed = FixedSize(bundleID: bundleID, axis: axis, length: length)
+        if !proven {
+            let earlier = fixedSuspects.updateValue(fixed, forKey: window.windowID)
+            guard let earlier, earlier.axis == axis, abs(earlier.length - length) <= 1 else {
+                hyprLog(.debug, .tiling, "fixed-size suspect: wid=\(window.windowID) "
+                        + "axis=\(axis.rawValue) length=\(String(format: "%g", Double(length)))")
+                return
+            }
+        }
+        fixedSuspects.removeValue(forKey: window.windowID)
+        fixedWindows[window.windowID] = fixed
+        if bundleID != nil {
+            fixedAppHints = Array((fixedAppHints.filter { $0 != fixed } + [fixed])
+                .suffix(Self.fixedAppHintCap))
+        }
+        hyprLog(.notice, .tiling, "fixed-size record: wid=\(window.windowID) "
+                + "bundle=\(bundleID ?? "none") axis=\(axis.rawValue) "
+                + "length=\(String(format: "%g", Double(length))) target=\(Self.text(target))")
+    }
+
+    /// What keeps `window` out of a slot: its own record, or its app's hint
+    /// for the length it is standing at now.
+    func fixedSize(for window: HyprWindow) -> FixedSize? {
+        if let own = fixedWindows[window.windowID] { return own }
+        guard let bundleID = window.bundleID, !bundleID.isEmpty,
+              let size = window.cachedFrame?.size else { return nil }
+        return fixedAppHints.last { $0.bundleID == bundleID && $0.matches(size) }
+    }
+
+    /// The user tiled the window by hand, so neither it nor its app's hint
+    /// for that length speaks for it any more. A refusal records them again.
+    func forgetFixedSize(_ window: HyprWindow) {
+        fixedSuspects.removeValue(forKey: window.windowID)
+        guard let fixed = fixedSize(for: window) else { return }
+        fixedWindows.removeValue(forKey: window.windowID)
+        fixedAppHints.removeAll { $0 == fixed }
     }
 
     func minimumSize(for window: HyprWindow?) -> CGSize {

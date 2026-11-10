@@ -5,9 +5,9 @@
 `scripts/test-isolated.sh` is the test gate for contributors and for
 `scripts/release.sh`. It generates a separate project that builds HyprMac as a
 testable library. It never starts the window manager or reads live settings.
-Home, cache, and tmp are redirected under `build/sizing/isolated-tests/`. A run
-takes about five minutes, mostly the build. Each run deletes the isolated
-config first and passes `-iCloudSyncEnabled '<false/>'`, because a debug build would
+Home, cache, and tmp are redirected under `build/sizing/isolated-tests/`. The
+test run itself takes about 35 seconds. The build comes on top of that. Each
+run deletes the isolated config first and passes `-iCloudSyncEnabled '<false/>'`, because a debug build would
 otherwise inherit the release app's real preference.
 
 ```bash
@@ -20,20 +20,18 @@ otherwise inherit the release app's real preference.
 ## Supported environments
 
 The suite is maintained and verified on the hub: macOS 15.8 with Xcode 26.3,
-through `./scripts/test-isolated.sh --debug-variant`. That run gives 1751
-tests, 28 skipped, 0 failures. macOS 26 or 27 and Xcode 27 are
+through `./scripts/test-isolated.sh --debug-variant`. That run gives 1926
+tests, 29 skipped, 0 failures. macOS 26 or 27 and Xcode 27 are
 welcome, but the maintainer has not verified them.
 
 The harness loads the test library through rpaths. It runs `xctest` directly
-and no longer depends on `DYLD_*` variables passing through `xcrun`.
+and needs no `DYLD_*` variables.
 
 ## Traps
 
 - The second argument goes straight to `xctest -XCTest`. It must start with
   a bare class name. A `HyprMacTests/` prefix runs 0 tests and still exits 0.
   Always check that `Executed N tests` shows a nonzero N and `0 failures`.
-- `PollingSchedulerTests.testScheduleAfterPollFiresAgain` is a known
-  wall-clock flake. If it is the only failure, rerun that test alone.
 - After config schema or `Action` changes, also run
   `KeybindDecoderToleranceTests` and `ConfigMigrationTests` by name.
 
@@ -116,7 +114,19 @@ Retile All (Hypr+R):
 5. Repeat with vertically stacked monitors, one disabled monitor, a native
    fullscreen Space, and a monitor unplug and replug.
 
-Hypr+F (next empty workspace):
+Hypr+F (maximize):
+
+- Maximize a tile and press again. It goes back to its slot and the other tiles
+  did not move. Repeat with a floater.
+- Switch away and back: still maximized and focused. Arrow key to a neighbor,
+  Cmd-Tab to another window on the workspace, or a drag of the window: each puts
+  the layout back. Open a new window or close the maximized one: same.
+- Hover and click stay on the maximized window. Dim and the focus border follow it.
+- Each start and end shows the FULLSCREEN HUD. The menu bar shows the icon while a
+  showing workspace has a maximized window, and the glyphs again otherwise.
+- Try Screen Sharing or another fixed-size window: red flash, nothing moves.
+
+Move to dedicated workspace (no default chord; bind it in Settings → Keys):
 
 6. Move tiled and floating windows. Only the focused window moves. It fills the
    padded usable area, keeps focus, and the destination HUD shows. If the app

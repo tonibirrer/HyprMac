@@ -23,6 +23,7 @@ enum Action: Equatable {
     case focusMenuBar
     case focusFloating
     case moveToNextEmptyWorkspace
+    case toggleMaximize
     case closeWindow
     case cycleWorkspace(Int)
     case resizeDirection(Direction)
@@ -58,11 +59,18 @@ of that workspace instead (`TilingEngine.moveAcrossLinkedScreens`), and
 the split it leaves is kept until Retile All. A floater is carried to
 the neighboring screen at the same relative position.
 
-## Dedicated workspace and workspace 10
+## Maximize, dedicated workspace and workspace 10
 
-`moveToNextEmptyWorkspace` defaults to Hypr+F and encodes as
-`{"moveToNextEmptyWorkspace":{}}`. `focusFloating` keeps its wire key and
-now defaults to Hypr+Shift+T. The new action is unavailable while paused and
+`toggleMaximize` defaults to Hypr+F and encodes as `{"toggleMaximize":{}}`. It
+is unavailable while paused or while the scratchpad is up, and ignores keyboard
+autorepeat. See "Maximize" in `docs/tiling-algorithm.md`.
+
+`moveToNextEmptyWorkspace` encodes as `{"moveToNextEmptyWorkspace":{}}`. It has
+had no default chord since config v2, when `ConfigMigration` moved Hypr+F to
+`toggleMaximize` for anyone still on the old default. It stays bindable, and
+its link still works. A chord on it set after v2 is left alone, which is why
+that migration is gated on the saved `version`. `focusFloating` defaults to
+Hypr+Shift+T. `moveToNextEmptyWorkspace` is unavailable while paused and
 ignores keyboard autorepeat. It selects the actual AX-focused managed window,
 not the cursor's monitor, and moves it to the next empty workspace anchored to
 its physical display. See `docs/architecture.md` for eligibility and failure behavior.
@@ -86,9 +94,8 @@ be distinguished from that default.
 
 `moveToWorkspaceAndFollow(N)` moves the focused window to workspace N and
 switches there with that window focused. It defaults to Hypr+Ctrl+Shift+1–9,
-and Hypr+Ctrl+Shift+0 for workspace 10. Before this action Hypr+Ctrl+Shift
-went only with the arrow keys (resize), so the digit chords were free. No
-offered Hypr key is Control or Shift, so the chord works under all of them.
+and Hypr+Ctrl+Shift+0 for workspace 10. No offered Hypr key is Control or
+Shift, so the chord works under all of them.
 Hypr+Shift+N (`moveToWorkspace`) stays silent: it follows only when the
 destination is already showing on another monitor.
 
@@ -172,8 +179,9 @@ dropped, with a beep, while a display transition is settling.
 
 ## Window rules
 
-`windowRules` in `config.json` pins an app to a workspace. Settings →
-General → "Pin apps to workspaces" edits it, one rule per app:
+`windowRules` in `config.json` pins an app to a workspace, or to the scratchpad
+with `"workspace": 0`. Settings → General → "Pin apps" edits it, one rule per
+app:
 
 ```
 "windowRules": [
@@ -181,6 +189,10 @@ General → "Pin apps to workspaces" edits it, one rule per app:
 ]
 ```
 
+- **Scratchpad pins.** A new window joins the scratchpad and brings it up
+  (`ScratchpadController.adoptPinned`). At launch and on Retile All, the app's
+  open windows park in it with the layer down, so it fills again after a
+  restart. A build without this option reads `0` as a pin to nothing.
 - **New windows.** `ActionDispatcher.assignNewWindows` uses the pin as the
   preferred workspace instead of the one visible where the window opened.
   A full pinned workspace spills onward, like any admission. If the pin
@@ -334,8 +346,8 @@ This matters because `config.json` is shared across machines over
 iCloud Drive. When a newer build adds an `Action` case and
 `UserConfig.mergeNewDefaults` injects its default keybind, an older
 build sharing the file meets a case key it has never heard of.
-Before per-element tolerance, that one unknown key threw, the
-`try?` in `ConfigStore.loadSavedConfig` returned `nil`, and the
+Before per-element tolerance, that one unknown key threw, the whole
+file counted as unreadable, and the
 older machine silently reset gaps, colors, excluded bundles and
 every keybind to defaults, then pushed the reset back through
 iCloud on its next save.
@@ -403,9 +415,16 @@ Two on-disk files:
   The file watcher follows only `config.json`, so quit HyprMac before
   editing this file and reopen it after.
 
-A file HyprMac can't read is copied to `<name>.unreadable` before it is
-overwritten, and `<name>.replaced` holds what iCloud set up or a reset replaced.
-See Persistence in [architecture.md](architecture.md).
+A file HyprMac can't decode is copied to `<name>.unreadable` before a save
+overwrites it. A file that exists but won't open is not overwritten at all: the
+save is skipped until it opens again. `<name>.replaced` holds
+what iCloud set up or a reset replaced. Reading never touches the file: HyprMac
+runs on defaults until a save would replace it. With iCloud sync on, a launch
+that can't read the linked file holds `config.json` saves instead. A launch can
+also replace a regular local file with the link, keeping it as `<name>.replaced`.
+If the `.unreadable` copy fails, the save is skipped. A copy
+never overwrites an older one. Different content goes to `<name>.unreadable.2`,
+then `.3`, and identical content is not copied twice. See Persistence in [architecture.md](architecture.md).
 
 `ConfigMigration.resolveMonitorConfig` handles the migration: if
 the local file is absent and the synced config has the old fields,
@@ -545,8 +564,8 @@ Control for older configs.
 
 ## Hex color storage
 
-`UserConfig.focusBorderColorHex` and `floatingBorderColorHex` are
-`String?` — `nil` means "use the system default", a hex string like
+`UserConfig.focusBorderColorHex`, `floatingBorderColorHex` and
+`overlayAccentHex` are `String?` — `nil` means "use the system default", a hex string like
 `"007AFF"` means "use this exact color".
 
 `NSColor.fromHex` returns `nil` on malformed input and logs a
@@ -566,7 +585,10 @@ Config lives at `~/Library/Application Support/HyprMacExperiments/config.json`
 save (most editors, `mv tmp config.json`) the file has a new inode, so the
 watcher re-opens the path, retries while the path is briefly missing, and
 reloads once more so a save in that gap is not lost. If an edit does not
-show up, restart HyprMac. Example — bind Hypr+B to launch Safari:
+show up, restart HyprMac. If an edit leaves the file unreadable, HyprMac keeps
+its current settings. A copy of the broken file goes to `config.json.unreadable`
+before the next save replaces it. A restart with the broken file runs on
+defaults. Example — bind Hypr+B to launch Safari:
 
 ```json
 { "keyCode": 11, "modifiers": 1, "action": { "launchApp": { "bundleID": "com.apple.Safari" } } }

@@ -8,8 +8,8 @@ import Foundation
 /// Owns two scheduling primitives:
 /// - A slow (10s) repeating timer that acts as a reconcile safety net —
 ///   it catches apps that refuse AX observers, notifications the observer
-///   layer missed, and external moves nothing else reports. It is no
-///   longer the primary discovery trigger.
+///   layer missed, and external moves nothing else reports. It is not the
+///   primary discovery trigger.
 /// - A `pendingPoll` flag that coalesces multiple event-driven
 ///   `schedule(after:)` requests in the same debounce window down to a
 ///   single fire. These come from `AXNotificationService` (window create /
@@ -26,9 +26,8 @@ import Foundation
 /// loop and `schedule(after:)` resolves on main via `asyncAfter`.
 final class PollingScheduler {
 
-    /// Reconcile-timer interval. Slow safety net now that per-app
-    /// AXObserver notifications drive discovery; was 1 Hz before the move
-    /// to event-driven triggers.
+    /// Reconcile-timer interval. A slow safety net: per-app AXObserver
+    /// notifications drive discovery.
     static let defaultReconcileInterval: TimeInterval = 10.0
 
     private let periodicInterval: TimeInterval
@@ -41,7 +40,7 @@ final class PollingScheduler {
     private let onPoll: () -> Void
 
     /// Optional suppression check. When the closure returns `true`, timer
-    /// ticks are dropped and scheduled fires defer.
+    /// ticks and scheduled fires defer until it lifts.
     var isSuppressed: () -> Bool = { false }
 
     /// `periodicInterval` defaults to the 10s reconcile net; tests inject a
@@ -59,7 +58,13 @@ final class PollingScheduler {
         guard !isStarted else { return }
         isStarted = true
         timer = Timer.scheduledTimer(withTimeInterval: periodicInterval, repeats: true) { [weak self] _ in
-            guard let self = self, !self.isSuppressed() else { return }
+            guard let self = self else { return }
+            // a held button can swallow tick after tick, so the missed one
+            // runs when suppression lifts instead of waiting for the next
+            guard !self.isSuppressed() else {
+                self.schedule(after: 0)
+                return
+            }
             self.onPoll()
         }
         if pendingPoll, let delay = pendingDelay {

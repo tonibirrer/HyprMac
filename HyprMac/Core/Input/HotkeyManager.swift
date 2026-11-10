@@ -10,8 +10,9 @@ import Carbon
 /// Installs a session-level `CGEventTap` that observes keyDown, keyUp,
 /// and flagsChanged events. The Hypr key is the modifier substrate —
 /// when held, chord keys produce `Action` values via the `keybindMap`.
-/// Bare press-and-release of the Hypr key fires `onHyprKeyDown` and
-/// `onHyprKeyUp` so the focus border can be re-asserted.
+/// The Hypr key going down or up fires `onHyprKeyDown` and
+/// `onHyprKeyUp`, so the owner can show the focus brackets and
+/// re-assert the focus border.
 ///
 /// Threading: the tap is an ACTIVE tap — macOS holds every keystroke
 /// system-wide until the callback returns AND the hosting run loop
@@ -33,6 +34,11 @@ class HotkeyManager {
 
     /// Fires for every recognized chord (Hypr + bound key).
     var onAction: ((Action) -> Void)?
+
+    /// Main thread: whether two workspaces share a home monitor, so a
+    /// queued switch can give way to a later one there. Unset = never.
+    var sharesHomeMonitor: ((Int, Int) -> Bool)?
+    private let switchCoalescer = SwitchCoalescer()
 
     /// Fires when the Hypr key transitions from up to down.
     var onHyprKeyDown: (() -> Void)?
@@ -85,14 +91,13 @@ class HotkeyManager {
         UInt32(keyCode) << 16 | UInt32(modifiers.rawValue & 0xFFFF)
     }
 
-    /// Replace the active keybind set. Last-wins on duplicate chords —
-    /// matches the prior linear-scan behavior. Builds the O(1) lookup
-    /// map keyed by packed keyCode + modifiers.
+    /// Replace the active keybind set. Last-wins on duplicate chords.
+    /// Builds the O(1) lookup map keyed by packed keyCode + modifiers.
     func updateKeybinds(_ binds: [Keybind]) {
         stateLock.lock()
         defer { stateLock.unlock() }
         keybinds = binds
-        // last-wins for duplicate key combos (matches old linear scan behavior)
+        // last-wins for duplicate key combos
         keybindMap = [:]
         for bind in binds {
             keybindMap[Self.packKey(bind.keyCode, bind.modifiers)] = bind
@@ -116,7 +121,7 @@ class HotkeyManager {
     /// repeated command spawns a process per autorepeat tick.
     static func ignoresAutorepeat(_ action: Action) -> Bool {
         switch action {
-        case .toggleTiling, .moveToNextEmptyWorkspace, .runCommand, .retileAll,
+        case .toggleTiling, .moveToNextEmptyWorkspace, .toggleMaximize, .runCommand, .retileAll,
              .toggleSingleScreen, .toggleAccordion:
             return true
         default:
@@ -147,8 +152,8 @@ class HotkeyManager {
 
     /// Install the event tap on a dedicated thread's run loop.
     /// No-op if the tap fails to create — typically means AX
-    /// permission is missing; the failure is logged and `isInstalled`
-    /// remains `false`.
+    /// permission is missing; the failure is logged and `eventTap`
+    /// stays nil.
     func start() {
         stateLock.lock()
         let alreadyStarted = eventTap != nil
@@ -361,8 +366,22 @@ class HotkeyManager {
             // text (a runCommand command line) in the file log.
             hyprLog(.debug, .lifecycle,
                     "matched: \(ActionDispatcher.discriminator(for: action))")
+            let token = switchCoalescer.enqueue(action)
             DispatchQueue.main.async { [weak self] in
-                self?.onAction?(action)
+                guard let self else { return }
+                guard let (run, merged) = self.switchCoalescer.admit(action, token: token, sameMonitor: { a, b in
+                    self.sharesHomeMonitor?(a, b) ?? false
+                }) else {
+                    // skipped cycles are counted in the merged line instead
+                    if case .switchWorkspace = action {
+                        hyprLog(.debug, .lifecycle, "coalesced: \(ActionDispatcher.discriminator(for: action))")
+                    }
+                    return
+                }
+                if merged > 1, case .cycleWorkspace(let delta) = run {
+                    hyprLog(.debug, .lifecycle, "coalesced: cycleWorkspace n=\(merged) delta=\(delta)")
+                }
+                self.onAction?(run)
             }
             return nil
         }

@@ -24,9 +24,9 @@ Macs. Off writes no key.
 
 A link runs exactly like the keybind for the same action. While tiling is
 paused, only `toggleTiling`, `showKeybinds` and `showWorkspaceOverview` run.
-While displays settle after a wake, a workspace action is dropped with a
-beep. A workspace action closes the scratchpad first, except
-`moveToNextEmptyWorkspace`, which beeps and does nothing while it is up.
+While a display transition is pending, a workspace action, `restoreLayout` and
+`retileAll` are dropped with a beep, as is `toggleMaximize`. A workspace action closes the scratchpad first, except
+`moveToNextEmptyWorkspace` and `toggleMaximize`, which beep and do nothing while it is up.
 
 | Link | Does |
 |---|---|
@@ -45,6 +45,7 @@ beep. A workspace action closes the scratchpad first, except
 | `focusMenuBar` | move the pointer to the menu bar |
 | `focusFloating` | cycle focus through floating windows |
 | `moveToNextEmptyWorkspace` | move the window to the next empty workspace |
+| `toggleMaximize` | fill the display with the window, or put it back |
 | `closeWindow` | close the focused window |
 | `toggleScratchpad` | show or hide the scratchpad |
 | `moveToScratchpad` | send the window to the scratchpad |

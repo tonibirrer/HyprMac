@@ -1,7 +1,7 @@
 // Action → service routing and the apply-loop reactions that follow a
 // discovery diff. Holds the per-Action implementations that resolve a
 // focused window, drive the right service entry point, and wire up
-// animation glue and rejection feedback.
+// retile glue and rejection feedback.
 
 import Cocoa
 
@@ -11,15 +11,15 @@ import Cocoa
 /// Sits on top of `WorkspaceOrchestrator` and `FloatingWindowController`
 /// — those services own their workflows; the dispatcher picks the right
 /// entry point per `Action` case and supplies the glue specific to the
-/// action path: focused-window resolution, swap-rejection flash, animated
-/// swap transitions, etc. `applyChanges` runs the post-discovery
+/// action path: focused-window resolution, swap-rejection flash, etc.
+/// `applyChanges` runs the post-discovery
 /// reactions: workspace assignment, forgotten-id cleanup, drift moves,
 /// retile, refocus, and the focus-invariant safety net.
 ///
 /// What does not live here: workspace switch/move/cycle (in
 /// `WorkspaceOrchestrator`), float/cycle/raise (in
 /// `FloatingWindowController`), and tiled drag transactions (in
-/// `TiledDragHandler`).
+/// `TiledDragController` and `TiledDragHandler`).
 ///
 /// Closure handles plumb in `WindowManager` helpers without a service home.
 ///
@@ -50,6 +50,13 @@ final class ActionDispatcher {
                                 rules: [WindowRule]) -> Int? {
         guard !isQuickLookPanel else { return nil }
         return WindowRule.pinnedWorkspace(forBundleID: bundleID, in: rules)
+    }
+
+    /// Whether a window rule pins this window's app to the scratchpad. A Quick
+    /// Look preview never is, for the same reason as above.
+    static func isPinnedToScratchpad(bundleID: String?, isQuickLookPanel: Bool,
+                                     rules: [WindowRule]) -> Bool {
+        !isQuickLookPanel && WindowRule.isPinnedToScratchpad(bundleID: bundleID, in: rules)
     }
 
     /// A pinned new window and where it went.
@@ -91,8 +98,7 @@ final class ActionDispatcher {
     private let workspaceOrchestrator: WorkspaceOrchestrator
     private let floatingController: FloatingWindowController
     private let config: UserConfig
-    // owned outright: stateless, and keeping it off the init keeps every
-    // existing construction site untouched.
+    // owned outright: stateless, so it needs no init parameter.
     private let commandRunner = CommandRunner()
 
     // closure handles for WM-side helpers
@@ -102,6 +108,9 @@ final class ActionDispatcher {
     var appFocusedWindowID: () -> CGWindowID? = { nil }
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
     var updatePositionCache: () -> Void = {}
+    /// A floater started or stopped filling the display. A tile's change
+    /// comes from the engine.
+    var onFloaterMaximizeChanged: (_ screen: NSScreen, _ isOn: Bool) -> Void = { _, _ in }
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
     // closures used by applyChanges
     var applyForgottenIDCleanup: (CGWindowID) -> Void = { _ in }
@@ -110,7 +119,7 @@ final class ActionDispatcher {
     /// `applyForgottenIDCleanup` this keeps all cache state — the window
     /// may come back — and only touches the visuals.
     var hideChromeForGoneWindow: (CGWindowID) -> Void = { _ in }
-    var animatedRetile: ([HyprWindow]) -> [TilingEngine.AdmissionResult] = { _ in [] }
+    var retile: ([HyprWindow]) -> [TilingEngine.AdmissionResult] = { _ in [] }
     var refocusUnderCursor: () -> Void = {}
     var isMenuTracking: () -> Bool = { false }
     // true when the frontmost app shows a window HyprMac doesn't track — a
@@ -137,6 +146,8 @@ final class ActionDispatcher {
     var refocusScratchpad: () -> Void = {}
     // a new window the scratchpad takes (a member app's Cmd-N)
     var admitToScratchpad: (HyprWindow) -> Bool = { _ in false }
+    // a new window of an app pinned to the scratchpad
+    var adoptPinnedToScratchpad: (HyprWindow) -> Void = { _ in }
     // members closed, minimized or came back
     var scratchpadDiscovery: (Set<CGWindowID>, [HyprWindow]) -> Void = { _, _ in }
     // keystrokes stay on a member while the scratchpad is up
@@ -190,14 +201,14 @@ final class ActionDispatcher {
     /// `WindowDiscoveryService.computeChanges` produces the delta and
     /// already updates its cache half. This method handles everything
     /// downstream: workspace assignment for new windows, cleanup for
-    /// forgotten ids, cross-screen drift reassignment, animated retile,
+    /// forgotten ids, cross-screen drift reassignment, retile,
     /// refocus when the FFM-tracked window vanished, the focus-invariant
     /// safety net, and a floater raise pass.
     ///
     /// - Parameter changes: discovery delta.
     /// - Parameter allWindows: the same window snapshot
     ///   `WindowDiscoveryService` consumed; passed through so
-    ///   `animatedRetile` and workspace assignment do not re-query AX.
+    ///   `retile` and workspace assignment do not re-query AX.
     func applyChanges(_ changes: WindowChanges, allWindows: [HyprWindow])
         -> [TilingEngine.AdmissionResult] {
         // CGWindowIDs get recycled. an id discovery calls new is a different
@@ -210,7 +221,11 @@ final class ActionDispatcher {
         // a member app's new window joins the scratchpad while it's up. the
         // admission below skips ws-0 windows
         for w in changes.newWindows where !changes.newOnDisabledMonitor.contains(w.windowID) {
-            _ = admitToScratchpad(w)
+            if isPinnedToScratchpad(w) {
+                adoptPinnedToScratchpad(w)
+            } else {
+                _ = admitToScratchpad(w)
+            }
         }
 
         // workspace assignment for new windows that didn't auto-float onto a
@@ -234,8 +249,8 @@ final class ActionDispatcher {
         }
 
         // proactively drop every gone window from its BSP tree. tileAllVisibleSpaces
-        // only diffs trees for currently-visible workspaces and bails when an
-        // animation is in flight; either case can leave a closed window's node
+        // only diffs trees for currently-visible workspaces and bails mid-display-
+        // transition; either case can leave a closed window's node
         // lingering, so the surrounding tiles never expand to fill the gap. doing
         // it here is independent of which workspace was visible at close time and
         // independent of whether the follow-up retile actually runs.
@@ -281,7 +296,7 @@ final class ActionDispatcher {
             ].compactMap { $0 }.joined(separator: " ")
             hyprLog(.notice, .discovery, "discovery retile: \(causes)")
             // let surrounding windows fill gaps / make room.
-            retileResults = animatedRetile(allWindows)
+            retileResults = retile(allWindows)
         }
         // after the retile, so the border lands on the window's final frame
         if let adoptedFocus { updateFocusBorder(adoptedFocus) }
@@ -325,6 +340,7 @@ final class ActionDispatcher {
     /// Route a single `Action` to the service that handles it. Called
     /// from `WindowManager.handleAction` on every hotkey trigger.
     func dispatch(_ action: Action) {
+        if ActionPolicy.endsMaximize(action) { endMaximize(before: action) }
         switch action {
         case .focusDirection(let dir):
             focusInDirection(dir)
@@ -354,6 +370,8 @@ final class ActionDispatcher {
             floatingController.cycleFocus()
         case .moveToNextEmptyWorkspace:
             workspaceOrchestrator.moveToNextEmptyWorkspace()
+        case .toggleMaximize:
+            toggleMaximize()
         case .closeWindow:
             closeWindow()
         case .cycleWorkspace(let delta):
@@ -402,6 +420,7 @@ final class ActionDispatcher {
         case .focusMenuBar:        return "focusMenuBar"
         case .focusFloating:       return "focusFloating"
         case .moveToNextEmptyWorkspace: return "moveToNextEmptyWorkspace"
+        case .toggleMaximize: return "toggleMaximize"
         case .closeWindow:         return "closeWindow"
         case .cycleWorkspace:      return "cycleWorkspace"
         case .toggleScratchpad:    return "toggleScratchpad"
@@ -425,6 +444,13 @@ final class ActionDispatcher {
             ?? NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
         return Self.pinnedWorkspace(bundleID: bundleID, isQuickLookPanel: window.isQuickLookPanel,
                                     rules: config.windowRules)
+    }
+
+    func isPinnedToScratchpad(_ window: HyprWindow) -> Bool {
+        let bundleID = window.bundleID
+            ?? NSRunningApplication(processIdentifier: window.ownerPID)?.bundleIdentifier
+        return Self.isPinnedToScratchpad(bundleID: bundleID, isQuickLookPanel: window.isQuickLookPanel,
+                                         rules: config.windowRules)
     }
 
     /// Assign a newly-discovered window to a workspace: its app's window
@@ -915,6 +941,80 @@ final class ActionDispatcher {
         }
     }
 
+    // MARK: - maximize
+
+    /// Fill the display with the focused window, or put it back. A tile
+    /// keeps its slot and the tiles under it stay put. A floater goes back
+    /// to the frame it had.
+    private func toggleMaximize() {
+        guard let focused = currentFocusedWindow(),
+              let (workspace, screen) = tilingContext(for: focused) else {
+            NSSound.beep()
+            return
+        }
+        if tilingEngine.maximizedWindowID(onWorkspace: workspace, screen: screen) == focused.windowID {
+            tilingEngine.endMaximize(onWorkspace: workspace, screen: screen)
+            // the tile is smaller now. hover would pick whatever is under the cursor
+            cursorManager.warpToCenter(of: focused)
+            finishMaximizeToggle(focused)
+            return
+        }
+        if stateCache.floatingWindowIDs.contains(focused.windowID) {
+            guard floatingController.isMaximized(focused.windowID) || canFill(focused, on: screen) else {
+                rejectMaximize(focused)
+                return
+            }
+            let isOn = floatingController.toggleMaximized(
+                focused, fullFrame: tilingEngine.fullFrame(onWorkspace: workspace, screen: screen), on: screen)
+            if let isOn { onFloaterMaximizeChanged(screen, isOn) }
+            finishMaximizeToggle(focused)
+            return
+        }
+        guard canFill(focused, on: screen) else {
+            rejectMaximize(focused)
+            return
+        }
+        switch tilingEngine.maximize(focused, onWorkspace: workspace, screen: screen) {
+        case .maximized: finishMaximizeToggle(focused)
+        case .alreadyFills: break
+        case .refused: rejectMaximize(focused)
+        }
+    }
+
+    private func canFill(_ window: HyprWindow, on screen: NSScreen) -> Bool {
+        window.isSizeSettable != false && !window.isFullscreen
+            && !workspaceManager.isMonitorDisabled(screen)
+    }
+
+    private func finishMaximizeToggle(_ window: HyprWindow) {
+        updatePositionCache()
+        updateFocusBorder(window)
+    }
+
+    private func rejectMaximize(_ window: HyprWindow) {
+        NSSound.beep()
+        if let frame = window.frame {
+            focusBorder.flashError(around: frame, windowID: window.windowID,
+                                   message: "This window can't fill the screen")
+        }
+    }
+
+    private func endMaximize(before action: Action) {
+        if action == .restoreLayout || action == .retileAll {
+            tilingEngine.endAllMaximized()
+            return
+        }
+        guard let focused = currentFocusedWindow() else { return }
+        if floatingController.isMaximized(focused.windowID) {
+            floatingController.forgetMaximized(focused.windowID)
+            if let screen = displayManager.screen(for: focused) { onFloaterMaximizeChanged(screen, false) }
+        }
+        if let location = tilingEngine.maximizeLocation(involving: focused.windowID) {
+            tilingEngine.endMaximize(onWorkspace: location.workspace, screen: location.screen)
+            updatePositionCache()
+        }
+    }
+
     /// Warp the cursor to the menu bar of the screen the cursor is on.
     /// Targets the area just past the Apple menu so the user can navigate
     /// app menus directly. Briefly de-associates the mouse from the
@@ -942,15 +1042,14 @@ final class ActionDispatcher {
     /// Cycle through occupied workspaces whose home screen is the cursor's
     /// monitor.
     ///
-    /// "Occupied" means at least one window is assigned. Walks the
-    /// workspace numbers in `delta` direction (`+1` next, `-1` previous),
-    /// wrapping around. Workspaces on other monitors are skipped — the
-    /// cycle stays on the current screen.
+    /// "Occupied" means at least one window is assigned. Steps `|delta|`
+    /// occupied workspaces in `delta` direction (`+1` next, `-1` previous),
+    /// wrapping around, so a coalesced `+3` lands where three `+1` presses
+    /// would. Workspaces on other monitors are skipped — the cycle stays on
+    /// the current screen.
     private func cycleOccupiedWorkspace(delta: Int) {
         let screen = screenUnderCursor()
         let current = workspaceManager.workspaceForScreen(screen)
-        let total = Constants.workspaceCount
-
         let screenSID = workspaceManager.screenID(for: screen)
 
         // collect occupied workspaces whose static home is this monitor.
@@ -963,17 +1062,27 @@ final class ActionDispatcher {
             return workspaceManager.screenID(for: home) == screenSID
         })
 
-        guard !occupied.isEmpty else { return }
-
-        // walk in the requested direction, wrapping around, until we find an occupied workspace
-        var candidate = current
-        for _ in 1...total {
-            candidate = (candidate - 1 + delta + total) % total + 1
-            if occupied.contains(candidate) {
-                workspaceOrchestrator.switchWorkspace(candidate)
-                return
-            }
+        if let target = Self.cycleTarget(from: current, delta: delta, occupied: occupied,
+                                         total: Constants.workspaceCount) {
+            workspaceOrchestrator.switchWorkspace(target)
         }
+    }
+
+    /// Pure walk behind `cycleOccupiedWorkspace`. Nil when nothing is
+    /// occupied or `delta` is 0.
+    static func cycleTarget(from current: Int, delta: Int, occupied: Set<Int>, total: Int) -> Int? {
+        guard !occupied.isEmpty, delta != 0 else { return nil }
+        let step = delta > 0 ? 1 : -1
+        // the first step lands on an occupied workspace, after that the
+        // walk repeats every occupied.count steps
+        let steps = 1 + Int((delta.magnitude - 1) % UInt(occupied.count))
+        var candidate = current
+        for _ in 0..<steps {
+            repeat {
+                candidate = (candidate - 1 + step + total) % total + 1
+            } while !occupied.contains(candidate)
+        }
+        return candidate
     }
 
     // MARK: - floating / split

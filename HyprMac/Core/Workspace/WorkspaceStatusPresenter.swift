@@ -12,6 +12,7 @@ final class WorkspaceStatusPresenter {
     private let stateCache: WindowStateCache
     private let scratchpad: ScratchpadController
     private let focusController: FocusStateController
+    var maximizedFloaterIDs: () -> Set<CGWindowID> = { [] }
 
     /// fork: the native-fullscreen windows that belong to a workspace.
     var fullscreenMemberIDs: (_ workspace: Int) -> [CGWindowID] = { _ in [] }
@@ -69,9 +70,17 @@ final class WorkspaceStatusPresenter {
         return result
     }
 
+    /// Workspaces with a window filling the display, tiled or floating.
+    private func workspacesWithMaximizedWindow() -> Set<Int> {
+        let floaters = maximizedFloaterIDs().subtracting(stateCache.hiddenWindowIDs)
+        return tilingEngine.maximizedWorkspaces
+            .union(floaters.compactMap { workspaceManager.workspaceFor($0) })
+    }
+
     /// Publish workspace glyphs and monitor snapshots for the menu.
     func updateMenuBarState() {
         let active = Set(activeWorkspaces())
+        let isFullscreen = !active.isDisjoint(with: workspacesWithMaximizedWindow())
         let occupied = occupiedWorkspaces()
         let floating = workspacesWithFloatingWindows()
         let labelText = MenuBarPresentation.workspaceGlyphs(
@@ -99,6 +108,7 @@ final class WorkspaceStatusPresenter {
         DispatchQueue.main.async {
             let state = MenuBarState.shared
             state.labelText = labelText
+            state.isFullscreen = isFullscreen
             state.monitors = monitors
             state.scratchpadCount = scratchpadCount
             state.scratchpadVisible = scratchpadVisible
@@ -236,6 +246,7 @@ final class WorkspaceStatusPresenter {
             scratchpad: scratchpad.members,
             knownCount: stateCache.knownWindowIDs.count,
             minima: tilingEngine.knownMinimumSizes,
+            fixedSizes: tilingEngine.knownFixedSizeApps,
             pendingRecovery: tilingEngine.pendingRecoveryWindowIDs,
             unverifiedGeometry: tilingEngine.unverifiedGeometryWindowIDs
         )
