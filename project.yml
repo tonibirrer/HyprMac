@@ -52,8 +52,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments
         # its own link scheme: the stock app in /Applications registers hyprmac://
         HYPRMAC_URL_SCHEME: hyprmac-experiments
-        MARKETING_VERSION: "0.21.0"
-        CURRENT_PROJECT_VERSION: "97"
+        MARKETING_VERSION: "0.22.1"
+        CURRENT_PROJECT_VERSION: "99"
         CODE_SIGN_IDENTITY: "HyprMac Dev Signing"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: ""
@@ -78,8 +78,8 @@ targets:
         PRODUCT_MODULE_NAME: HyprMac
         PRODUCT_BUNDLE_IDENTIFIER: pl.birrer.HyprMacExperiments.debug
         HYPRMAC_URL_SCHEME: hyprmac-experiments-debug
-        MARKETING_VERSION: "0.21.0"
-        CURRENT_PROJECT_VERSION: "97.1"
+        MARKETING_VERSION: "0.22.1"
+        CURRENT_PROJECT_VERSION: "99.1"
         HYPRMAC_SOURCE_REVISION: unknown
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG HYPRMAC_DEBUG_VARIANT"
         CODE_SIGN_IDENTITY: "HyprMac Dev Signing"

@@ -592,6 +592,7 @@ struct SavedConfig: Codable {
     // nil = the brand cyan and magenta pair
     var overlayAccentHex: String? = nil
     var keepCursorOnWorkspaceSwitch: Bool? = nil
+    var animateFocusIndicator: Bool? = nil
     // fork: per-app effects beside upstream's pins (see AppRule)
     var appRules: [AppRule]? = nil
 }
@@ -641,6 +642,7 @@ extension SavedConfig {
         case workspaceNames
         case overlayAccentHex
         case keepCursorOnWorkspaceSwitch
+        case animateFocusIndicator
     }
 
     init(from decoder: Decoder) throws {
@@ -730,6 +732,7 @@ extension SavedConfig {
         }
         self.overlayAccentHex = Self.tolerant(c, .overlayAccentHex)
         self.keepCursorOnWorkspaceSwitch = Self.tolerant(c, .keepCursorOnWorkspaceSwitch)
+        self.animateFocusIndicator = Self.tolerant(c, .animateFocusIndicator)
     }
 
     // keys "1"…"10" with a non-empty name; anything else is dropped, so a

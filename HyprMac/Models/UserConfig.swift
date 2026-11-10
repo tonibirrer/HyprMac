@@ -22,6 +22,10 @@ class UserConfig: ObservableObject {
     /// Process-wide singleton bound by SwiftUI views and the
     /// orchestration layer.
     static let shared: UserConfig = {
+        #if DEBUG
+        // the overlay preview only reads the config
+        if OverlayPreview.isRequested { return UserConfig(repairsOnLaunch: false) }
+        #endif
         let config = UserConfig()
         config.coalescesSaves = true
         return config
@@ -44,6 +48,9 @@ class UserConfig: ObservableObject {
         didSet { persistRuntimeChange() }
     }
     @Published var keepCursorOnWorkspaceSwitch: Bool {
+        didSet { persistRuntimeChange() }
+    }
+    @Published var animateFocusIndicator: Bool {
         didSet { persistRuntimeChange() }
     }
     @Published var mouseHoverPollHz: Int {
@@ -276,8 +283,11 @@ class UserConfig: ObservableObject {
 
     var isICloudDriveAvailable: Bool { store.isICloudDriveAvailable }
 
+    /// `repairsOnLaunch: false` skips the iCloud relink and the monitor-file
+    /// migration, the only writes a launch makes before anything changes.
     init(store: ConfigStore = ConfigStore(),
-         iCloudSyncEnabled: Bool = RuntimeVariant.inheritedBool(forKey: "iCloudSyncEnabled")) {
+         iCloudSyncEnabled: Bool = RuntimeVariant.inheritedBool(forKey: "iCloudSyncEnabled"),
+         repairsOnLaunch: Bool = true) {
         self.store = store
         self.iCloudSyncEnabled = iCloudSyncEnabled
 
@@ -298,6 +308,7 @@ class UserConfig: ObservableObject {
             self.enabled = saved.enabled
             self.focusFollowsMouse = saved.focusFollowsMouse ?? UserConfigDefaults.focusFollowsMouse
             self.keepCursorOnWorkspaceSwitch = saved.keepCursorOnWorkspaceSwitch ?? UserConfigDefaults.keepCursorOnWorkspaceSwitch
+            self.animateFocusIndicator = saved.animateFocusIndicator ?? UserConfigDefaults.animateFocusIndicator
             self.mouseHoverPollHz = saved.mouseHoverPollHz ?? UserConfigDefaults.mouseHoverPollHz
             self.hyprKey = saved.hyprKey ?? UserConfigDefaults.hyprKey
             self.excludedBundleIDs = Set(saved.excludedBundleIDs ?? Self.defaultExcludedBundleIDs)
@@ -334,6 +345,7 @@ class UserConfig: ObservableObject {
             self.enabled = UserConfigDefaults.enabled
             self.focusFollowsMouse = UserConfigDefaults.focusFollowsMouse
             self.keepCursorOnWorkspaceSwitch = UserConfigDefaults.keepCursorOnWorkspaceSwitch
+            self.animateFocusIndicator = UserConfigDefaults.animateFocusIndicator
             self.mouseHoverPollHz = UserConfigDefaults.mouseHoverPollHz
             self.hyprKey = UserConfigDefaults.hyprKey
             self.excludedBundleIDs = Set(Self.defaultExcludedBundleIDs)
@@ -392,19 +404,19 @@ class UserConfig: ObservableObject {
         self.workspaceMonitors = monitorConfig?.workspaceMonitors ?? [:]
 
         var relinked = false
-        if iCloudSyncEnabled {
+        if iCloudSyncEnabled, repairsOnLaunch {
             relinked = store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
         }
         store.holdWritesIfLinkUnusable()
 
-        if padding.migrated {
+        if padding.migrated, repairsOnLaunch {
             // both files: the overrides land locally and config.json drops
             // the legacy key, so the migration runs once
             hyprLog(.notice, .config, "outer padding: moved per-side padding onto "
                     + "\(padding.padding.keys.sorted()) as per-monitor overrides")
             store.writeSavedConfig(makeSavedConfig())
             store.writeSavedMonitorConfig(makeSavedMonitorConfig())
-        } else if resolved.needsLocalWrite {
+        } else if resolved.needsLocalWrite, repairsOnLaunch {
             store.writeSavedMonitorConfig(makeSavedMonitorConfig())
         }
 
@@ -561,6 +573,7 @@ class UserConfig: ObservableObject {
             workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames,
             overlayAccentHex: overlayAccentHex,
             keepCursorOnWorkspaceSwitch: keepCursorOnWorkspaceSwitch,
+            animateFocusIndicator: animateFocusIndicator,
             appRules: appRules.isEmpty ? nil : appRules)
     }
 
@@ -575,6 +588,7 @@ class UserConfig: ObservableObject {
         enabled = UserConfigDefaults.enabled
         focusFollowsMouse = UserConfigDefaults.focusFollowsMouse
         keepCursorOnWorkspaceSwitch = UserConfigDefaults.keepCursorOnWorkspaceSwitch
+        animateFocusIndicator = UserConfigDefaults.animateFocusIndicator
         mouseHoverPollHz = UserConfigDefaults.mouseHoverPollHz
         hyprKey = UserConfigDefaults.hyprKey
         excludedBundleIDs = Set(Self.defaultExcludedBundleIDs)
@@ -701,6 +715,7 @@ class UserConfig: ObservableObject {
         enabled = saved.enabled
         focusFollowsMouse = saved.focusFollowsMouse ?? UserConfigDefaults.focusFollowsMouse
         keepCursorOnWorkspaceSwitch = saved.keepCursorOnWorkspaceSwitch ?? UserConfigDefaults.keepCursorOnWorkspaceSwitch
+        animateFocusIndicator = saved.animateFocusIndicator ?? UserConfigDefaults.animateFocusIndicator
         mouseHoverPollHz = saved.mouseHoverPollHz ?? UserConfigDefaults.mouseHoverPollHz
         hyprKey = saved.hyprKey ?? UserConfigDefaults.hyprKey
         excludedBundleIDs = Set(saved.excludedBundleIDs ?? Self.defaultExcludedBundleIDs)

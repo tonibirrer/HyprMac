@@ -33,6 +33,7 @@ class WindowManager {
     let focusBorder = FocusBorder()
     let focusBrackets = FocusBrackets()
     let dimmingOverlay = DimmingOverlay()
+    let focusGlide = FocusGlide()
     private let screenshotPicker = ScreenshotPickerWatcher()
     let mouseTracker = MouseTrackingManager()
     let keybindOverlay = KeybindOverlayController()
@@ -1709,13 +1710,17 @@ class WindowManager {
                 thickness: config.resolvedFocusBracketThickness,
                 length: config.resolvedFocusBracketLength)
             focusBrackets.show(around: frame, windowID: window.windowID,
-                               sides: accordionSideHints(for: window))
+                               sides: accordionSideHints(for: window),
+                               glide: focusGlide.traversal(from: focusBrackets.frame, to: frame))
+            focusGlide.startTraversal()
         }
         if config.showFocusBorder, let frame = window.frame {
             focusBorder.accentCGColor = stateCache.floatingWindowIDs.contains(window.windowID)
                 ? config.resolvedFloatingBorderColor.cgColor
                 : workspaceAccent.cgColor
-            focusBorder.show(around: frame, windowID: window.windowID, settled: settled)
+            focusBorder.show(around: frame, windowID: window.windowID, settled: settled,
+                             glide: focusGlide.traversal(from: focusBorder.frame, to: frame))
+            focusGlide.startTraversal()
             // cache-based on both paths — this runs on every FFM focus
             // change, and the floating branch used to re-enumerate the
             // whole desktop. floatingFrames reads live AX frames from the
@@ -2074,6 +2079,8 @@ class WindowManager {
         if decision.cancelsRecovery {
             admissionRecovery.cancelAll(reason: "later press")
         }
+        let glides = armFocusGlide(for: action)
+        defer { if glides { disarmFocusGlide() } }
         switch decision.outcome {
         case .toggleOverview:
             let overview = statusPresenter.workspaceOverviewSnapshots()
@@ -2196,6 +2203,23 @@ class WindowManager {
                 to: { [weak self] in self?.displayManager.screens.first { $0.localizedName == reservedName } },
                 displayManager: displayManager)
         }
+    }
+
+    // MARK: - focus glide
+
+    // the engine reports this press's passes only while armed
+    private func armFocusGlide(for action: Action) -> Bool {
+        guard focusGlide.arm(for: action, enabled: config.animateFocusIndicator) else { return false }
+        focusGlide.primaryScreenHeight = displayManager.primaryScreenHeight
+        focusGlide.brackets = focusBrackets
+        focusGlide.border = focusBorder
+        tilingEngine.onTeleportWillWrite = { [weak self] in self?.focusGlide.willWrite($0) }
+        return true
+    }
+
+    private func disarmFocusGlide() {
+        tilingEngine.onTeleportWillWrite = nil
+        focusGlide.disarm()
     }
 
     // MARK: - disabled monitor handling

@@ -161,6 +161,14 @@ struct TilingSettingsView: View {
                 .labelsHidden()
                 .frame(width: 170)
             }
+            HyprRow("Animate focus moves", icon: "arrow.up.and.down.and.arrow.left.and.right",
+                    subtitle: "The indicator glides to the window you focus, swap or split from the keyboard.",
+                    divider: true) {
+                Toggle("", isOn: $config.animateFocusIndicator)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+                    .disabled(focusIndicatorChoice == .none)
+            }
             if config.focusBracketStyle != .off {
                 HyprRow("Mark roundness", icon: "viewfinder.circle", divider: false) {
                     VStack(alignment: .trailing, spacing: HyprSpacing.xs) {
@@ -272,7 +280,7 @@ struct TilingSettingsView: View {
             }
 
             HyprRow("Overlay accent", icon: "paintpalette",
-                    subtitle: "Workspace HUD, overview, keybind sheet and menu bar.",
+                    subtitle: "Keybind sheet and menu bar.",
                     divider: true) {
                 ColorPickerRow(
                     label: "",
