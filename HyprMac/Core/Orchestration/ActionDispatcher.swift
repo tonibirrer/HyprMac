@@ -21,11 +21,7 @@ import Cocoa
 /// `FloatingWindowController`), and tiled drag transactions (in
 /// `TiledDragHandler`).
 ///
-/// Closure handles plumb in WM-side helpers without a service home:
-/// `currentFocusedWindow`, `updateFocusBorder`, `updatePositionCache`,
-/// `screenUnderCursor`, plus the apply-loop helpers
-/// `applyForgottenIDCleanup`, `animatedRetile`, `refocusUnderCursor`, and
-/// `isMenuTracking`.
+/// Closure handles plumb in `WindowManager` helpers without a service home.
 ///
 /// Threading: main-thread only.
 final class ActionDispatcher {
@@ -107,7 +103,7 @@ final class ActionDispatcher {
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
     var updatePositionCache: () -> Void = {}
     var screenUnderCursor: () -> NSScreen = { NSScreen.main! }
-    // additional closures used by applyChanges (Phase 4 step 3b)
+    // closures used by applyChanges
     var applyForgottenIDCleanup: (CGWindowID) -> Void = { _ in }
     /// Drop any border / dim chrome still pointing at a window that just
     /// left the screen (Cmd-H, minimize, close-with-app-alive). Unlike
@@ -127,10 +123,9 @@ final class ActionDispatcher {
     // the frontmost app's open popup-level window (a menu), if any
     var openPopup: () -> StackedWindow? = { nil }
     // HyprMac-initiated focus. WindowManager routes it through TiledFocusRouter
-    // so a tile under a floater is not lifted over it.
-    var focusWindow: (HyprWindow, String) -> TiledFocusRouter.Route = { window, _ in
+    // so floaters stay in the agreed order.
+    var focusWindow: (HyprWindow, String) -> Void = { window, _ in
         window.focusWithoutRaise()
-        return TiledFocusRouter.Route(path: .usual, targetFrame: nil, coveringFrames: [])
     }
     var toggleScratchpad: () -> Void = {}
     var moveToScratchpad: () -> Void = {}
@@ -285,7 +280,7 @@ final class ActionDispatcher {
                 changes.screenDrift.isEmpty ? nil : "drift=\(changes.screenDrift.map(\.windowID).sorted())",
             ].compactMap { $0 }.joined(separator: " ")
             hyprLog(.notice, .discovery, "discovery retile: \(causes)")
-            // animate surrounding windows sliding to fill gaps / make room.
+            // let surrounding windows fill gaps / make room.
             retileResults = animatedRetile(allWindows)
         }
         // after the retile, so the border lands on the window's final frame
@@ -317,8 +312,8 @@ final class ActionDispatcher {
             followPinnedWindow(reopenedPinFollow.windowID, reopenedPinFollow.workspace)
         }
 
-        // periodically re-raise floating windows so they don't get stuck behind
-        // full-screen tiled windows (no activation event to trigger raise).
+        // raise floaters a tile covers after each discovery pass, since no
+        // activation event may trigger it.
         if !stateCache.floatingWindowIDs.isEmpty {
             floatingController.raiseBehind()
         }
@@ -805,15 +800,8 @@ final class ActionDispatcher {
         if let target = accessibility.windowInDirection(direction, from: focused, among: windows, frameFor: frameFor) {
             hyprLog(.debug, .orchestration, "focus \(direction): -> '\(target.title ?? "?")' (\(target.windowID)) frameFor=\(frameFor(target).map { "\($0)" } ?? "nil") live=\(target.frame.map { "\($0)" } ?? "nil") screen=\(displayManager.screen(for: target)?.localizedName ?? "?")")
             focusController.recordFocus(target.windowID, reason: "focusInDirection")
-            let route = focusWindow(target, "focusInDirection")
-            // with a floater over the target, land the cursor on the part of the
-            // target it leaves uncovered. landing on the floater would hand it
-            // focus on the next mouse move.
-            if route.path != .usual, let point = route.warpPoint {
-                cursorManager.warp(to: point)
-            } else {
-                cursorManager.warpToCenter(of: target)
-            }
+            focusWindow(target, "focusInDirection")
+            cursorManager.warpToCenter(of: target)
             updateFocusBorder(target)
         }
     }
@@ -824,12 +812,8 @@ final class ActionDispatcher {
     /// Candidates are pre-filtered to the focused window's own screen so
     /// a tied directional pick cannot drift across monitors. Rejected
     /// before any mutation when `canSwapWindows` reports a min-size
-    /// violation. With animation on, layout is computed first via
-    /// `prepareSwapLayout`, animated from old to new rects, then
-    /// committed via `applyComputedLayout`; if the post-readback layout
-    /// overflows recorded mins, `applyComputedLayout` reverts and this
-    /// path surfaces a `flashError`. With animation off, `swapWindows`
-    /// owns its own snapshot/revert.
+    /// violation. `swapWindows` owns its own snapshot and revert, and a
+    /// refusal surfaces a `flashError`.
     private func swapInDirection(_ direction: Direction) {
         guard let focused = currentFocusedWindow() else { return }
         guard !stateCache.floatingWindowIDs.contains(focused.windowID) else { return }
@@ -913,7 +897,7 @@ final class ActionDispatcher {
         hyprLog(.debug, .orchestration, "\(reason) — rejected swap")
         NSSound.beep()
         if let frame = window.frame {
-            focusBorder.flashError(around: frame, windowID: window.windowID, window: window,
+            focusBorder.flashError(around: frame, windowID: window.windowID,
                                    message: "Not enough room to swap here")
         }
     }
@@ -937,9 +921,7 @@ final class ActionDispatcher {
     /// cursor so the warp lands accurately, then re-associates after a
     /// short delay.
     private func warpToMenuBar() {
-        let mouseNS = NSEvent.mouseLocation
-        let cgY = displayManager.primaryScreenHeight - mouseNS.y
-        let cgPoint = CGPoint(x: mouseNS.x, y: cgY)
+        let cgPoint = displayManager.flippedY(NSEvent.mouseLocation)
 
         guard let screen = displayManager.screen(at: cgPoint) else { return }
         let frame = screen.frame

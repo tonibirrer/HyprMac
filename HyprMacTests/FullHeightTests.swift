@@ -72,7 +72,7 @@ final class FullHeightTests: XCTestCase {
 
     func testDwindleStacksWithoutRule() {
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        let layout = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        let layout = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         assertFullHeight([1], in: layout)
         assertNotFullHeight([2, 3], in: layout)
     }
@@ -83,7 +83,7 @@ final class FullHeightTests: XCTestCase {
         // dwindle would put 2 in the top half of the right side
         setFullHeight([2])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        let layout = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        let layout = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         assertFullHeight([1, 2, 3], in: layout)
     }
 
@@ -93,14 +93,14 @@ final class FullHeightTests: XCTestCase {
         setFullHeight([1, 2])
         setPriorities([1: 10, 2: 9])
         let zen = makeWindow(id: 1), mm = makeWindow(id: 2)
-        engine.prepareTileLayout([zen, mm], onWorkspace: 1, screen: screen)
+        engine.seedTree([zen, mm], onWorkspace: 1, screen: screen)
 
         let t1 = makeWindow(id: 3)
-        var layout = engine.prepareTileLayout([zen, mm, t1], onWorkspace: 1, screen: screen)
+        var layout = engine.seedTree([zen, mm, t1], onWorkspace: 1, screen: screen)
         assertFullHeight([1, 2, 3], in: layout)
 
         let t2 = makeWindow(id: 4)
-        layout = engine.prepareTileLayout([zen, mm, t1, t2], onWorkspace: 1, screen: screen)
+        layout = engine.seedTree([zen, mm, t1, t2], onWorkspace: 1, screen: screen)
         assertFullHeight([1, 2], in: layout)
         assertNotFullHeight([3, 4], in: layout)
         XCTAssertEqual(engine.existingTree(forWorkspace: 1, screen: screen)?.allWindows.map(\.windowID), [1, 2, 3, 4])
@@ -109,9 +109,9 @@ final class FullHeightTests: XCTestCase {
     func testFullHeightNewcomerPrefersColumnSlotOverStack() {
         // 1 | (2 / 3) — a full-height 4 must not force the 2/3 stack open
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         setFullHeight([4])
-        let layout = engine.prepareTileLayout(ws + [makeWindow(id: 4)], onWorkspace: 1, screen: screen)
+        let layout = engine.seedTree(ws + [makeWindow(id: 4)], onWorkspace: 1, screen: screen)
         assertFullHeight([1, 4], in: layout)
         assertNotFullHeight([2, 3], in: layout)
     }
@@ -119,32 +119,31 @@ final class FullHeightTests: XCTestCase {
     func testRemovingFullHeightWindowReleasesColumnLock() {
         setFullHeight([2])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
 
         // 2 closes: 1 | 3, and the next window may stack under 3 again
-        engine.prepareTileLayout([ws[0], ws[2]], onWorkspace: 1, screen: screen)
-        let layout = engine.prepareTileLayout([ws[0], ws[2], makeWindow(id: 4)], onWorkspace: 1, screen: screen)
+        engine.seedTree([ws[0], ws[2]], onWorkspace: 1, screen: screen)
+        let layout = engine.seedTree([ws[0], ws[2], makeWindow(id: 4)], onWorkspace: 1, screen: screen)
         assertFullHeight([1], in: layout)
         assertNotFullHeight([3, 4], in: layout)
     }
 
     func testRuleEditAppliesOnNextLayoutWithoutMembershipChange() {
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        var layout = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        var layout = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         assertNotFullHeight([2, 3], in: layout)
 
         setFullHeight([3])
-        layout = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        layout = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         assertFullHeight([1, 2, 3], in: layout)
     }
 
     func testToggleSplitAboveFullHeightWindowIsNoOp() {
         setFullHeight([2])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
-        guard let layout = engine.prepareToggleSplitLayout(ws[2], onWorkspace: 1, screen: screen) else {
-            return XCTFail("window 3 should be in the tree")
-        }
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
+        engine.toggleSplit(ws[2], onWorkspace: 1, screen: screen)
+        let layout = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         assertFullHeight([1, 2, 3], in: layout)
     }
 
@@ -153,7 +152,7 @@ final class FullHeightTests: XCTestCase {
         // moves the lock: 3 takes the left column, 1 | 2 may stack again
         setFullHeight([3])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         guard let tree = engine.existingTree(forWorkspace: 1, screen: screen) else { return XCTFail("no tree") }
         tree.swap(ws[0], ws[2])
         tree.root.resetSplitRatios()

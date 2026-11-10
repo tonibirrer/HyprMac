@@ -1,9 +1,9 @@
 // One-time data migrations and schema-version bookkeeping. Lives in
 // Persistence so changes here do not touch the `@Published` surface
 // in `UserConfig`. Today: the monitor-config split (per-machine
-// settings extracted from the iCloud-synced file) and the one-time
-// import from the stock app's Application Support directory. Future
-// schema bumps land here too.
+// settings extracted from the iCloud-synced file), the bracket color and
+// the floating keybind moves, and the one-time import from the stock
+// app's Application Support directory. Future schema bumps land here too.
 
 import Carbon
 import Foundation
