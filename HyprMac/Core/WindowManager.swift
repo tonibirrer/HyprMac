@@ -2357,6 +2357,9 @@ class WindowManager {
         )
         let allWindows = accessibility.getAllWindows()
         placement.classifyAndAssign(allWindows)
+        // a workspace showing again may hold floaters parked at a corner
+        // the change moved; they come back before the carry and the re-park
+        placement.restoreStrandedFloaters(allWindows)
         // visible workspaces may have changed (monitor came/went, link
         // toggled) — sticky windows follow before the hidden ones re-park
         reconcileStickyWindows(allWindows)
