@@ -634,7 +634,18 @@ class WindowManager {
             self.scratchpad.adoptPinned(w, summon: !self.displayTransitionPending)
         }
         actionDispatcher.scratchpadDiscovery = { [weak self] gone, returned in
-            self?.scratchpad.noteDiscovery(goneIDs: gone, returned: returned)
+            guard let self else { return }
+            let summoning = ScratchpadReturnSummon.windowToSummon(
+                returned.map {
+                    ScratchpadReturnSummon.Candidate(
+                        windowID: $0.windowID, ownerPID: $0.ownerPID,
+                        pinned: self.actionDispatcher.isPinnedToScratchpad($0),
+                        member: self.scratchpad.contains($0.windowID))
+                },
+                frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                layerVisible: self.scratchpad.isVisible,
+                transitionPending: self.displayTransitionPending)
+            self.scratchpad.noteDiscovery(goneIDs: gone, returned: returned, summoning: summoning)
         }
         actionDispatcher.enforceScratchpadFocus = { [weak self] in self?.scratchpad.enforceFocus() }
         actionDispatcher.saveLayout = { [weak self] in self?.saveLayoutSnapshot(manual: true) }

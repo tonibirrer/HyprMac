@@ -217,9 +217,15 @@ final class ScratchpadController {
     /// leaves the layer and the rest re-lay to fill its slot; focus moves to
     /// another member when it was the focused one. A returning member rejoins
     /// the layer while it's up, and goes back to its park spot while it's
-    /// down.
-    func noteDiscovery(goneIDs: Set<CGWindowID>, returned: [HyprWindow]) {
+    /// down, unless `summoning` names one to bring the layer up for
+    /// (`ScratchpadReturnSummon`).
+    func noteDiscovery(goneIDs: Set<CGWindowID>, returned: [HyprWindow], summoning: CGWindowID? = nil) {
         let returning = returned.filter { contains($0.windowID) }
+        if !isVisible, let id = summoning, let w = returning.first(where: { $0.windowID == id }) {
+            hyprLog(.notice, .lifecycle, "scratchpad: pinned '\(w.title ?? "?")' (\(id)) came back with its app in front — showing the layer")
+            show(focusing: id)
+            return
+        }
         if !isVisible {
             if let parkScreen = displayManager.screens.first {
                 for w in returning { workspaceManager.hideInCorner(w, on: parkScreen) }
