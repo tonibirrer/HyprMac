@@ -42,14 +42,14 @@ final class SortPriorityTests: XCTestCase {
         // id 2 is low priority — must land bottom-right despite its id
         setPriorities([2: -5])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [1, 3, 2])
     }
 
     func testBatchInsertHighPriorityLandsTopLeft() {
         setPriorities([3: 5])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [3, 1, 2])
     }
 
@@ -58,17 +58,17 @@ final class SortPriorityTests: XCTestCase {
     func testLowPriorityWindowStaysRightmostWhenOthersOpenLater() {
         setPriorities([1: -5])
         let mattermost = makeWindow(id: 1)
-        engine.prepareTileLayout([mattermost], onWorkspace: 1, screen: screen)
+        engine.seedTree([mattermost], onWorkspace: 1, screen: screen)
 
         // a new window opens later — dwindle would put it at the spiral
         // tip (right of mattermost); the priority reorder must flip that
         let zen = makeWindow(id: 2)
-        engine.prepareTileLayout([mattermost, zen], onWorkspace: 1, screen: screen)
+        engine.seedTree([mattermost, zen], onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [2, 1])
 
         // and again with a third window
         let ghostty = makeWindow(id: 3)
-        engine.prepareTileLayout([mattermost, zen, ghostty], onWorkspace: 1, screen: screen)
+        engine.seedTree([mattermost, zen, ghostty], onWorkspace: 1, screen: screen)
         XCTAssertEqual(order().last, 1)
     }
 
@@ -76,11 +76,11 @@ final class SortPriorityTests: XCTestCase {
         setPriorities([3: 9])
         let w1 = makeWindow(id: 1)
         let w2 = makeWindow(id: 2)
-        engine.prepareTileLayout([w1, w2], onWorkspace: 1, screen: screen)
+        engine.seedTree([w1, w2], onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [1, 2])
 
         let w3 = makeWindow(id: 3)
-        engine.prepareTileLayout([w1, w2, w3], onWorkspace: 1, screen: screen)
+        engine.seedTree([w1, w2, w3], onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [3, 1, 2])
     }
 
@@ -89,32 +89,32 @@ final class SortPriorityTests: XCTestCase {
     func testEqualPrioritiesKeepInsertionOrder() {
         setPriorities([:])
         let ws = (1...4).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [1, 2, 3, 4])
     }
 
     func testManualSwapBetweenNeutralWindowsSurvivesRetile() {
         setPriorities([3: -5])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [1, 2, 3])
 
         // user swaps the two neutral windows — a later membership pass
         // must not undo it (stable sort touches only ruled windows)
         tree()?.swap(ws[0], ws[1])
         XCTAssertEqual(order(), [2, 1, 3])
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [2, 1, 3])
     }
 
     func testReorderPreservesTopologyAndRatios() {
         setPriorities([1: -5])
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [2, 3, 1])
 
         // same leaf count, every window still laid out exactly once
-        let layout = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        let layout = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(layout.count, 3)
         XCTAssertEqual(Set(layout.map { $0.0.windowID }), [1, 2, 3])
     }

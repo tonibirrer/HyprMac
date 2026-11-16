@@ -39,7 +39,7 @@ struct MenuBarView: View {
                 HyprLockup(markSize: 18)
                 Text(config.enabled ? "Tiling active" : "Tiling paused")
                     .font(.hyprMonoXs)
-                    .foregroundStyle(config.enabled ? Color.hyprCyan : Color.hyprTextTertiary)
+                    .foregroundStyle(config.enabled ? Color.overlayPrimary : Color.hyprTextTertiary)
             }
             Spacer(minLength: HyprSpacing.sm)
             Toggle("", isOn: $config.enabled)
@@ -74,7 +74,7 @@ struct MenuBarView: View {
                             .font(.hyprMonoXs)
                         Spacer()
                     }
-                    .foregroundStyle(Color.hyprMagenta)
+                    .foregroundStyle(Color.overlaySecondary)
                     .padding(.horizontal, HyprSpacing.md)
                     .padding(.vertical, HyprSpacing.sm)
                 }
@@ -104,7 +104,7 @@ struct MenuBarView: View {
                                                              fallback: "\(workspace.id)"))
                             .font(.hyprMonoSm).lineLimit(1).minimumScaleFactor(0.5)
                             .frame(width: 25, height: 23)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(workspace.isActive ? Color.hyprCyan : (workspace.isOccupied ? Color.hyprMagenta.opacity(0.24) : Color.white.opacity(0.06))))
+                            .background(RoundedRectangle(cornerRadius: 4).fill(workspace.isActive ? Color.overlayPrimary : (workspace.isOccupied ? Color.overlaySecondary.opacity(0.24) : Color.white.opacity(0.06))))
                             .foregroundStyle(workspace.isActive ? Color.hyprBackground : Color.hyprTextPrimary)
                             .overlay(RoundedRectangle(cornerRadius: 4).stroke(workspace.hasFloatingWindows ? config.resolvedFloatingColor : Color.clear, lineWidth: 1.5))
                     }.buttonStyle(.plain).disabled(!config.enabled).help("Switch to \(UserConfig.workspaceDisplayName(workspace.id, names: config.workspaceNames, fallback: "workspace \(workspace.id)"))")
@@ -176,7 +176,6 @@ struct MenuBarView: View {
 private struct MenuBarRow<Trailing: View>: View {
     let label: String
     let icon: String
-    let shortcut: String?
     let destructive: Bool
     let action: () -> Void
     let trailing: () -> Trailing
@@ -185,13 +184,11 @@ private struct MenuBarRow<Trailing: View>: View {
 
     init(_ label: String,
          icon: String,
-         shortcut: String? = nil,
          destructive: Bool = false,
          action: @escaping () -> Void,
          @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
         self.label = label
         self.icon = icon
-        self.shortcut = shortcut
         self.destructive = destructive
         self.action = action
         self.trailing = trailing
@@ -210,11 +207,6 @@ private struct MenuBarRow<Trailing: View>: View {
                     .lineLimit(1)
                     .layoutPriority(1)
                 Spacer()
-                if let shortcut {
-                    Text(shortcut)
-                        .font(.hyprMono)
-                        .foregroundStyle(Color.hyprTextSecondary)
-                }
                 trailing()
             }
             .padding(.horizontal, HyprSpacing.md)
@@ -234,11 +226,13 @@ private struct MenuBarRow<Trailing: View>: View {
 // Bridge for the menu bar label between WindowManager (which knows the
 // workspace state but is not available at app init) and the SwiftUI
 // MenuBarExtra label (which is built before WindowManager exists).
-// WindowManager.updateMenuBarState writes to .shared after every poll;
+// WorkspaceStatusPresenter.updateMenuBarState writes to .shared after every poll;
 // WorkspaceIndicatorLabel observes it.
 class MenuBarState: ObservableObject {
     static let shared = MenuBarState()
     @Published var labelText = ""
+    /// A window fills a display showing now. The label swaps the glyphs for one icon.
+    @Published var isFullscreen = false
     @Published var monitors: [MenuBarMonitorSnapshot] = []
     @Published var hasData = false
     /// Number of windows in the scratchpad (0 = hide the tray glyph).
@@ -322,7 +316,9 @@ struct WorkspaceIndicatorLabel: View {
             labelText: state.labelText,
             scratchpadCount: state.scratchpadCount) {
             HStack(spacing: 5) {
-                if !state.labelText.isEmpty {
+                if state.isFullscreen {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                } else if !state.labelText.isEmpty {
                     Text(state.labelText)
                         .font(.system(size: 12, weight: .regular))
                 }
@@ -339,11 +335,4 @@ struct WorkspaceIndicatorLabel: View {
             Image(systemName: "rectangle.split.2x2")
         }
     }
-}
-
-extension Notification.Name {
-    static let hyprMacRetileAll = Notification.Name("hyprMacRetileAll")
-    static let hyprMacWorkspaceChanged = Notification.Name("hyprMacWorkspaceChanged")
-    // posted once per dispatched hotkey action; Tour's try-it hint observes it
-    static let hyprMacActionDispatched = Notification.Name("hyprMacActionDispatched")
 }

@@ -48,7 +48,7 @@ final class AccordionAdmissionTests: XCTestCase {
         accordion = false
         let windows = (1...3).map { wideWindow(CGWindowID(500 + $0)) }
 
-        _ = engine.prepareTileLayout(windows, onWorkspace: 2, screen: screen)
+        _ = engine.seedTree(windows, onWorkspace: 2, screen: screen)
 
         XCTAssertEqual(treeCount(), 1, "outside accordion the slot geometry still decides")
     }
@@ -115,8 +115,8 @@ final class AccordionAdmissionTests: XCTestCase {
         let second = makeWindow(id: 972)
         first.observedMinSize = CGSize(width: 1000, height: 500)
         second.observedMinSize = CGSize(width: 1000, height: 500)
-        engine.prepareTileLayout([first], onWorkspace: 1, screen: left)
-        engine.prepareTileLayout([second], onWorkspace: 1, screen: right)
+        engine.seedTree([first], onWorkspace: 1, screen: left)
+        engine.seedTree([second], onWorkspace: 1, screen: right)
 
         engine.handleDisplayChange(currentScreens: [laptop],
                                    homeScreensForWorkspace: { _ in [laptop] })

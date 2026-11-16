@@ -3,11 +3,9 @@ import Cocoa
 @testable import HyprMac
 
 // HandleDisplayChangeTests cover the orphan-and-prune path of
-// TilingEngine.handleDisplayChange. the migration path requires multiple live
-// NSScreen instances and isn't exercised here — it's covered by the manual
-// monitor-disconnect smoke test until we have a fake-display harness.
-//
-// see plan §4.2 (display lifecycle) + §11.
+// TilingEngine.handleDisplayChange, a tree already on its home, and migration
+// (the unverified mark carrying over, colliding trees merging on synthetic
+// screens). the classes below cover display fingerprints and returning screens.
 
 final class HandleDisplayChangeTests: XCTestCase {
 
@@ -26,7 +24,7 @@ final class HandleDisplayChangeTests: XCTestCase {
 
     func testHandleDisplayChangePrunesOrphanedTrees() {
         // seed a tree
-        engine.prepareTileLayout([makeWindow(id: 1), makeWindow(id: 2)],
+        engine.seedTree([makeWindow(id: 1), makeWindow(id: 2)],
                                  onWorkspace: 1, screen: screen)
         XCTAssertNotNil(engine.existingTree(forWorkspace: 1, screen: screen))
 
@@ -69,7 +67,7 @@ final class HandleDisplayChangeTests: XCTestCase {
     }
 
     func testHandleDisplayChangeIsNoopWhenTreeOnItsHome() {
-        engine.prepareTileLayout([makeWindow(id: 1), makeWindow(id: 2)],
+        engine.seedTree([makeWindow(id: 1), makeWindow(id: 2)],
                                  onWorkspace: 1, screen: screen)
         let tree = engine.existingTree(forWorkspace: 1, screen: screen)
         XCTAssertNotNil(tree)
@@ -96,8 +94,8 @@ final class FitAwareDisplayMigrationTests: XCTestCase {
         first.observedMinSize = CGSize(width: 1000, height: 500)
         second.observedMinSize = CGSize(width: 1000, height: 500)
 
-        engine.prepareTileLayout([first], onWorkspace: 1, screen: left)
-        engine.prepareTileLayout([second], onWorkspace: 1, screen: right)
+        engine.seedTree([first], onWorkspace: 1, screen: left)
+        engine.seedTree([second], onWorkspace: 1, screen: right)
 
         engine.handleDisplayChange(currentScreens: [destination],
                                    homeScreensForWorkspace: { _ in [destination] })

@@ -15,9 +15,7 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(bind.keyCode, UInt16(kVK_ANSI_T))
         XCTAssertEqual(bind.modifiers, .hypr)
         XCTAssertFalse(bind.modifiers.contains(.shift))
-        XCTAssertEqual(bind.displayString, "HYPR+T")
-        XCTAssertEqual(bind.badgeLabels(hyprLabel: "⇪"), ["⇪", "T"])
-        XCTAssertEqual(bind.overlayChord, "HYPR T")
+        XCTAssertEqual(bind.badgeLabels(), ["HYPR", "T"])
         XCTAssertEqual(Keybind.defaults.filter { $0.id == bind.id }, [bind])
     }
 
@@ -41,21 +39,22 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(actions, [.focusFloating, .toggleFloating])
     }
 
-    func testEmptyWorkspaceAndFloatingFocusDefaults() throws {
+    func testMaximizeAndFloatingFocusDefaults() throws {
+        XCTAssertFalse(Keybind.defaults.contains { $0.action == .moveToNextEmptyWorkspace })
         let empty = try XCTUnwrap(Keybind.defaults.first {
-            $0.action == .moveToNextEmptyWorkspace
+            $0.action == .toggleMaximize
         })
         XCTAssertEqual(empty.keyCode, UInt16(kVK_ANSI_F))
         XCTAssertEqual(empty.modifiers, .hypr)
-        XCTAssertEqual(empty.displayString, "HYPR+F")
-        XCTAssertEqual(empty.actionDescription, "Move to dedicated workspace")
-        XCTAssertEqual(KeybindCategory.from(empty.action), .workspaces)
+        XCTAssertEqual(empty.badgeLabels(), ["HYPR", "F"])
+        XCTAssertEqual(empty.actionDescription, "Maximize window")
+        XCTAssertEqual(KeybindCategory.from(empty.action), .windowManagement)
         XCTAssertFalse(empty.touchesFloatingLayer)
 
         let floating = try XCTUnwrap(Keybind.defaults.first { $0.action == .focusFloating })
         XCTAssertEqual(floating.keyCode, UInt16(kVK_ANSI_T))
         XCTAssertEqual(floating.modifiers, [.hypr, .shift])
-        XCTAssertEqual(floating.displayString, "HYPR+⇧+T")
+        XCTAssertEqual(floating.badgeLabels(), ["HYPR", "⇧", "T"])
     }
 
     func testEmptyWorkspaceAndFloatingFocusDispatchOnDistinctChords() {
@@ -78,14 +77,13 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertNil(manager.handleEvent(.keyDown, floating))
 
         wait(for: [dispatched], timeout: 1)
-        XCTAssertEqual(actions, [.moveToNextEmptyWorkspace, .focusFloating])
+        XCTAssertEqual(actions, [.toggleMaximize, .focusFloating])
     }
 
     func testBadgeFormatterPreservesModifierOrder() {
         let bind = Keybind(keyCode: UInt16(kVK_ANSI_T),
                           modifiers: [.hypr, .control, .option, .shift, .command], action: .toggleFloating)
         XCTAssertEqual(bind.badgeLabels(), ["HYPR", "⌃", "⌥", "⇧", "⌘", "T"])
-        XCTAssertEqual(bind.overlayChord, "HYPR ⌃ ⌥ ⇧ ⌘ T")
     }
 
     func testEveryDefaultRoundTripsThroughCodable() throws {
@@ -154,7 +152,7 @@ final class DefaultKeybindsTests: XCTestCase {
         XCTAssertEqual(followers.count, 10)
 
         let third = try XCTUnwrap(Keybind.defaults.first { $0.action == .moveToWorkspaceAndFollow(3) })
-        XCTAssertEqual(third.overlayChord, "HYPR ⌃ ⇧ 3")
+        XCTAssertEqual(third.badgeLabels(), ["HYPR", "⌃", "⇧", "3"])
         XCTAssertEqual(third.actionDescription, "Move to Workspace 3 and Follow")
         XCTAssertEqual(KeybindCategory.from(third.action), .workspaces)
 
@@ -342,6 +340,10 @@ final class DefaultKeybindsTests: XCTestCase {
             .moveToNextEmptyWorkspace, tilingEnabled: true, isRepeat: true))
         XCTAssertFalse(HotkeyManager.shouldDispatchAction(
             .moveToNextEmptyWorkspace, tilingEnabled: false, isRepeat: false))
+        XCTAssertFalse(HotkeyManager.shouldDispatchAction(
+            .toggleMaximize, tilingEnabled: true, isRepeat: true))
+        XCTAssertFalse(HotkeyManager.shouldDispatchAction(
+            .toggleMaximize, tilingEnabled: false, isRepeat: false))
     }
 
     func testRunCommandIgnoresKeyRepeatAndFollowsTilingAvailability() {

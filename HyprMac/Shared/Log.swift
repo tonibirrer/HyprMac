@@ -30,7 +30,7 @@ enum LogLevel: Int, Comparable {
 enum LogCategory: String, CaseIterable {
     case orchestration, state, focus, tiling, workspace, discovery
     case input, mouse, drag, hotkey, floating
-    case ui, animator, border, dimming, overlay
+    case ui, border, dimming, overlay
     case config, persistence, migration, sync
     case lifecycle, accessibility, space, display
 }
@@ -45,7 +45,7 @@ private let loggers: [LogCategory: Logger] = Dictionary(
 
 /// Runtime knobs for the logger.
 ///
-/// `traceMinimum` is the `.debug`/`.info` ceiling honored in DEBUG;
+/// `traceMinimum` is the lowest `.debug`/`.info` level honored in DEBUG;
 /// `enabledCategories` filters trace output by category;
 /// `verboseInRelease` reads the `HyprMacVerboseLogging` `UserDefault`
 /// so a user can flip on trace logging in a Release build for a
@@ -90,10 +90,10 @@ enum LogConfig {
 /// Independently of all that, every call is appended to
 /// `DebugLogFile` while `LogConfig.persistentFileLog` is on.
 ///
-/// `privacy: .public` is applied across the board because the only
-/// metadata that enters log strings is safe (window IDs, workspace
-/// numbers, screen names, action names, durations). Free-text user
-/// input must not enter log strings.
+/// `privacy: .public` is applied across the board, so nothing is redacted.
+/// Most lines carry only window IDs, workspace numbers, screen names, action
+/// names and durations. Some lines also carry window titles. Command
+/// text must not enter log strings.
 func hyprLog(_ level: LogLevel = .debug,
              _ category: LogCategory,
              _ message: @autoclosure () -> String) {

@@ -8,17 +8,18 @@ import Cocoa
 ///
 /// Owns the dicts that classify a window's lifecycle (known? hidden?
 /// gone?), behavior (floating?), and last-known geometry. Other subsystems
-/// hold a reference to this cache and read it directly; mutation goes
-/// through the cache as well, so each dict has exactly one owner.
+/// hold a reference to this cache and read and write its stores directly,
+/// on the main thread. Its only methods are `setFloating`,
+/// `stampFloating` and `forget`.
 ///
 /// What lives here:
-/// - `knownWindowIDs` — every window seen since launch
+/// - `knownWindowIDs` — windows present in the last full cycle
 /// - `floatingWindowIDs` — windows excluded from tiling
 /// - `originalFrames` — pre-tile frames captured for float-toggle restore
 /// - `windowOwners` — `wid → pid`, used to distinguish closed-vs-hidden
 /// - `hiddenWindowIDs` — windows whose AX element is gone but pid is alive
 /// - `reservedHiddenWindowIDs` — hidden windows that still hold a tile slot
-/// - `tiledPositions` — expected tiled frames (drag detection, FFM)
+/// - `tiledPositions` — last read tiled frames (FFM, focus resolving)
 /// - `cachedWindows` — last poll's `HyprWindow` snapshots
 ///
 /// What does not live here: workspace assignment (in `WorkspaceManager`),
@@ -29,18 +30,22 @@ import Cocoa
 /// Threading: main-thread only. No synchronization.
 final class WindowStateCache {
 
-    /// Last poll's `HyprWindow` snapshots, keyed by window ID. Populated
-    /// by `WindowDiscoveryService`'s apply-loop and read by FFM, drag
+    /// `HyprWindow` snapshots keyed by window ID. Written by
+    /// `WindowManager.updatePositionCache`, which keeps only visible windows,
+    /// and by classification, floating and workspace paths. Read by FFM, drag
     /// detection, focus-border refresh, and the floater raise path.
     var cachedWindows: [CGWindowID: HyprWindow] = [:]
 
-    /// Expected tiled frames keyed by window ID. Drag detection compares
-    /// the mouseDown frame against these to classify drag-vs-resize; FFM
-    /// uses them as hit rects to match windows without an AX poll.
+    /// Last read frames of visible non-floating windows, keyed by window ID.
+    /// Not the layout's intent, and it can include newcomers not yet in a
+    /// tree. FFM and focus resolving
+    /// use them as hit rects to match windows without an AX poll; a
+    /// finished tiled drag rewrites them.
     var tiledPositions: [CGWindowID: CGRect] = [:]
 
     /// Windows whose owning app is alive but whose `AXUIElement` is gone
-    /// (minimized, hidden, on another macOS Space). Kept out of tiling so
+    /// (minimized, hidden, on another macOS Space, or closed while the app
+    /// runs). Kept out of tiling so
     /// the tree does not try to re-insert them; the rest of their state
     /// is retained so they can re-tile cleanly when they return.
     var hiddenWindowIDs: Set<CGWindowID> = []
@@ -57,9 +62,25 @@ final class WindowStateCache {
     var windowOwners: [CGWindowID: pid_t] = [:]
 
     /// Windows excluded from tiling. User-toggled via `Hypr+T` or
-    /// auto-floated by depth, min-size, or excluded-app rules. BSP
-    /// membership is computed; floating membership is the negation.
+    /// auto-floated by depth, min-size, or excluded-app rules.
     var floatingWindowIDs: Set<CGWindowID> = []
+
+    /// A window's floating state lives in two places. Change them together.
+    func setFloating(_ floating: Bool, window: HyprWindow) {
+        if floating {
+            floatingWindowIDs.insert(window.windowID)
+        } else {
+            floatingWindowIDs.remove(window.windowID)
+        }
+        window.isFloating = floating
+    }
+
+    /// Fresh `HyprWindow`s start tiled. Mark the floaters before a pass reads them.
+    func stampFloating(_ windows: [HyprWindow]) {
+        for window in windows where floatingWindowIDs.contains(window.windowID) {
+            window.isFloating = true
+        }
+    }
 
     /// Subset of `hiddenWindowIDs` that can return on their own
     /// (minimized, app hidden via Cmd-H, still listed by the app because
@@ -68,10 +89,9 @@ final class WindowStateCache {
     /// verified-closed windows do not.
     var reservedHiddenWindowIDs: Set<CGWindowID> = []
 
-    /// Every window ID seen since launch. Populated by discovery, pruned
-    /// by `forget`. Hidden windows stay in the set so they do not
-    /// re-enter as "new" when the user un-hides them — without this, the
-    /// returning window would be reassigned to a different workspace.
+    /// Windows present in the last full cycle. Populated by discovery, pruned
+    /// by `forget` and when a window hides. The returned pass re-adds a hidden
+    /// window before the new pass looks, so it does not re-enter as "new".
     var knownWindowIDs: Set<CGWindowID> = []
 
     /// Remove `id` from every tracked dict. Used when a window is

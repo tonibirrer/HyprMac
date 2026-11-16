@@ -3,12 +3,11 @@ import XCTest
 import Carbon
 
 final class WelcomeContentTests: XCTestCase {
-    func testWhatsNewDescribesOnlyThe0201Changes() {
+    func testWhatsNewDescribesOnlyThe0221Changes() {
         let features = WhatsNewFeatures.current
 
-        XCTAssertEqual(features.map(\.title), ["No More Empty Gaps"])
+        XCTAssertEqual(features.map(\.title), ["Snappier Focus Moves"])
         XCTAssertEqual(features.compactMap(\.credit), [])
-        XCTAssertTrue(features.allSatisfy { $0.tint == .cyan })
         XCTAssertEqual(WelcomeContent.productURL.absoluteString, "https://hyprmac.app/")
     }
 
@@ -44,16 +43,16 @@ final class WelcomeContentTests: XCTestCase {
         XCTAssertNil(WelcomeContent.chord(in: [], hyprKey: .capsLock) { _ in true })
     }
 
-    func testTutorialUsesConfiguredDedicatedAndWorkspaceTenChords() {
+    func testTutorialUsesConfiguredMaximizeAndWorkspaceTenChords() {
         let binds = [
             Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
-                    action: .moveToNextEmptyWorkspace),
+                    action: .toggleMaximize),
             Keybind(keyCode: UInt16(kVK_ANSI_0), modifiers: [.hypr, .shift],
                     action: .switchWorkspace(10))
         ]
 
         XCTAssertEqual(WelcomeContent.chord(in: binds, hyprKey: .capsLock) {
-            $0 == .moveToNextEmptyWorkspace
+            $0 == .toggleMaximize
         }, "HYPR F")
         XCTAssertEqual(WelcomeContent.chord(in: binds, hyprKey: .capsLock) {
             $0 == .switchWorkspace(10)

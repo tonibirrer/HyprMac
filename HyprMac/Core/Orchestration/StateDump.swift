@@ -1,4 +1,4 @@
-// Pure formatting for `WindowManager.dumpState`. Takes plain values —
+// Pure formatting for `WorkspaceStatusPresenter.dumpState`. Takes plain values —
 // screen names, id sets, the workspace map — so the block can be
 // asserted line for line without AppKit or a live tree.
 
@@ -39,12 +39,12 @@ struct StateDumpFormatter {
     /// `MinSizeMemory`. The source is printed because a seeded hint and a
     /// bound the app actually refused are not the same claim.
     var minima: [CGWindowID: MinSizeMemory.Entry] = [:]
-    /// Windows waiting on a bounded recovery attempt. Nothing produces
-    /// these yet — the line is here so the shape is stable once
-    /// admission recovery lands.
+    /// Per-app lengths windows kept on an axis, oldest first. Printed only
+    /// when there are any.
+    var fixedSizes: [FixedSize] = []
+    /// Windows waiting on a bounded recovery attempt.
     var pendingRecovery: Set<CGWindowID> = []
-    /// Windows whose on-screen geometry was never verified. Same: no
-    /// producer yet, the line reports what exists.
+    /// Windows whose on-screen geometry was never verified.
     var unverifiedGeometry: Set<CGWindowID> = []
 
     private static let workspaceRange = Constants.workspaceRange
@@ -74,6 +74,11 @@ struct StateDumpFormatter {
             let entry = minima[$0]!
             return "\($0):" + Self.size(entry.size) + "(\(entry.provenance.rawValue))"
         }.joined(separator: ", ") + "]")
+        if !fixedSizes.isEmpty {
+            out.append("fixed=[" + fixedSizes.map {
+                "\($0.bundleID ?? "none"):\($0.axis.rawValue)=\(String(format: "%g", Double($0.length)))"
+            }.joined(separator: ", ") + "]")
+        }
         out.append("recovery pending=\(Self.list(pendingRecovery.sorted()))"
             + " unverified=\(Self.list(unverifiedGeometry.sorted()))")
         out.append("known=\(knownCount) hidden=\(hidden.count)"

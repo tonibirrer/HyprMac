@@ -6,7 +6,7 @@ import XCTest
 // the JSON shapes here are byte-identical to what shipped in v0.4.2 user
 // configs. any decoder change that breaks them breaks every existing user.
 //
-// these tests also pin phase 6's decoder-hardening behaviors:
+// these tests also pin the decoder-hardening behaviors:
 //   - malformed direction strings log + fall back to .right (was: crash)
 //   - mixed action shapes (with/without payload) coexist in one keybinds array
 //   - encoder output stays on the v0.4.2 case keys (switchDesktop/moveToDesktop)
@@ -17,6 +17,20 @@ import XCTest
 final class KeybindDecoderToleranceTests: XCTestCase {
 
     // MARK: - real-config wire-format round-trips
+
+    func testOverlayAccentRoundTrips() throws {
+        let json = #"{"keybinds":[],"gapSize":8,"outerPadding":8,"enabled":true,"overlayAccentHex":"30D158"}"#
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        let reloaded = try JSONDecoder().decode(SavedConfig.self, from: try JSONEncoder().encode(saved))
+        XCTAssertEqual(reloaded.overlayAccentHex, "30D158")
+    }
+
+    func testABadOverlayAccentCostsOnlyThatField() throws {
+        let json = #"{"keybinds":[],"gapSize":12,"outerPadding":8,"enabled":true,"overlayAccentHex":42}"#
+        let saved = try JSONDecoder().decode(SavedConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(saved.gapSize, 12)
+        XCTAssertNil(saved.overlayAccentHex)
+    }
 
     func testFocusDirectionWireFormatDecodes() throws {
         let json = #"{"action":{"focusDirection":{"_0":"left"}},"keyCode":123,"modifiers":1}"#

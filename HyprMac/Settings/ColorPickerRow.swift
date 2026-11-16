@@ -1,5 +1,5 @@
-// Reusable color picker row used by the Tiling tab for the focus
-// border and floating border colors.
+// Reusable color picker row used by the Layout tab for the focus
+// bracket, focus border, floating border and overlay accent colors.
 
 import SwiftUI
 

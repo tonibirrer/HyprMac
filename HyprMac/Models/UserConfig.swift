@@ -12,7 +12,7 @@ import Combine
 ///
 /// Each public field is `@Published` so SwiftUI views and Combine
 /// subscribers re-render on change. Every mutation writes through to
-/// `ConfigStore` (debounce by `isReloading` during programmatic
+/// `ConfigStore` (except while `isReloading` is set during programmatic
 /// reloads) and emits notifications to drive `WindowManager`'s live
 /// re-tile / re-bind paths.
 ///
@@ -21,7 +21,15 @@ import Combine
 class UserConfig: ObservableObject {
     /// Process-wide singleton bound by SwiftUI views and the
     /// orchestration layer.
-    static let shared = UserConfig()
+    static let shared: UserConfig = {
+        #if DEBUG
+        // the overlay preview only reads the config
+        if OverlayPreview.isRequested { return UserConfig(repairsOnLaunch: false) }
+        #endif
+        let config = UserConfig()
+        config.coalescesSaves = true
+        return config
+    }()
     let didApplyRuntimeChange = PassthroughSubject<Void, Never>()
 
     @Published var keybinds: [Keybind] {
@@ -37,6 +45,12 @@ class UserConfig: ObservableObject {
         didSet { persistRuntimeChange() }
     }
     @Published var focusFollowsMouse: Bool {
+        didSet { persistRuntimeChange() }
+    }
+    @Published var keepCursorOnWorkspaceSwitch: Bool {
+        didSet { persistRuntimeChange() }
+    }
+    @Published var animateFocusIndicator: Bool {
         didSet { persistRuntimeChange() }
     }
     @Published var mouseHoverPollHz: Int {
@@ -103,11 +117,11 @@ class UserConfig: ObservableObject {
     @Published var showFocusBorder: Bool {
         didSet { persistRuntimeChange() }
     }
-    // hex string like "007AFF" — nil means system accent color
+    // hex string like "007AFF" — nil means brand cyan
     @Published var focusBorderColorHex: String? {
         didSet { persistRuntimeChange() }
     }
-    // hex string for floating window border — nil means default orange
+    // hex string for floating window border — nil means brand magenta
     @Published var floatingBorderColorHex: String? {
         didSet { persistRuntimeChange() }
     }
@@ -217,6 +231,10 @@ class UserConfig: ObservableObject {
 
     // custom names for workspaces 1–10, keyed "1"…"10". display only:
     // every reader looks it up through `workspaceDisplayName`
+    // one accent for the overlays. nil keeps the brand cyan and magenta pair
+    @Published var overlayAccentHex: String? {
+        didSet { persistRuntimeChange() }
+    }
     @Published var workspaceNames: [String: String] {
         didSet { guard !isReloading else { return }; save() }
     }
@@ -253,22 +271,25 @@ class UserConfig: ObservableObject {
     ///
     /// Every `@Published` property writes to disk in its `didSet`
     /// unless this flag is `true`. Without the flag, a single
-    /// `reloadFromDisk` would rewrite the file 17 times — once per
-    /// property update — and the file watcher would observe each
+    /// `reloadFromDisk` would rewrite the file once per
+    /// property update, and the file watcher would observe each
     /// write and re-fire reload in a tight loop. Set `true` *before*
     /// mass property updates, then `false`. Main-thread only.
     private var isReloading = false
 
     private let store: ConfigStore
 
-    // path-shaped accessor used by SettingsView's "Reveal in Finder" affordance
     var configURL: URL { store.localConfigURL }
 
     var isICloudDriveAvailable: Bool { store.isICloudDriveAvailable }
 
-    init() {
-        self.store = ConfigStore()
-        self.iCloudSyncEnabled = RuntimeVariant.inheritedBool(forKey: "iCloudSyncEnabled")
+    /// `repairsOnLaunch: false` skips the iCloud relink and the monitor-file
+    /// migration, the only writes a launch makes before anything changes.
+    init(store: ConfigStore = ConfigStore(),
+         iCloudSyncEnabled: Bool = RuntimeVariant.inheritedBool(forKey: "iCloudSyncEnabled"),
+         repairsOnLaunch: Bool = true) {
+        self.store = store
+        self.iCloudSyncEnabled = iCloudSyncEnabled
 
         let monitorConfig = store.loadSavedMonitorConfig()
         let savedConfig = store.loadSavedConfig()
@@ -280,11 +301,14 @@ class UserConfig: ObservableObject {
         self.externalControlEnabled = monitorConfig?.externalControlEnabled ?? false
 
         if let saved = savedConfig {
-            self.keybinds = Self.mergeNewDefaults(saved: saved.keybinds)
+            self.keybinds = Self.mergeNewDefaults(saved: saved.keybinds,
+                                                 fromVersion: ConfigMigration.schemaVersion(of: saved))
             self.gapSize = saved.gapSize
             self.outerPadding = saved.outerPadding
             self.enabled = saved.enabled
             self.focusFollowsMouse = saved.focusFollowsMouse ?? UserConfigDefaults.focusFollowsMouse
+            self.keepCursorOnWorkspaceSwitch = saved.keepCursorOnWorkspaceSwitch ?? UserConfigDefaults.keepCursorOnWorkspaceSwitch
+            self.animateFocusIndicator = saved.animateFocusIndicator ?? UserConfigDefaults.animateFocusIndicator
             self.mouseHoverPollHz = saved.mouseHoverPollHz ?? UserConfigDefaults.mouseHoverPollHz
             self.hyprKey = saved.hyprKey ?? UserConfigDefaults.hyprKey
             self.excludedBundleIDs = Set(saved.excludedBundleIDs ?? Self.defaultExcludedBundleIDs)
@@ -312,6 +336,7 @@ class UserConfig: ObservableObject {
             self.stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
             self.restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = saved.windowRules ?? []
+            self.overlayAccentHex = saved.overlayAccentHex
             self.workspaceNames = saved.workspaceNames ?? [:]
         } else {
             self.keybinds = Keybind.defaults
@@ -319,6 +344,8 @@ class UserConfig: ObservableObject {
             self.outerPadding = UserConfigDefaults.outerPadding
             self.enabled = UserConfigDefaults.enabled
             self.focusFollowsMouse = UserConfigDefaults.focusFollowsMouse
+            self.keepCursorOnWorkspaceSwitch = UserConfigDefaults.keepCursorOnWorkspaceSwitch
+            self.animateFocusIndicator = UserConfigDefaults.animateFocusIndicator
             self.mouseHoverPollHz = UserConfigDefaults.mouseHoverPollHz
             self.hyprKey = UserConfigDefaults.hyprKey
             self.excludedBundleIDs = Set(Self.defaultExcludedBundleIDs)
@@ -344,6 +371,7 @@ class UserConfig: ObservableObject {
             self.stickyWorkspaces = []
             self.restoreLayoutOnLaunch = UserConfigDefaults.restoreLayoutOnLaunch
             self.windowRules = []
+            self.overlayAccentHex = nil
             self.workspaceNames = [:]
         }
 
@@ -375,19 +403,27 @@ class UserConfig: ObservableObject {
         self.outerPaddingPerMonitor = padding.padding
         self.workspaceMonitors = monitorConfig?.workspaceMonitors ?? [:]
 
-        if iCloudSyncEnabled {
-            store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
+        var relinked = false
+        if iCloudSyncEnabled, repairsOnLaunch {
+            relinked = store.ensureICloudSymlinkIntegrity(snapshot: { [weak self] in self?.makeSavedConfig() ?? .empty })
         }
+        store.holdWritesIfLinkUnusable()
 
-        if padding.migrated {
+        if padding.migrated, repairsOnLaunch {
             // both files: the overrides land locally and config.json drops
             // the legacy key, so the migration runs once
             hyprLog(.notice, .config, "outer padding: moved per-side padding onto "
                     + "\(padding.padding.keys.sorted()) as per-monitor overrides")
             store.writeSavedConfig(makeSavedConfig())
             store.writeSavedMonitorConfig(makeSavedMonitorConfig())
-        } else if resolved.needsLocalWrite {
+        } else if resolved.needsLocalWrite, repairsOnLaunch {
             store.writeSavedMonitorConfig(makeSavedMonitorConfig())
+        }
+
+        // the values above came from the local file the link just replaced.
+        // saving them would write old settings over iCloud
+        if relinked {
+            reloadFromDisk()
         }
 
         store.onFileChanged = { [weak self] in self?.reloadFromDisk() }
@@ -399,9 +435,11 @@ class UserConfig: ObservableObject {
     // never inject onto a chord the user already bound — the injected bind
     // would silently shadow (or be shadowed by) the user's, and neither is
     // discoverable. the user can bind the new action manually in Settings.
-    static func mergeNewDefaults(saved: [Keybind]) -> [Keybind] {
+    static func mergeNewDefaults(saved: [Keybind],
+                                 fromVersion version: Int = ConfigMigration.currentVersion) -> [Keybind] {
         let toggleMigrated = ConfigMigration.migrateToggleFloating(saved: saved)
-        let saved = ConfigMigration.migrateFocusFloating(saved: toggleMigrated)
+        let floatingMigrated = ConfigMigration.migrateFocusFloating(saved: toggleMigrated)
+        let saved = ConfigMigration.migrateHyprFToMaximize(saved: floatingMigrated, fromVersion: version)
         let savedActions = Set(saved.map { "\($0.action)" })
         let takenChords = Set(saved.map { "\($0.modifiers.rawValue)-\($0.keyCode)" })
         var merged = saved
@@ -435,9 +473,17 @@ class UserConfig: ObservableObject {
     /// `flushPendingSave` runs the write before the process exits.
     private var pendingSave: DispatchWorkItem?
     private static let saveCoalesceSec: TimeInterval = 0.3
+    /// Only the app's shared instance coalesces. Any other instance saves
+    /// at once, as upstream does, so upstream's tests read what they wrote.
+    var coalescesSaves = false
 
     func save() {
         pendingSave?.cancel()
+        guard coalescesSaves else {
+            pendingSave = nil
+            writeNow()
+            return
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingSave = nil
@@ -494,7 +540,7 @@ class UserConfig: ObservableObject {
     // local-only monitor file via ConfigStore.writeSavedMonitorConfig.
     private func makeSavedConfig() -> SavedConfig {
         SavedConfig(
-            version: nil,
+            version: ConfigMigration.currentVersion,
             keybinds: keybinds, gapSize: gapSize,
             outerPadding: outerPadding, enabled: enabled,
             focusFollowsMouse: focusFollowsMouse,
@@ -525,15 +571,24 @@ class UserConfig: ObservableObject {
             restoreLayoutOnLaunch: restoreLayoutOnLaunch,
             windowRules: windowRules.isEmpty ? nil : windowRules,
             workspaceNames: workspaceNames.isEmpty ? nil : workspaceNames,
+            overlayAccentHex: overlayAccentHex,
+            keepCursorOnWorkspaceSwitch: keepCursorOnWorkspaceSwitch,
+            animateFocusIndicator: animateFocusIndicator,
             appRules: appRules.isEmpty ? nil : appRules)
     }
 
+    // one update: one save and one runtime signal, like resetAppearanceToDefaults.
+    // the button has no confirmation, so what it replaces gets a copy
     func resetToDefaults() {
+        store.keepCopiesBeforeReset()
+        isReloading = true
         keybinds = Keybind.defaults
         gapSize = UserConfigDefaults.gapSize
         outerPadding = UserConfigDefaults.outerPadding
         enabled = UserConfigDefaults.enabled
         focusFollowsMouse = UserConfigDefaults.focusFollowsMouse
+        keepCursorOnWorkspaceSwitch = UserConfigDefaults.keepCursorOnWorkspaceSwitch
+        animateFocusIndicator = UserConfigDefaults.animateFocusIndicator
         mouseHoverPollHz = UserConfigDefaults.mouseHoverPollHz
         hyprKey = UserConfigDefaults.hyprKey
         excludedBundleIDs = Set(Self.defaultExcludedBundleIDs)
@@ -553,6 +608,7 @@ class UserConfig: ObservableObject {
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
+        overlayAccentHex = nil
         focusBracketStyle = UserConfigDefaults.focusBracketStyle
         focusBracketColorHex = nil
         focusBracketRadiusOverride = nil
@@ -574,6 +630,9 @@ class UserConfig: ObservableObject {
         statusExportEnabled = false
         statusHookCommand = nil
         externalControlEnabled = false
+        isReloading = false
+        save()
+        didApplyRuntimeChange.send()
     }
 
     /// Restore the controls in Focus Chrome without changing layout,
@@ -591,6 +650,7 @@ class UserConfig: ObservableObject {
         showFocusBorder = UserConfigDefaults.showFocusBorder
         focusBorderColorHex = nil
         floatingBorderColorHex = nil
+        overlayAccentHex = nil
         chromeFadeDurationSec = UserConfigDefaults.chromeFadeDurationSec
         isReloading = false
         save()
@@ -648,11 +708,14 @@ class UserConfig: ObservableObject {
         guard let saved = store.loadSavedConfig() else { return }
 
         isReloading = true
-        keybinds = Self.mergeNewDefaults(saved: saved.keybinds)
+        keybinds = Self.mergeNewDefaults(saved: saved.keybinds,
+                                                 fromVersion: ConfigMigration.schemaVersion(of: saved))
         gapSize = saved.gapSize
         outerPadding = saved.outerPadding
         enabled = saved.enabled
         focusFollowsMouse = saved.focusFollowsMouse ?? UserConfigDefaults.focusFollowsMouse
+        keepCursorOnWorkspaceSwitch = saved.keepCursorOnWorkspaceSwitch ?? UserConfigDefaults.keepCursorOnWorkspaceSwitch
+        animateFocusIndicator = saved.animateFocusIndicator ?? UserConfigDefaults.animateFocusIndicator
         mouseHoverPollHz = saved.mouseHoverPollHz ?? UserConfigDefaults.mouseHoverPollHz
         hyprKey = saved.hyprKey ?? UserConfigDefaults.hyprKey
         excludedBundleIDs = Set(saved.excludedBundleIDs ?? Self.defaultExcludedBundleIDs)
@@ -678,6 +741,7 @@ class UserConfig: ObservableObject {
         stickyWorkspaces = Set(saved.stickyWorkspaces ?? [])
         restoreLayoutOnLaunch = saved.restoreLayoutOnLaunch ?? UserConfigDefaults.restoreLayoutOnLaunch
         windowRules = saved.windowRules ?? []
+        overlayAccentHex = saved.overlayAccentHex
         workspaceNames = saved.workspaceNames ?? [:]
 
         // monitor settings come from the local file, not the synced config
@@ -704,11 +768,9 @@ class UserConfig: ObservableObject {
     }
 }
 
-// fallback used by ConfigStore's iCloud snapshot closure when the UserConfig
-// reference has been deallocated — empty defaults are acceptable because the
-// only call site is "user just toggled iCloud on a machine that's already
-// shutting down," and we'd rather write a well-formed empty config than
-// crash on a force-unwrap.
+// fallback for the iCloud snapshot closures if UserConfig is gone. unreachable
+// in practice, since UserConfig.shared lives for the whole process. test
+// fixtures read it too.
 extension SavedConfig {
     static var empty: SavedConfig {
         SavedConfig(
@@ -753,10 +815,8 @@ extension UserConfig {
 
 extension NSColor {
     // returns nil + logs at .warning on malformed input. callers fall back
-    // to a system color (controlAccentColor / systemOrange) so a corrupt or
-    // empty hex string can't take down the focus-border / floating-border
-    // pipeline. retained as `fromHex` for compat with existing call sites;
-    // the logging is the phase-6 hardening per §11.1.
+    // to the brand colors, so a corrupt or empty hex string can't take down
+    // the focus-border / floating-border pipeline.
     static func fromHex(_ hex: String) -> NSColor? {
         let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
         guard h.count == 6, let val = UInt64(h, radix: 16) else {

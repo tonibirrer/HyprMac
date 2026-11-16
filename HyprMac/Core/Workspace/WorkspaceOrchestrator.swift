@@ -1,7 +1,6 @@
-// Coordinates workspace switch / move-window / move-workspace workflows on
-// top of `WorkspaceManager` and `TilingEngine`. No new policy lives here —
-// the orchestrator just sequences the right calls and supplies the
-// focus/cursor/border glue each workflow needs.
+// Coordinates workspace switch / move-window / batch move / next-empty
+// workflows on top of `WorkspaceManager` and `TilingEngine`. It sequences the
+// moves, owns their refusal rules, and supplies the focus/cursor/border glue.
 
 import Cocoa
 
@@ -10,9 +9,9 @@ import Cocoa
 /// Delegates the data ownership to the services it composes:
 /// `WorkspaceManager` still owns workspace-to-screen mapping and home
 /// screens; `TilingEngine` still owns BSP trees. The orchestrator
-/// sequences switch, move-window-to-workspace, and move-workspace-to-
-/// monitor flows, applies suppression keys (`activation-switch`,
-/// `mouse-focus`) for the duration of each action, and routes focus and
+/// sequences switch, move-window-to-workspace, move-window-to-monitor and
+/// next-empty flows, applies suppression keys (`activation-switch`,
+/// `mouse-focus`, `workspace-transition`) for the duration of each action, and routes focus and
 /// cursor-warp results through closure handles back into
 /// `WindowManager`.
 ///
@@ -41,6 +40,8 @@ final class WorkspaceOrchestrator {
     var focusTransferredWindow: (HyprWindow) -> Void = { $0.focusWithoutRaise() }
     var warpToWindow: (HyprWindow) -> Void = { _ in }
     var warpCursor: (CGPoint) -> Void = { _ in }
+    /// Settings: leave the cursor alone on a workspace switch.
+    var keepsCursorOnSwitch: () -> Bool = { false }
     var transferRejected: ((HyprWindow, String) -> Void)?
     var updateFocusBorder: (HyprWindow) -> Void = { _ in }
     var updatePositionCache: () -> Void = { }
@@ -55,7 +56,7 @@ final class WorkspaceOrchestrator {
     /// revalidation attempt needs the destination's tenants, a switch picks
     /// the window to focus from it, and a test has no desktop to read them off.
     var allWindows: () -> [HyprWindow] = { [] }
-    var animatedRetile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
+    var retile: (_ prepare: (() -> Void)?, _ completion: (() -> Void)?) -> Void = { _, _ in }
     /// Fired as soon as the destination workspace and its screen are known,
     /// before any AX read or write. The switch HUD hangs off this so it can
     /// paint while the main thread is still busy hiding and retiling — off
@@ -163,7 +164,7 @@ final class WorkspaceOrchestrator {
 
         let sourceIDs = workspaceManager.windowIDs(onWorkspace: sourceWorkspace)
         // A dedicated workspace already containing only the focused window is
-        // the desired end state. Repeated Hypr+F is therefore a no-op, even if
+        // the desired end state. Repeating this action is therefore a no-op, even if
         // that sole window is currently floating.
         guard sourceIDs.count > 1 else { return }
         if let reason = FloatingAdmissionPolicy.reason(
@@ -214,9 +215,9 @@ final class WorkspaceOrchestrator {
             return
         }
         let wasFloating = stateCache.floatingWindowIDs.contains(focused.windowID)
-        suppressions.suppress("workspace-transition", for: 1.5)
-        suppressions.suppress("activation-switch", for: 0.5)
-        suppressions.suppress("mouse-focus", for: 0.15)
+        suppressions.suppress(.workspaceTransition, for: SuppressionDelay.transition)
+        suppressions.suppress(.activationSwitch, for: SuppressionDelay.activationSwitch)
+        suppressions.suppress(.mouseFocus, for: SuppressionDelay.mouseFocus)
         focused.isFloating = false
         let preparedResult = tilingEngine.prepareSoleWindowTransfer(
             focused, sourceWindows: sourceWindows, fromWorkspace: sourceWorkspace,
@@ -337,11 +338,11 @@ final class WorkspaceOrchestrator {
         NSSound.beep()
         if let frame = window.frame {
             focusBorder.flashError(around: frame, windowID: window.windowID,
-                                   window: window, message: message)
+                                   message: message)
         }
     }
 
-    /// Switch to workspace `number` on the cursor's monitor.
+    /// Switch to workspace `number` on its home monitor.
     ///
     /// Two paths:
     /// - Already visible (on this or another screen): focus the best
@@ -361,9 +362,9 @@ final class WorkspaceOrchestrator {
         // hold polls off for the duration of the transition. Tahoe AX
         // writes lag, so a poll mid-transition reads stale frames and
         // drift detection can falsely reassign windows.
-        suppressions.suppress("workspace-transition", for: 1.5)
-        suppressions.suppress("activation-switch", for: 0.5)
-        suppressions.suppress("mouse-focus", for: 0.15)
+        suppressions.suppress(.workspaceTransition, for: SuppressionDelay.transition)
+        suppressions.suppress(.activationSwitch, for: SuppressionDelay.activationSwitch)
+        suppressions.suppress(.mouseFocus, for: SuppressionDelay.mouseFocus)
 
         let currentScreen = screenUnderCursor()
 
@@ -375,12 +376,14 @@ final class WorkspaceOrchestrator {
         // enabled screens at all).
         //
         // this fires on the already-visible path too. pressing Hypr+3 while 3
-        // is up is a no-op for windows but still flashes the HUD, the way it
-        // always has — the flash is the answer to "which workspace am I on".
+        // is up is a no-op for windows but still flashes the HUD — the flash is the answer to
+        // "which workspace am I on".
         onWillSwitch(number, workspaceManager.homeScreenForWorkspace(number) ?? currentScreen)
 
         var allWindows = self.allWindows()
         let result = workspaceManager.switchWorkspace(number, cursorScreen: currentScreen)
+        // focusing another tile would raise it over the maximized one and end it
+        let maximizedHere = tilingEngine.maximizedWindowID(onWorkspace: number)
 
         if result.alreadyVisible {
             // Hypr+N on the workspace that is up retries a tile its switch
@@ -392,9 +395,11 @@ final class WorkspaceOrchestrator {
             // window the user last had focused there wins over the first
             // tiled window in enumeration order.
             let visibleWindows = allWindows.filter { result.toShow.contains($0.windowID) }
-            // an explicit target (overview pick, dedicated-workspace move) wins;
-            // otherwise the window the user last had focused here
-            let remembered = preferredWindowID ?? workspaceManager.lastFocusedWindow(onWorkspace: number)
+            // an explicit target (overview pick, dedicated-workspace move) wins,
+            // then a maximized window (focusing another tile would end it),
+            // then the window the user last had focused here
+            let remembered = preferredWindowID ?? maximizedHere
+                ?? workspaceManager.lastFocusedWindow(onWorkspace: number)
             let best = visibleWindows.first(where: { $0.windowID == remembered })
                 ?? visibleWindows.first(where: { !stateCache.floatingWindowIDs.contains($0.windowID) })
                 ?? visibleWindows.first
@@ -405,12 +410,12 @@ final class WorkspaceOrchestrator {
             } else if let best {
                 best.focus()
                 warp(toSwitchPick: best, preferredWindowID: preferredWindowID,
-                     placedFrame: preferredFrame, workspace: number, screen: result.screen)
+                     placedFrame: preferredFrame, workspace: number, screen: result.screen,
+                     cursorScreen: currentScreen)
                 focusController.recordFocus(best.windowID, reason: "switchWorkspace-already-visible")
                 updateFocusBorder(best)
             } else {
-                let rect = displayManager.cgRect(for: result.screen)
-                CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
+                warpToEmptyScreen(result.screen, cursorScreen: currentScreen)
                 focusBorder.hide(); dimmingOverlay.hideAll()
             }
             leaveForeignFullscreen(number, focused: fullscreenUp ? nil : best)
@@ -517,12 +522,12 @@ final class WorkspaceOrchestrator {
         } else if let best {
             best.focus()
             warp(toSwitchPick: best, preferredWindowID: preferredWindowID,
-                 placedFrame: preferredFrame, workspace: number, screen: result.screen)
+                 placedFrame: preferredFrame, workspace: number, screen: result.screen,
+                 cursorScreen: currentScreen)
             focusController.recordFocus(best.windowID, reason: "switchWorkspace-after-show")
             updateFocusBorder(best)
         } else {
-            let rect = displayManager.cgRect(for: result.screen)
-            CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: rect.midY))
+            warpToEmptyScreen(result.screen, cursorScreen: currentScreen)
             focusBorder.hide(); dimmingOverlay.hideAll()
         }
 
@@ -545,11 +550,11 @@ final class WorkspaceOrchestrator {
             guard let self, self.workspaceManager.isWorkspaceVisible(workspace) else { return }
             if let focused {
                 guard self.focusController.lastFocusedID == focusAfterSwitch else { return }
-                self.suppressions.suppress("activation-switch", for: 0.5)
+                self.suppressions.suppress(.activationSwitch, for: 0.5)
                 focused.focus()
                 self.updateFocusBorder(focused)
             } else {
-                self.suppressions.suppress("activation-switch", for: 0.5)
+                self.suppressions.suppress(.activationSwitch, for: 0.5)
                 // an empty workspace: the anchor (a parked window, often)
                 // must not keep the keyboard. HyprMac has no window to type into.
                 if !self.presentFullscreenWindows(workspace) {
@@ -649,8 +654,8 @@ final class WorkspaceOrchestrator {
             return
         }
         guard let window = allWindows().first(where: { $0.windowID == targetID }) else { return }
-        suppressions.suppress("activation-switch", for: 0.5)
-        suppressions.suppress("mouse-focus", for: 0.15)
+        suppressions.suppress(.activationSwitch, for: 0.5)
+        suppressions.suppress(.mouseFocus, for: 0.15)
         window.focus()
         cursorManager.warpToCenter(of: window)
         focusController.recordFocus(window.windowID, reason: "switchWorkspace-dropped-tile")
@@ -729,14 +734,38 @@ final class WorkspaceOrchestrator {
     /// The window a caller asked the switch to focus (a move that follows
     /// its window, a pick in the overview) is warped to where it is going.
     /// Any other pick keeps the plain warp to its live center.
+    ///
+    /// With the keep-cursor setting on, a plain pick leaves the cursor where
+    /// it is, unless the workspace is on another display. A picked window
+    /// still gets the cursor: that is a move following its window, or a pick
+    /// in the overview, not a plain switch.
     private func warp(toSwitchPick window: HyprWindow, preferredWindowID: CGWindowID?,
-                      placedFrame: CGRect?, workspace: Int, screen: NSScreen) {
+                      placedFrame: CGRect?, workspace: Int, screen: NSScreen,
+                      cursorScreen: NSScreen) {
         if window.windowID == preferredWindowID {
             warpCursor(followPoint(for: window, workspace: workspace, screen: screen,
                                    placedFrame: placedFrame))
+        } else if keepsCursorOnSwitch() {
+            warpToScreenCenterIfElsewhere(screen, cursorScreen: cursorScreen)
         } else {
             cursorManager.warpToCenter(of: window)
         }
+    }
+
+    /// An empty workspace has no window to go to.
+    private func warpToEmptyScreen(_ screen: NSScreen, cursorScreen: NSScreen) {
+        if keepsCursorOnSwitch() {
+            warpToScreenCenterIfElsewhere(screen, cursorScreen: cursorScreen)
+        } else {
+            let rect = displayManager.cgRect(for: screen)
+            warpCursor(CGPoint(x: rect.midX, y: rect.midY))
+        }
+    }
+
+    private func warpToScreenCenterIfElsewhere(_ screen: NSScreen, cursorScreen: NSScreen) {
+        guard workspaceManager.screenID(for: screen) != workspaceManager.screenID(for: cursorScreen) else { return }
+        let rect = displayManager.cgRect(for: screen)
+        warpCursor(CGPoint(x: rect.midX, y: rect.midY))
     }
 
     // MARK: - move focused window to workspace
@@ -748,7 +777,7 @@ final class WorkspaceOrchestrator {
     /// bounds refuse it, or the refusal is one no attempt can change. A
     /// hidden destination then also gets the raw tile-count vs.
     /// dwindle-depth check. Rejections beep and flash a red border;
-    /// successful moves animate the surrounding tile and post a
+    /// successful moves retile the surrounding tiles and post a
     /// workspace-changed notification. A refusal that only learned bounds
     /// produced buys one revalidation — run here for a visible destination,
     /// left as a marker for the reveal when the destination is hidden.
@@ -774,7 +803,7 @@ final class WorkspaceOrchestrator {
         // writes lag, so a poll mid-transition reads the moved window
         // at its OLD pre-hide tile rect and drift detection
         // erroneously reassigns it back to its source workspace.
-        suppressions.suppress("workspace-transition", for: 1.5)
+        suppressions.suppress(.workspaceTransition, for: SuppressionDelay.transition)
         tilingEngine.primeMinimumSizes([focused])
         guard let screen = displayManager.screen(for: focused) ?? displayManager.screens.first else { return }
 
@@ -816,7 +845,7 @@ final class WorkspaceOrchestrator {
                         + " on \(targetScreen.localizedName) — rejected move")
                 NSSound.beep()
                 if let frame = focused.frame {
-                    focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
+                    focusBorder.flashError(around: frame, windowID: focused.windowID,
                                            message: "Won't fit on workspace \(number)")
                 }
                 return
@@ -839,7 +868,7 @@ final class WorkspaceOrchestrator {
                             + " — rejected move")
                     NSSound.beep()
                     if let frame = focused.frame {
-                        focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
+                        focusBorder.flashError(around: frame, windowID: focused.windowID,
                                                message: UserConfig.workspaceDisplayName(
                                                 number, names: UserConfig.shared.workspaceNames) + " is full")
                     }
@@ -861,7 +890,7 @@ final class WorkspaceOrchestrator {
                         + " ws\(currentWorkspace.map(String.init) ?? "none")")
                 NSSound.beep()
                 if let frame = focused.frame {
-                    focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
+                    focusBorder.flashError(around: frame, windowID: focused.windowID,
                                            message: "Won't fit on workspace \(number)")
                 }
                 return
@@ -875,8 +904,7 @@ final class WorkspaceOrchestrator {
 
         // unfloat if coming from disabled monitor
         if onDisabledMonitor && isFloating && willTile {
-            stateCache.floatingWindowIDs.remove(focused.windowID)
-            focused.isFloating = false
+            stateCache.setFloating(false, window: focused)
             hyprLog(.debug, .workspace, "unfloating '\(focused.title ?? "?")' from disabled monitor → workspace \(number)")
         }
 
@@ -896,8 +924,8 @@ final class WorkspaceOrchestrator {
         // where a carried floater was put, for the follow's warp
         var carriedFrame: CGRect?
 
-        // animate remaining windows filling the gap
-        animatedRetile({ [self] in
+        // retile so the remaining windows fill the gap
+        retile({ [self] in
             // remove from current workspace's tiling tree. membership only:
             // the one retile after this block lays the source out once the
             // window has left. a retile here grew the neighbour under the
@@ -924,10 +952,7 @@ final class WorkspaceOrchestrator {
                 }
             } else {
                 // target hidden — park at the global hide corner until the
-                // workspace is shown. park on the workspace's static home
-                // monitor, not the source screen (AeroSpace pattern: a
-                // window assigned to ws N belongs physically near ws N's
-                // monitor so the next show is a single-screen transition).
+                // workspace is shown.
                 if isFloating && !onDisabledMonitor {
                     workspaceManager.saveFloatingFrame(focused)
                 } else if isFloating && isNeverTile, let frame = focused.frame {
@@ -982,7 +1007,7 @@ final class WorkspaceOrchestrator {
     private func revalidateVisibleDestination(_ window: HyprWindow, workspace: Int,
                                               screen: NSScreen, from sourceScreen: NSScreen) -> Bool {
         let all = allWindows()
-        for w in all where stateCache.floatingWindowIDs.contains(w.windowID) { w.isFloating = true }
+        stateCache.stampFloating(all)
         let assigned = workspaceManager.windowIDs(onWorkspace: workspace)
         var windows = all.filter {
             assigned.contains($0.windowID) && $0.windowID != window.windowID && !$0.isFloating
@@ -1193,9 +1218,9 @@ final class WorkspaceOrchestrator {
     func moveWindows(_ moves: [(window: HyprWindow, workspace: Int)]) -> BatchMoveResult {
         var result = BatchMoveResult()
         guard !moves.isEmpty else { return result }
-        suppressions.suppress("workspace-transition", for: 1.5)
-        suppressions.suppress("activation-switch", for: 0.5)
-        suppressions.suppress("mouse-focus", for: 0.15)
+        suppressions.suppress(.workspaceTransition, for: SuppressionDelay.transition)
+        suppressions.suppress(.activationSwitch, for: SuppressionDelay.activationSwitch)
+        suppressions.suppress(.mouseFocus, for: SuppressionDelay.mouseFocus)
         tilingEngine.primeMinimumSizes(moves.map(\.window))
 
         var plans: [PlannedMove] = []
@@ -1230,10 +1255,9 @@ final class WorkspaceOrchestrator {
 
         // the windows a retile would lay out, plus the batch's own
         var known: [CGWindowID: HyprWindow] = [:]
-        for window in allWindows() {
-            if stateCache.floatingWindowIDs.contains(window.windowID) { window.isFloating = true }
-            known[window.windowID] = window
-        }
+        let all = allWindows()
+        stateCache.stampFloating(all)
+        for window in all { known[window.windowID] = window }
         for plan in plans { known[plan.id] = plan.window }
 
         var refusedGroups: [Int: BatchMoveResult.Refusal] = [:]
@@ -1477,9 +1501,6 @@ final class WorkspaceOrchestrator {
     /// stacked ones. Beeps and flashes when nothing lies that way.
     /// Delegates to `moveToWorkspace` so capacity checks, floater
     /// handling, and focus follow all behave identically to `Hypr+Shift+N`.
-    ///
-    /// Replaces the old workspace-to-monitor move, which static
-    /// anchoring turned into a permanent no-op.
     func moveWindowToMonitor(_ direction: Direction) {
         guard let focused = currentFocusedWindow(),
               let screen = displayManager.screen(for: focused) ?? displayManager.screens.first else {
@@ -1498,7 +1519,7 @@ final class WorkspaceOrchestrator {
             hyprLog(.debug, .workspace, "moveWindowToMonitor(\(direction.rawValue)): no monitor in that direction")
             NSSound.beep()
             if let frame = focused.frame {
-                focusBorder.flashError(around: frame, windowID: focused.windowID, window: focused,
+                focusBorder.flashError(around: frame, windowID: focused.windowID,
                                        message: "No monitor \(Self.monitorDirectionLabel(direction))")
             }
             return

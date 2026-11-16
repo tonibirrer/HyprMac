@@ -41,6 +41,9 @@ enum Action: Equatable {
     /// Move the focused window to the next empty workspace anchored to
     /// its current display, switch there, and tile it as the sole window.
     case moveToNextEmptyWorkspace
+    /// Fill the display with the focused window, over the others on its
+    /// workspace, or put it back. The layout underneath does not change.
+    case toggleMaximize
     case closeWindow
     /// Cycle through occupied workspaces on the current monitor.
     /// `+1` advances to the next occupied workspace; `-1` rewinds.
@@ -112,6 +115,7 @@ extension Action: Codable {
         case focusMenuBar
         case focusFloating
         case moveToNextEmptyWorkspace
+        case toggleMaximize
         case closeWindow
         case cycleWorkspace
         case toggleScratchpad
@@ -185,6 +189,7 @@ extension Action: Codable {
         case .focusMenuBar:   self = .focusMenuBar
         case .focusFloating:  self = .focusFloating
         case .moveToNextEmptyWorkspace: self = .moveToNextEmptyWorkspace
+        case .toggleMaximize: self = .toggleMaximize
         case .closeWindow:    self = .closeWindow
         case .toggleScratchpad: self = .toggleScratchpad
         case .moveToScratchpad: self = .moveToScratchpad
@@ -206,8 +211,8 @@ extension Action: Codable {
     }
 
     /// Decode a `Direction`, logging a warning and falling back to
-    /// `.right` on a malformed string. A typo in a hand-edited config
-    /// must not crash the app.
+    /// `.right` on a malformed string, so the bind is kept rather than
+    /// dropped. Pinned by `KeybindDecoderToleranceTests`.
     private static func decodeDirection(_ c: KeyedDecodingContainer<PayloadKey>,
                                         field: String) throws -> Direction {
         let raw = try c.decode(String.self, forKey: ._0)
@@ -258,6 +263,8 @@ extension Action: Codable {
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .focusFloating)
         case .moveToNextEmptyWorkspace:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .moveToNextEmptyWorkspace)
+        case .toggleMaximize:
+            _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .toggleMaximize)
         case .closeWindow:
             _ = c.nestedContainer(keyedBy: PayloadKey.self, forKey: .closeWindow)
         case .toggleScratchpad:

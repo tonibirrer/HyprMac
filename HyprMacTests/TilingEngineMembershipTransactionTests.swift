@@ -134,6 +134,162 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
                           "a cell of rounding is not a floor")
     }
 
+    /// a newcomer that moves and takes its height but stays at its own width
+    /// is remembered as fixed: the next pass refuses it before writing, a
+    /// new window of the same app at that width too, and a hand tile clears it
+    func testAWindowThatKeepsItsOwnWidthIsRefusedBeforeTheNextWrite() {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1101), b = makeWindow(id: 1102), c = makeWindow(id: 1103)
+        let rect = engine.displayManager.cgRect(for: screen)
+        trace.frames[a.windowID] = rect.insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        for w in [b, c] {
+            w.bundleID = "com.example.settings"
+            trace.frames[w.windowID] = CGRect(x: rect.minX + 300, y: rect.minY + 200, width: 400, height: 300)
+            trace.fixedWidth[w.windowID] = 400
+        }
+
+        let first = engine.tileWindows([a, b], onWorkspace: 1, screen: screen)
+
+        XCTAssertFalse(first.published)
+        XCTAssertEqual(first.strandedIDs, [b.windowID])
+        XCTAssertEqual(engine.fixedSize(for: b),
+                       FixedSize(bundleID: "com.example.settings", axis: .width, length: 400))
+
+        trace.written = []
+        let retry = engine.tileWindows([a, b], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(retry.refusedIDs, [b.windowID])
+        XCTAssertFalse(trace.written.contains(b.windowID), "no second resize for a window that keeps its width")
+
+        c.cachedFrame = trace.frames[c.windowID]
+        let sibling = engine.tileWindows([a, c], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(sibling.refusedIDs, [c.windowID], "the app's hint speaks for its next window at that width")
+        XCTAssertFalse(trace.written.contains(c.windowID))
+
+        // the app lets go of the width and the user tiles the window by hand
+        trace.fixedWidth[b.windowID] = nil
+        XCTAssertEqual(engine.forceInsertWindow(b, toWorkspace: 1, on: screen), .inserted)
+        XCTAssertNil(engine.fixedSize(for: b))
+        XCTAssertTrue(engine.knownFixedSizeApps.isEmpty)
+    }
+
+    /// the hint outlives the engine, so a restart doesn't try the app again
+    func testFixedSizeHintsSurviveARestart() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hints-\(UUID().uuidString)/fixed-size-hints.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let store = FixedSizeHintStore(fileURL: file)
+        let screen = MembershipHomeScreen()
+        let rect = DisplayManager(screenSource: { [screen] }).cgRect(for: screen)
+        let a = makeWindow(id: 1131), b = makeWindow(id: 1132), c = makeWindow(id: 1133)
+
+        let first = MembershipTrace()
+        let before = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in first.io(generation) })
+        before.keepFixedSizeHints(in: store)
+        first.frames[a.windowID] = rect.insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(before.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        b.bundleID = "com.example.settings"
+        first.frames[b.windowID] = CGRect(x: rect.minX + 300, y: rect.minY + 200, width: 400, height: 400)
+        first.fixedWidth[b.windowID] = 400
+        _ = before.tileWindows([a, b], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(store.load(), [FixedSize(bundleID: "com.example.settings", axis: .width, length: 400)])
+
+        let second = MembershipTrace()
+        let after = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                 frameSizingIOFactory: { _, generation in second.io(generation) })
+        after.keepFixedSizeHints(in: store)
+        second.frames[a.windowID] = rect.insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(after.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        c.bundleID = "com.example.settings"
+        c.cachedFrame = CGRect(x: rect.minX + 300, y: rect.minY + 200, width: 400, height: 400)
+        second.frames[c.windowID] = c.cachedFrame
+        second.written = []
+        let opened = after.tileWindows([a, c], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(opened.refusedIDs, [c.windowID])
+        XCTAssertFalse(second.written.contains(c.windowID))
+
+        // tiling by hand still clears it, on disk too
+        second.fixedWidth[c.windowID] = nil
+        XCTAssertEqual(after.forceInsertWindow(c, toWorkspace: 1, on: screen), .inserted)
+        XCTAssertEqual(store.load(), [])
+    }
+
+    func testAnUnreadableHintFileStartsEmpty() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("hints-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("not json".utf8).write(to: file)
+        XCTAssertEqual(FixedSizeHintStore(fileURL: file).load(), [])
+    }
+
+    /// a window already as wide as its slot can't show it took the write. it is
+    /// tried and retried once, then it and the app's next window are left alone
+    func testAKeptHeightIsRecordedOnTheRepeatAndCoversTheNextWindow() {
+        let screen = MembershipHomeScreen()
+        let rect = DisplayManager(screenSource: { [screen] }).cgRect(for: screen)
+        // find the width the second tile gets
+        let sizing = MembershipTrace()
+        let sizingEngine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                        frameSizingIOFactory: { _, generation in sizing.io(generation) })
+        let a = makeWindow(id: 1121), b = makeWindow(id: 1122), c = makeWindow(id: 1123)
+        sizing.frames[a.windowID] = rect.insetBy(dx: 100, dy: 100)
+        sizing.frames[b.windowID] = CGRect(x: rect.minX + 50, y: rect.minY + 50, width: 300, height: 300)
+        _ = sizingEngine.tileWindows([a, b], onWorkspace: 1, screen: screen)
+        let slotWidth = sizing.frames[b.windowID]!.width
+
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        trace.frames[a.windowID] = rect.insetBy(dx: 100, dy: 100)
+        XCTAssertTrue(engine.tileWindows([a], onWorkspace: 1, screen: screen).published)
+        let opened = CGRect(x: rect.minX + 50, y: rect.minY + 50, width: slotWidth, height: 530)
+        for window in [b, c] {
+            window.bundleID = "com.apple.ScreenSharing"
+            trace.frames[window.windowID] = opened
+            trace.fixedHeight[window.windowID] = 530
+        }
+
+        XCTAssertFalse(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        XCTAssertNil(engine.fixedSize(for: b), "once could be a slow app")
+
+        trace.frames[b.windowID] = opened
+        XCTAssertFalse(engine.tileWindows([a, b], onWorkspace: 1, screen: screen).published)
+        XCTAssertEqual(engine.fixedSize(for: b),
+                       FixedSize(bundleID: "com.apple.ScreenSharing", axis: .height, length: 530))
+
+        trace.written = []
+        c.cachedFrame = opened
+        let next = engine.tileWindows([a, c], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(next.refusedIDs, [c.windowID])
+        XCTAssertFalse(trace.written.contains(c.windowID), "no resize for the app's next window")
+    }
+
+    /// a window opened at its maximum looks fixed in a longer slot, but it can
+    /// still fill a shorter one, so the record does not keep it out of that
+    func testAKeptLengthDoesNotRefuseASlotAtOrUnderIt() {
+        let screen = MembershipHomeScreen()
+        let trace = MembershipTrace()
+        let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }),
+                                  frameSizingIOFactory: { _, generation in trace.io(generation) })
+        let a = makeWindow(id: 1111), b = makeWindow(id: 1112)
+        let rect = engine.displayManager.cgRect(for: screen)
+        let kept = (rect.width * 0.7).rounded()
+        trace.frames[b.windowID] = CGRect(x: rect.minX + 20, y: rect.minY + 20, width: kept, height: 300)
+        trace.fixedWidth[b.windowID] = kept
+        _ = engine.tileWindows([b], onWorkspace: 1, screen: screen)
+        XCTAssertEqual(engine.fixedSize(for: b)?.length, kept)
+
+        trace.fixedWidth[b.windowID] = nil
+        trace.frames[a.windowID] = rect.insetBy(dx: 100, dy: 100)
+        trace.written = []
+        let shared = engine.tileWindows([a, b], onWorkspace: 1, screen: screen)
+        XCTAssertFalse(shared.refusedIDs.contains(b.windowID))
+        XCTAssertTrue(trace.written.contains(b.windowID))
+    }
+
     /// a rollback puts each window back where it was. an original a point
     /// past the edge of the screen, the slack the rollback's own readback
     /// is allowed, is where it was; it used to make the whole key's
@@ -755,12 +911,12 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         XCTAssertEqual(Set(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.allWindows.map(\.windowID) ?? []), Set(f.windows.map(\.windowID)))
     }
 
-    func testRejectedAddWindowKeepsPriorMembership() throws {
+    func testRejectedNewcomerKeepsPriorMembership() throws {
         let f = try fixture()
         f.trace.rejectNextRead = true
         let before = f.tree.structuralFingerprint()
 
-        f.engine.addWindow(f.windows[2], toWorkspace: 1, on: f.screen)
+        f.engine.tileWindows(f.windows, onWorkspace: 1, screen: f.screen)
 
         XCTAssertEqual(f.engine.existingTree(forWorkspace: 1, screen: f.screen)?.structuralFingerprint(), before)
     }
@@ -1292,7 +1448,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }))
         let tenant = makeWindow(id: 32951)
         let held = makeWindow(id: 32952)
-        _ = engine.prepareTileLayout([tenant, held], onWorkspace: 1, screen: screen)
+        _ = engine.seedTree([tenant, held], onWorkspace: 1, screen: screen)
         // side by side at 796 by 1000 each, and neither leaf can be split
         // for a third either way: both floors need 700 on both axes. with
         // the held member's leaf dropped the tenant would have the whole
@@ -1706,7 +1862,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         var probed: Bool?
         f.trace.onWrite = {
             guard probed == nil else { return }
-            // the shape routeUnfittedWindow asks in: the destination's tenants
+            // the shape projectedAdmissionOutlook asks in: the destination's tenants
             // plus the window, on a workspace with no tree of its own
             probed = f.engine.canFitWindows([incumbent, newcomer], onWorkspace: 9, screen: f.screen)
         }
@@ -1899,7 +2055,7 @@ final class TilingEngineMembershipTransactionTests: XCTestCase {
         }
         let trace = MembershipTrace()
         let engine = TilingEngine(displayManager: DisplayManager(screenSource: { [screen] }), frameSizingIOFactory: { _, generation in trace.io(generation) })
-        _ = engine.prepareTileLayout(Array(windows.prefix(2)), onWorkspace: 1, screen: screen)
+        _ = engine.seedTree(Array(windows.prefix(2)), onWorkspace: 1, screen: screen)
         let tree = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
         tree.root.splitRatio = 0.6
         tree.root.userSetRatio = true
@@ -1934,30 +2090,20 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
                           ?? .infinity, 1700)
     }
 
-    func testPreparedSwapCarriesItsScopedRevalidationIntoFinalApply() throws {
+    func testSupersededSwapCannotReuseItsBypass() throws {
         let f = try fixture(provenance: .observed)
+        f.trace.onWrite = { [weak trace = f.trace, engine = f.engine] in
+            trace?.onWrite = nil
+            _ = engine.beginLayoutGeneration()
+        }
 
-        XCTAssertNotNil(f.engine.prepareSwapLayout(f.windows[0], f.windows[3],
-                                                    onWorkspace: 1, screen: f.screen))
-        XCTAssertTrue(f.engine.applyComputedLayout(onWorkspace: 1, screen: f.screen))
-        XCTAssertLessThan(f.engine.knownMinimumSizes[f.windows[0].windowID]?.size.width
-                          ?? .infinity, 1700)
-    }
+        XCTAssertFalse(f.engine.swapWindows(f.windows[0], f.windows[3],
+                                            onWorkspace: 1, screen: f.screen))
 
-    func testSupersededPreparedSwapCannotReuseItsBypassOrWriteStaleFrames() throws {
-        let f = try fixture(provenance: .observed)
-        XCTAssertNotNil(f.engine.prepareSwapLayout(f.windows[0], f.windows[3],
-                                                    onWorkspace: 1, screen: f.screen))
-
-        _ = f.engine.beginLayoutGeneration()
         f.engine.forgetMinimumSize(windowID: f.windows[0].windowID)
         f.windows[0].observedMinSize = CGSize(width: 1700, height: 0)
         f.windows[0].minSizeProvenance = .seeded
         f.engine.primeMinimumSizes(f.windows)
-        f.trace.written = []
-
-        XCTAssertFalse(f.engine.applyComputedLayout(onWorkspace: 1, screen: f.screen))
-        XCTAssertTrue(f.trace.written.isEmpty)
         XCTAssertFalse(f.engine.canSwapWindows(f.windows[0], f.windows[3],
                                                onWorkspace: 1, screen: f.screen),
                        "the superseded operation's learned-bound bypass must be gone")
@@ -2006,7 +2152,7 @@ final class TilingEngineSwapRevalidationTests: XCTestCase {
             displayManager: DisplayManager(screenSource: { [screen] }),
             frameSizingIOFactory: { _, generation in trace.io(generation) })
         let windows = (981...984).map { makeWindow(id: CGWindowID($0)) }
-        _ = engine.prepareTileLayout(windows, onWorkspace: 1, screen: screen)
+        _ = engine.seedTree(windows, onWorkspace: 1, screen: screen)
         let tree = try XCTUnwrap(engine.existingTree(forWorkspace: 1, screen: screen))
         let rect = engine.displayManager.cgRect(for: screen)
         trace.frames = Dictionary(uniqueKeysWithValues: tree.layout(
@@ -2034,6 +2180,10 @@ private final class MembershipTrace {
     /// how far short of the height it is asked for a window settles — the
     /// portrait Terminal case, which answers short whatever the ask
     var heightShortfall: [CGWindowID: CGFloat] = [:]
+    /// a width a window keeps whatever it is asked, the Raycast Settings case
+    var fixedWidth: [CGWindowID: CGFloat] = [:]
+    /// a height a window keeps whatever it is asked, the Screen Sharing case
+    var fixedHeight: [CGWindowID: CGFloat] = [:]
     /// error the EnhancedUI cleanup returns after the setters have all
     /// succeeded, so a clean-looking frame still ends in a failure
     var endError: AXError?
@@ -2080,6 +2230,8 @@ private final class MembershipTrace {
                           let short = heightShortfall[id] ?? 0
                           frames[id]?.size = CGSize(width: max(size.width, floor.width),
                                                     height: max(size.height - short, floor.height))
+                          if let width = fixedWidth[id] { frames[id]?.size.width = width }
+                          if let height = fixedHeight[id] { frames[id]?.size.height = height }
                           return .success
                       },
                       writePosition: { [self] id, position, timeout in

@@ -7,8 +7,8 @@ import Carbon
 
 extension Keybind {
     /// Built-in keybind set seeded into a fresh user config and
-    /// merged into existing configs on upgrade. Source for the
-    /// reference table in CLAUDE.md.
+    /// merged into existing configs on upgrade. Mirrored by hand in
+    /// the README's default keybinds table.
     static let defaults: [Keybind] = {
         var binds: [Keybind] = []
 
@@ -118,9 +118,9 @@ extension Keybind {
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_A), modifiers: .hypr,
                              action: .toggleAccordion))
 
-        // hypr + f: move focused window to the next empty workspace
+        // hypr + f: fill the display with the focused window, or put it back
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_F), modifiers: .hypr,
-                             action: .moveToNextEmptyWorkspace))
+                             action: .toggleMaximize))
 
         // hypr + shift + t: focus/raise floating windows
         binds.append(Keybind(keyCode: UInt16(kVK_ANSI_T), modifiers: [.hypr, .shift],

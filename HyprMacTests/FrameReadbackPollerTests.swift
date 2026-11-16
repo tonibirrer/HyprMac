@@ -2,6 +2,47 @@ import XCTest
 @testable import HyprMac
 
 final class FrameReadbackPollerTests: XCTestCase {
+    func testFirstReadOnlyForATargetTheLeftScreenCanHold() {
+        let landscape = CGRect(x: 0, y: 0, width: 3440, height: 1440)
+        let portrait = CGRect(x: -1080, y: -126, width: 1080, height: 1920)
+        let parked = CGRect(x: 3439, y: 1347, width: 1064, height: 900)
+        let ids = TilingEngine.firstReadWindowIDs(
+            originals: [1: parked, 2: parked, 3: CGRect(x: 9000, y: 9000, width: 500, height: 500)],
+            targets: [(1, CGRect(x: 8, y: 38, width: 1700, height: 1300)),
+                      (2, CGRect(x: -1072, y: -88, width: 1064, height: 1874)),
+                      (3, CGRect(x: 8, y: 38, width: 500, height: 500))],
+            screens: [landscape, portrait])
+        XCTAssertEqual(ids, [1], "2 is taller than the screen it leaves, 3 stands on no screen")
+    }
+
+    func testAFirstReadWindowSizesWithoutTheSecondRead() {
+        let window = makeWindow(id: 36)
+        let target = CGRect(x: 8, y: 38, width: 1700, height: 1300)
+        var frame = CGRect(x: 3439, y: 1347, width: 1064, height: 900)
+        var sleepsBeforeSize = 0
+        var sleeps = 0
+        var time: TimeInterval = 0
+        let io = FrameSizingIO(
+            setMessagingTimeout: { _, _ in .success },
+            writeSize: { _, size, _ in
+                if frame.size != size { sleepsBeforeSize = sleeps }
+                frame.size = size
+                return .success
+            },
+            writePosition: { _, position, _ in frame.origin = position; return .success },
+            readPosition: { _, _ in (.success, frame.origin) },
+            readSize: { _, _ in (.success, frame.size) },
+            now: { time }, sleep: { time += $0; sleeps += 1 }, currentGeneration: { 1 })
+
+        let result = FrameReadbackPoller(generation: { 1 }, ioFactory: { _, _ in io })
+            .applyWorkspaceReveal([(window, target)], positionFirstWindowIDs: [36],
+                                  firstReadWindowIDs: [36],
+                                  usableFrame: target, gap: 8, generation: 1)
+
+        XCTAssertEqual(result.verdict, .accepted)
+        XCTAssertEqual(sleepsBeforeSize, 0)
+    }
+
     func testWorkspaceRevealSettlesDestinationPositionBeforeTallResize() {
         let window = makeWindow(id: 31)
         let target = CGRect(x: -1072, y: -88, width: 1064, height: 1874)
@@ -818,5 +859,54 @@ final class FrameReadbackPollerBudgetTests: XCTestCase {
         XCTAssertEqual(base.withScaleChangeBudget.positionSettleBudget,
                        base.withScaleChangeBudget.deadline / 3, accuracy: 0.0001,
                        "the scale-change budget still grows the cap")
+    }
+
+    /// Raycast Settings: moved, took the height, stayed at the 960 it had
+    func testAWindowThatKeepsItsOwnWidthIsFixedOnWidth() {
+        XCTAssertEqual(FrameReadbackPoller.fixedAxis(
+            original: CGSize(width: 960, height: 934), target: CGSize(width: 1708, height: 1395),
+            actual: CGSize(width: 960, height: 1395), tolerance: 20), .width)
+    }
+
+    /// the Screen Sharing case: aspect-locked, and already as wide as its slot
+    func testAKeptHeightWithTheWidthAlreadyOnTargetIsUnproven() {
+        let original = CGRect(x: 1295, y: 227, width: 848, height: 529)
+        let target = CGRect(x: 2582, y: 38, width: 850, height: 1300)
+        let actual = CGRect(x: 2582, y: 38, width: 850, height: 530)
+        XCTAssertNil(FrameReadbackPoller.fixedAxis(original: original.size, target: target.size,
+                                                   actual: actual.size, tolerance: 20))
+        XCTAssertEqual(FrameReadbackPoller.unprovenFixedAxis(original: original, target: target,
+                                                             actual: actual, tolerance: 20), .height)
+    }
+
+    func testUnprovenNeedsAMoveAndAKeptLength() {
+        let original = CGRect(x: 100, y: 100, width: 850, height: 530)
+        let stayed = CGRect(x: 100, y: 100, width: 850, height: 530)
+        XCTAssertNil(FrameReadbackPoller.unprovenFixedAxis(
+            original: original, target: CGRect(x: 100, y: 100, width: 850, height: 1300),
+            actual: stayed, tolerance: 20), "no move, so no sign the app is answering")
+        XCTAssertNil(FrameReadbackPoller.unprovenFixedAxis(
+            original: original, target: CGRect(x: 500, y: 38, width: 850, height: 1300),
+            actual: CGRect(x: 500, y: 38, width: 850, height: 900), tolerance: 20),
+            "it grew, so it is catching up or stopping short, not keeping its length")
+    }
+
+    func testShortfallsThatAreNotAKeptLengthAreNotFixed() {
+        // the portrait Terminal stops short wherever it is asked, not at its old height
+        XCTAssertNil(FrameReadbackPoller.fixedAxis(
+            original: CGSize(width: 800, height: 600), target: CGSize(width: 800, height: 1500),
+            actual: CGSize(width: 800, height: 1160), tolerance: 20))
+        // nothing moved on the other axis: no proof the app took the write at all
+        XCTAssertNil(FrameReadbackPoller.fixedAxis(
+            original: CGSize(width: 960, height: 1395), target: CGSize(width: 1708, height: 1395),
+            actual: CGSize(width: 960, height: 1395), tolerance: 20))
+        // still catching up on the other axis
+        XCTAssertNil(FrameReadbackPoller.fixedAxis(
+            original: CGSize(width: 960, height: 934), target: CGSize(width: 1708, height: 1395),
+            actual: CGSize(width: 960, height: 1100), tolerance: 20))
+        // a min-size window is larger, not shorter
+        XCTAssertNil(FrameReadbackPoller.fixedAxis(
+            original: CGSize(width: 1200, height: 934), target: CGSize(width: 900, height: 1395),
+            actual: CGSize(width: 1200, height: 1395), tolerance: 20))
     }
 }

@@ -13,7 +13,7 @@ struct TiledDragEvent {
     /// macOS fires `.leftMouseDragged` on a pixel of hand jitter, so the
     /// event alone is not evidence. Travel from the press point decides.
     /// A nil press point (monitors installed mid-press) falls back to the
-    /// event flag — the old behaviour.
+    /// event flag alone.
     static func isDrag(from press: CGPoint?, to release: CGPoint, sawDragEvent: Bool,
                        threshold: CGFloat = TilingConfig.dragThresholdPx) -> Bool {
         guard sawDragEvent else { return false }
@@ -31,7 +31,7 @@ struct TiledDragEvent {
     static func release(event: NSEvent, primaryHeight: CGFloat,
                         sawDragEvent: Bool, swapRequested: Bool = false) -> TiledDragRelease {
         TiledDragRelease(pointer: point(event: event, primaryHeight: primaryHeight),
-                         swapRequested: swapRequested || event.modifierFlags.contains(.option),
+                         swapRequested: swapRequested,
                          sawDragEvent: sawDragEvent)
     }
 }

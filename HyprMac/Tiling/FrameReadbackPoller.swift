@@ -23,6 +23,20 @@ struct FrameReadbackPoller {
         var positionFirst = false
     }
 
+    /// One window's evidence that it keeps its own size on an axis: it moved
+    /// where it was told and took the other axis, and on this one it stayed
+    /// exactly as long as it was before the write. Same guards as
+    /// `Observation`.
+    struct FixedSizeObservation {
+        let window: HyprWindow
+        let axis: FixedSize.Axis
+        let length: CGFloat
+        let target: CGSize
+        /// false when the other axis was already on target, so it can't show
+        /// the app took the write. only a repeat counts then
+        var proven = true
+    }
+
     /// Why a window's apparent oversize teaches nothing. Each case is a
     /// reason the readback cannot be read as "this app refused to be that
     /// small", whatever the numbers say.
@@ -49,6 +63,7 @@ struct FrameReadbackPoller {
         let observations: [Observation]
         let accepted: [(HyprWindow, CGSize)]
         var progress = FrameSizingAttempt.Progress()
+        var fixedSizes: [FixedSizeObservation] = []
         /// restored originals that overlap each other. restoration only,
         /// and a diagnostic rather than a failure — see
         /// `FrameSizingConfiguration.correspondenceOnly`.
@@ -106,12 +121,14 @@ struct FrameReadbackPoller {
     /// screen too small for their target. See `positionSettleWindowIDs`.
     func applyWorkspaceReveal(_ layouts: [(HyprWindow, CGRect)],
                               positionFirstWindowIDs: Set<CGWindowID>,
+                              firstReadWindowIDs: Set<CGWindowID> = [],
                               stagingOrigins: [CGWindowID: CGPoint] = [:],
                               usableFrame: CGRect, gap: CGFloat,
                               generation requestedGeneration: UInt64,
                               originalFrames: [CGWindowID: CGRect]? = nil) -> Result {
         var revealConfiguration = configuration
         revealConfiguration.positionSettleWindowIDs = positionFirstWindowIDs
+        revealConfiguration.positionSettleFirstReadWindowIDs = firstReadWindowIDs
         revealConfiguration.stagingOrigins = stagingOrigins
         return applyLayout(layouts, usableFrame: usableFrame, gap: gap,
                            generation: requestedGeneration, configuration: revealConfiguration,
@@ -120,11 +137,7 @@ struct FrameReadbackPoller {
 
     func applyRestoration(_ layouts: [(HyprWindow, CGRect)], usableFrame: CGRect,
                           gap: CGFloat, generation requestedGeneration: UInt64) -> Result {
-        var strictConfiguration = configuration
-        strictConfiguration.sizeOvershootTolerance = strictConfiguration.sizeTolerance
-        strictConfiguration.sizeUndershootTolerance = strictConfiguration.sizeTolerance
-        strictConfiguration.aggregateSafetySlack = strictConfiguration.sizeTolerance
-        strictConfiguration.correspondenceOnly = true
+        var strictConfiguration = configuration.restorationStrict
         // the rollback is the safety net: a refused candidate is undone by
         // it, and a rollback that fails leaves the candidate's frames under
         // the old tree. it returns as soon as its frames read back stable,
@@ -223,7 +236,8 @@ struct FrameReadbackPoller {
             usableFrame: usableFrame, gap: gap, generation: requestedGeneration,
             phase: phase
         )
-        return classify(raw, layouts: layouts, configuration: configuration)
+        return classify(raw, layouts: layouts, configuration: configuration,
+                        originalFrames: originalFrames ?? [:])
     }
 
     /// Whether a second read found every window exactly where the first
@@ -255,10 +269,12 @@ struct FrameReadbackPoller {
 
     private func classify(_ raw: FrameSizingAttempt.Result,
                           layouts: [(HyprWindow, CGRect)],
-                          configuration: FrameSizingConfiguration) -> Result {
+                          configuration: FrameSizingConfiguration,
+                          originalFrames: [CGWindowID: CGRect] = [:]) -> Result {
         var conflicts: [Conflict] = []
         var observations: [Observation] = []
         var accepted: [(HyprWindow, CGSize)] = []
+        var fixedSizes: [FixedSizeObservation] = []
         let phase = raw.progress.phase
         for (window, target) in layouts {
             guard let actual = raw.actualFrames[window.windowID] else { continue }
@@ -318,14 +334,73 @@ struct FrameReadbackPoller {
             } else if raw.verdict == .accepted {
                 accepted.append((window, actual.size))
             }
+            // a window moved before it was sized stood parked, maybe shrunk to
+            // the corner screen, so its old length is not its own (issue #43)
+            if case .rejected = raw.verdict, let original = originalFrames[window.windowID],
+               !configuration.positionSettleWindowIDs.contains(window.windowID),
+               Self.learningRefusal(windowID: window.windowID, target: target, actual: actual,
+                                    verdict: raw.verdict, progress: raw.progress,
+                                    positionTolerance: configuration.positionTolerance) == nil {
+                let tolerance = self.configuration.sizeUndershootTolerance
+                let proven = Self.fixedAxis(original: original.size, target: target.size,
+                                            actual: actual.size, tolerance: tolerance)
+                let axis = proven ?? Self.unprovenFixedAxis(original: original, target: target,
+                                                            actual: actual, tolerance: tolerance)
+                if let axis {
+                    fixedSizes.append(FixedSizeObservation(
+                        window: window, axis: axis,
+                        length: axis == .width ? actual.width : actual.height, target: target.size,
+                        proven: proven != nil))
+                }
+            }
         }
         return Result(verdict: raw.verdict, actualFrames: raw.actualFrames,
                       conflicts: conflicts, observations: observations,
-                      accepted: accepted, progress: raw.progress, overlaps: raw.overlaps)
+                      accepted: accepted, progress: raw.progress, fixedSizes: fixedSizes,
+                      overlaps: raw.overlaps)
+    }
+
+    /// The axis a window kept at its own length while it took the other:
+    /// short of the target on it by more than `tolerance`, within a point of
+    /// where it was before the write, and on target on the other axis after
+    /// really moving there. A window still catching up has not taken the
+    /// other axis yet, and one that stops short wherever it is asked (the
+    /// portrait Terminal) does not stay at its old length, so neither is one.
+    /// A kept length where the other axis was already on target, so it can't
+    /// have moved there: a Screen Sharing window opened 850 wide in an 850 slot,
+    /// locked to its aspect ratio, stays 530 tall in a 1300 tall slot. The move
+    /// to its target origin shows the app is answering. A slow app could still
+    /// catch up, so this only counts when the retry shows it again.
+    static func unprovenFixedAxis(original: CGRect, target: CGRect, actual: CGRect,
+                                  tolerance: CGFloat) -> FixedSize.Axis? {
+        guard hypot(actual.minX - original.minX, actual.minY - original.minY) > tolerance else { return nil }
+        func kept(_ original: CGFloat, _ target: CGFloat, _ actual: CGFloat) -> Bool {
+            actual < target - tolerance && abs(actual - original) <= 1
+        }
+        if kept(original.width, target.width, actual.width),
+           abs(actual.height - target.height) <= tolerance { return .width }
+        if kept(original.height, target.height, actual.height),
+           abs(actual.width - target.width) <= tolerance { return .height }
+        return nil
+    }
+
+    static func fixedAxis(original: CGSize, target: CGSize, actual: CGSize,
+                          tolerance: CGFloat) -> FixedSize.Axis? {
+        func kept(_ original: CGFloat, _ target: CGFloat, _ actual: CGFloat) -> Bool {
+            actual < target - tolerance && abs(actual - original) <= 1
+        }
+        func took(_ original: CGFloat, _ target: CGFloat, _ actual: CGFloat) -> Bool {
+            abs(original - target) > tolerance && abs(actual - target) <= tolerance
+        }
+        if kept(original.width, target.width, actual.width),
+           took(original.height, target.height, actual.height) { return .width }
+        if kept(original.height, target.height, actual.height),
+           took(original.width, target.width, actual.width) { return .height }
+        return nil
     }
 
     /// Whether this window's oversize may teach a minimum, and if not, why
-    /// not. Nil means the evidence is good: this window's three setters all
+    /// not. Nil means the evidence is good: this window's setters all
     /// returned success, every target read back and settled, the window is
     /// at the origin it was given, and the attempt ended in a geometric
     /// refusal rather than an I/O error.

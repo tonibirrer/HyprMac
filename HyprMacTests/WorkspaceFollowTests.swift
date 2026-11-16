@@ -92,7 +92,7 @@ private final class FollowRig {
         orchestrator.currentFocusedWindow = { [unowned self] in self.focused }
         orchestrator.allWindows = { [unowned self] in self.windows.values.sorted { $0.windowID < $1.windowID } }
         orchestrator.tileAllVisibleSpaces = { [unowned self] _ in self.retileVisible() }
-        orchestrator.animatedRetile = { [unowned self] prepare, completion in
+        orchestrator.retile = { [unowned self] prepare, completion in
             prepare?()
             self.retileVisible()
             completion?()
@@ -447,7 +447,7 @@ final class WorkspaceFollowTests: XCTestCase {
         let action = Action.moveToWorkspaceAndFollow(3)
         XCTAssertEqual(ActionDispatcher.discriminator(for: action), "moveToWorkspaceAndFollow")
         XCTAssertEqual(KeybindCategory.from(action), .workspaces)
-        XCTAssertTrue(WindowManager.isDroppedMidDisplayTransition(action))
-        XCTAssertTrue(WindowManager.cancelsPendingRecovery(action))
+        XCTAssertTrue(ActionPolicy.isDroppedMidDisplayTransition(action))
+        XCTAssertTrue(ActionPolicy.cancelsPendingRecovery(action))
     }
 }

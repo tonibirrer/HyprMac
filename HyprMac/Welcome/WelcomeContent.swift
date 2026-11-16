@@ -26,9 +26,9 @@ enum WhatsNewFeatures {
     // update this before each release — see docs/release.md
     static let current: [WhatsNewFeature] = [
         WhatsNewFeature(
-            icon: "rectangle.split.2x1",
-            title: "No More Empty Gaps",
-            description: "When you close a window or move it to another workspace, the window next to it grows to fill the space. Dia windows used to stay half size."
+            icon: "bolt",
+            title: "Snappier Focus Moves",
+            description: "Moving focus with Hypr+arrow now starts the glide as quickly as a swap does, about 150 ms sooner than in 0.22.0."
         ),
     ]
 }
@@ -46,13 +46,6 @@ enum WelcomeContent {
         matching predicate: (Action) -> Bool
     ) -> String? {
         guard let bind = keybinds.first(where: { predicate($0.action) }) else { return nil }
-        var parts: [String] = []
-        if bind.modifiers.contains(.hypr) { parts.append("HYPR") }
-        if bind.modifiers.contains(.control) { parts.append("⌃") }
-        if bind.modifiers.contains(.option) { parts.append("⌥") }
-        if bind.modifiers.contains(.shift) { parts.append("⇧") }
-        if bind.modifiers.contains(.command) { parts.append("⌘") }
-        parts.append(bind.keyCodeName)
-        return parts.joined(separator: " ")
+        return bind.badgeLabels().joined(separator: " ")
     }
 }

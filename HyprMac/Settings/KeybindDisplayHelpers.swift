@@ -7,28 +7,19 @@ import SwiftUI
 extension Keybind {
     var keyCodeName: String { keyCodeToName(keyCode) }
 
-    func badgeLabels(hyprLabel: String = "HYPR") -> [String] {
+    /// Modifier labels in badge order, for rows that show their own key.
+    static func modifierLabels(_ modifiers: ModifierFlags) -> [String] {
         var parts: [String] = []
-        if modifiers.contains(.hypr) { parts.append(hyprLabel) }
+        if modifiers.contains(.hypr) { parts.append("HYPR") }
         if modifiers.contains(.control) { parts.append("⌃") }
         if modifiers.contains(.option) { parts.append("⌥") }
         if modifiers.contains(.shift) { parts.append("⇧") }
         if modifiers.contains(.command) { parts.append("⌘") }
-        parts.append(keyCodeName)
         return parts
     }
 
-    var overlayChord: String { badgeLabels().joined(separator: " ") }
-
-    var displayString: String {
-        var parts: [String] = []
-        if modifiers.contains(.hypr)    { parts.append("HYPR") }
-        if modifiers.contains(.command) { parts.append("⌘") }
-        if modifiers.contains(.shift)   { parts.append("⇧") }
-        if modifiers.contains(.option)  { parts.append("⌥") }
-        if modifiers.contains(.control) { parts.append("⌃") }
-        parts.append(keyCodeName)
-        return parts.joined(separator: "+")
+    func badgeLabels() -> [String] {
+        Self.modifierLabels(modifiers) + [keyCodeName]
     }
 
     var actionIcon: String {
@@ -66,6 +57,8 @@ extension Keybind {
             return "macwindow.on.rectangle"
         case .moveToNextEmptyWorkspace:
             return "rectangle.stack.badge.plus"
+        case .toggleMaximize:
+            return "arrow.up.left.and.arrow.down.right"
         case .closeWindow:
             return "xmark.circle"
         case .cycleWorkspace:
@@ -125,6 +118,7 @@ extension Keybind {
         case .focusMenuBar:                 return "Focus Menu Bar"
         case .focusFloating:                return "Cycle Floating Windows"
         case .moveToNextEmptyWorkspace:     return "Move to dedicated workspace"
+        case .toggleMaximize:               return "Maximize window"
         case .closeWindow:                  return "Close Window"
         case .cycleWorkspace(let d):        return d > 0 ? "Next Workspace" : "Previous Workspace"
         case .toggleScratchpad:             return "Toggle Scratchpad"

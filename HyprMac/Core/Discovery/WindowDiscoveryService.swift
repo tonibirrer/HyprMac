@@ -126,7 +126,7 @@ final class WindowDiscoveryService {
     /// When each id went gone-but-pid-alive. A return within seconds is a
     /// flap — a stale/partial AX snapshot, not a real minimize — and each
     /// flap cycle drives two retiles (sibling expands full-screen, then
-    /// shrinks back). Diag for the retile-flicker investigation.
+    /// shrinks back). See "Retile churn" in docs/debugging.md.
     private var hiddenAt: [CGWindowID: Date] = [:]
     private static let flapWindowSec: TimeInterval = 5.0
 
@@ -179,25 +179,6 @@ final class WindowDiscoveryService {
         self.bundleIDForPID = bundleIDForPID
         self.isWindowSizeSettable = isWindowSizeSettable
         self.isWindowFullscreen = isWindowFullscreen
-    }
-
-    /// Production entry point: snapshot AX, capture running pids, and
-    /// run the diff.
-    ///
-    /// - Parameter excludedBundleIDs: Apps that should auto-float on
-    ///   discovery (never enter tiling).
-    /// - Parameter focusedWindowID: Window currently believed to have
-    ///   focus; used to populate `focusedWindowGone`.
-    func detectChanges(excludedBundleIDs: Set<String>, focusedWindowID: CGWindowID) -> WindowChanges {
-        let snapshot = accessibility.getAllWindows()
-        let runningPIDs = Set(NSWorkspace.shared.runningApplications.map { $0.processIdentifier })
-        return computeChanges(
-            snapshot: snapshot,
-            runningPIDs: runningPIDs,
-            excludedBundleIDs: excludedBundleIDs,
-            focusedWindowID: focusedWindowID,
-            unreadableWindowIDs: accessibility.unreadableWindowIDs
-        )
     }
 
     /// Known windows the last cycle held because AX could not read them.
@@ -263,7 +244,7 @@ final class WindowDiscoveryService {
     /// was stale. Those come back on their own within seconds, and a window
     /// taken out of its tree meanwhile expands its neighbour over the slot
     /// and comes back somewhere else. Held for `listedHoldSpan`; one still
-    /// missing after that is hidden as before, with its reservation.
+    /// missing after that is hidden like any other gone window, with its reservation.
     private func listedButOffScreen(_ candidates: Set<CGWindowID>, runningPIDs: Set<pid_t>,
                                     state: (CGWindowID, pid_t) -> AccessibilityManager.HiddenWindowState?)
         -> Set<CGWindowID> {
@@ -465,8 +446,7 @@ final class WindowDiscoveryService {
                 isSizeSettable: isWindowSizeSettable(w),
                 isQuickLookPanel: w.isQuickLookPanel
             ) {
-                stateCache.floatingWindowIDs.insert(w.windowID)
-                w.isFloating = true
+                stateCache.setFloating(true, window: w)
                 hyprLog(.debug, .discovery, "auto-float \(reason.rawValue): '\(w.title ?? "?")'")
             }
 
@@ -475,8 +455,7 @@ final class WindowDiscoveryService {
             // admits the window to the nearest enabled screen.
             if let screen = displayManager.screen(for: w), workspaceManager.isMonitorUserDisabled(screen) {
                 if !stateCache.floatingWindowIDs.contains(w.windowID) {
-                    stateCache.floatingWindowIDs.insert(w.windowID)
-                    w.isFloating = true
+                    stateCache.setFloating(true, window: w)
                     hyprLog(.debug, .discovery, "auto-float on disabled monitor: '\(w.title ?? "?")'")
                 }
                 newOnDisabled.insert(w.windowID)
@@ -597,7 +576,7 @@ final class WindowDiscoveryService {
     /// would otherwise hold its workspace slot until the app quits.
     ///
     /// Ids back in this cycle's snapshot are left alone: the returned pass
-    /// below owns them, and AX would answer "not minimized" for a window
+    /// in `computeChanges` owns them, and AX would answer "not minimized" for a window
     /// that is plainly on screen — stripping the reservation and misfiling
     /// the return as a recycled-id reopen.
     private func reverifyUnresolvedReservations(currentIDs: Set<CGWindowID>, runningPIDs: Set<pid_t>) {
@@ -698,7 +677,7 @@ final class WindowDiscoveryService {
             // window inflated across a monitor edge keeps a majority on its
             // own screen, and park slivers / stale off-screen frames fail
             // the substantial check entirely (the guard the doc above
-            // promises — previously dead code).
+            // promises).
             guard hasSubstantialOnScreenFrame(w),
                   let physicalScreen = majorityOverlapScreen(w) else { continue }
             // skip if the window sits on a disabled monitor — handled elsewhere

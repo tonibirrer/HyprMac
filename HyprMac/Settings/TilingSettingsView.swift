@@ -1,10 +1,10 @@
-// "Tiling" tab. Window gaps, focus color, dim intensity,
+// "Layout" tab. Window gaps, focus color, dim intensity,
 // per-monitor enable, max-splits, edge padding and workspaces plus a live
 // dwindle preview.
 
 import SwiftUI
 
-/// "Tiling" tab.
+/// "Layout" tab.
 struct TilingSettingsView: View {
     @ObservedObject var config = UserConfig.shared
     @State private var screens: [NSScreen] = NSScreen.screens
@@ -161,6 +161,14 @@ struct TilingSettingsView: View {
                 .labelsHidden()
                 .frame(width: 170)
             }
+            HyprRow("Animate focus moves", icon: "arrow.up.and.down.and.arrow.left.and.right",
+                    subtitle: "The indicator glides to the window you focus, swap or split from the keyboard.",
+                    divider: true) {
+                Toggle("", isOn: $config.animateFocusIndicator)
+                    .toggleStyle(HyprToggleStyle())
+                    .labelsHidden()
+                    .disabled(focusIndicatorChoice == .none)
+            }
             if config.focusBracketStyle != .off {
                 HyprRow("Mark roundness", icon: "viewfinder.circle", divider: false) {
                     VStack(alignment: .trailing, spacing: HyprSpacing.xs) {
@@ -269,6 +277,21 @@ struct TilingSettingsView: View {
                         defaultLabel: "magenta · default"
                     )
                 }
+            }
+
+            HyprRow("Overlay accent", icon: "paintpalette",
+                    subtitle: "Keybind sheet and menu bar.",
+                    divider: true) {
+                ColorPickerRow(
+                    label: "",
+                    isCustom: config.overlayAccentHex != nil,
+                    onReset: { config.overlayAccentHex = nil },
+                    color: Binding(
+                        get: { Color.overlayPrimary },
+                        set: { config.overlayAccentHex = NSColor($0).hexString }
+                    ),
+                    defaultLabel: "cyan · default"
+                )
             }
 
             HyprRow("Fade duration", icon: "timer",

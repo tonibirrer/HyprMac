@@ -95,29 +95,29 @@ final class LinkedMonitorsTests: XCTestCase {
 
     func testExplicitOrderPinsStripSequence() {
         let ws = (1...4).map { makeWindow(id: CGWindowID($0)) }
-        _ = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen, order: [3, 1, 4, 2])
+        _ = engine.seedTree(ws, onWorkspace: 1, screen: screen, order: [3, 1, 4, 2])
         XCTAssertEqual(order(), [3, 1, 4, 2])
 
         // membership pass with a new pinned order re-permutes in place
-        _ = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen, order: [1, 2, 3, 4])
+        _ = engine.seedTree(ws, onWorkspace: 1, screen: screen, order: [1, 2, 3, 4])
         XCTAssertEqual(order(), [1, 2, 3, 4])
     }
 
     func testOrderIgnoresUnknownIDsAndKeepsUnlistedStable() {
         let ws = (1...3).map { makeWindow(id: CGWindowID($0)) }
-        _ = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
+        _ = engine.seedTree(ws, onWorkspace: 1, screen: screen)
         XCTAssertEqual(order(), [1, 2, 3])
 
         // 99 isn't in the tree; 1 and 2 are unlisted and keep their
         // relative order after the listed window
-        _ = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen, order: [99, 3])
+        _ = engine.seedTree(ws, onWorkspace: 1, screen: screen, order: [99, 3])
         XCTAssertEqual(order(), [3, 1, 2])
     }
 
     func testOrderPreservesSplitTopologyLeafCount() {
         let ws = (1...4).map { makeWindow(id: CGWindowID($0)) }
-        let before = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen)
-        let after = engine.prepareTileLayout(ws, onWorkspace: 1, screen: screen, order: [4, 3, 2, 1])
+        let before = engine.seedTree(ws, onWorkspace: 1, screen: screen)
+        let after = engine.seedTree(ws, onWorkspace: 1, screen: screen, order: [4, 3, 2, 1])
         XCTAssertEqual(order(), [4, 3, 2, 1])
         // same tile geometry, different occupants
         let sortRects = { (rects: [CGRect]) in

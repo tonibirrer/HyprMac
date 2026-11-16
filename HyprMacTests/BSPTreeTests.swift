@@ -2,7 +2,7 @@ import XCTest
 @testable import HyprMac
 
 // BSPTreeTests pin current behavior of BSPTree operations against the existing
-// dwindle algorithm. all tests are expected green at Phase 0 baseline.
+// dwindle algorithm.
 
 final class BSPTreeTests: XCTestCase {
 
@@ -433,8 +433,7 @@ final class BSPTreeTests: XCTestCase {
     /// rect wider than tall; `BSPNode.direction(for:)` then reports
     /// horizontal, so the height pass finds no vertical ancestor and does
     /// nothing — and the flipped inner split halves the width the first
-    /// pass had just won. Fixing it is a separate bounded change; see
-    /// docs/window-sizing-verification.md.
+    /// pass had just won. Fixing it is a separate bounded change.
     func testAdjustForMinSizesSatisfiesBothAxesThroughDifferentAncestors() throws {
         let tree = BSPTree()
         let a = makeWindow(id: 1)
