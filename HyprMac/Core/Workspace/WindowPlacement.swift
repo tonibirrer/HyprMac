@@ -229,7 +229,42 @@ final class WindowPlacement {
                   !workspaceManager.isWorkspaceVisible(ws),
                   let screen = workspaceManager.homeScreenForWorkspace(ws) ?? displayManager.screens.first
             else { continue }
+            // a floater the change just hid keeps its frame for the next
+            // reveal. one parked earlier already has a saved frame, and its
+            // old park spot may now read on-screen, so it must not replace it
+            if ws != ScratchpadController.workspace, stateCache.floatingWindowIDs.contains(w.windowID),
+               workspaceManager.savedFloatingFrame(for: w.windowID) == nil {
+                workspaceManager.saveFloatingFrame(w)
+            }
             workspaceManager.hideInCorner(w, on: screen)
+        }
+    }
+
+    /// Bring back floaters that a display change left parked on a
+    /// workspace that is showing now (see `StrandedFloaterRestore`). Runs
+    /// before the sticky carry, so a floater the carry restores is not
+    /// read here while its frame write is still settling.
+    func restoreStrandedFloaters(_ allWindows: [HyprWindow]) {
+        let screens = displayManager.screens.map { displayManager.cgRect(for: $0) }
+        for w in allWindows where stateCache.floatingWindowIDs.contains(w.windowID) {
+            guard let ws = workspaceManager.workspaceFor(w.windowID),
+                  ws != ScratchpadController.workspace,
+                  workspaceManager.isWorkspaceVisible(ws),
+                  let frame = w.frame
+            else { continue }
+            let homeScreen = workspaceManager.homeScreenForWorkspace(ws) ?? displayManager.screens.first
+            let saved = workspaceManager.savedFloatingFrame(for: w.windowID)
+            guard let target = StrandedFloaterRestore.target(
+                frame: frame, saved: saved, screens: screens,
+                home: homeScreen.map { displayManager.cgRect(for: $0) })
+            else { continue }
+            hyprLog(.notice, .lifecycle, "display change: floater '\(w.title ?? "?")' (\(w.windowID)) on visible ws\(ws)"
+                    + " sits off-screen at \(FloatingFramePlacement.describe(frame)) — restoring "
+                    + (saved == nil ? "to the middle of its screen" : "its saved frame"))
+            workspaceManager.clearSavedFloatingFrame(for: w.windowID)
+            w.placeFloating(target, reason: "display change, stranded floater",
+                            on: saved == nil ? homeScreen : nil, from: frame,
+                            displayManager: displayManager)
         }
     }
 
